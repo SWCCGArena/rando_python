@@ -1,0 +1,347 @@
+{% extends "base.html" %}
+
+{% block title %}Board State - Rando Cal{% endblock %}
+
+{% block content %}
+<div class="board-state-container">
+    <h1>🎮 Board State Viewer</h1>
+
+    {% if not board_state %}
+        <div class="alert alert-warning">
+            <strong>No game in progress</strong>
+            <p>Board state will appear here once a game starts.</p>
+        </div>
+    {% else %}
+        <!-- Game Info -->
+        <div class="game-info">
+            <h2>Game Information</h2>
+            <table class="info-table">
+                <tr>
+                    <td><strong>My Player:</strong></td>
+                    <td>{{ board_state.my_player }}</td>
+                    <td><strong>Opponent:</strong></td>
+                    <td>{{ board_state.opponent }}</td>
+                </tr>
+                <tr>
+                    <td><strong>My Side:</strong></td>
+                    <td>{{ board_state.my_side|upper }}</td>
+                    <td><strong>Phase:</strong></td>
+                    <td>{{ board_state.current_phase }}</td>
+                </tr>
+                <tr>
+                    <td><strong>Current Turn:</strong></td>
+                    <td>{{ board_state.current_turn }}</td>
+                    <td><strong>My Turn:</strong></td>
+                    <td>{% if board_state.is_my_turn %}✅ Yes{% else %}❌ No{% endif %}</td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- Resources & Power -->
+        <div class="resources-power">
+            <div class="resource-column">
+                <h2>💰 My Resources</h2>
+                <table class="resource-table">
+                    <tr><td>Force Pile:</td><td class="value">{{ board_state.my_force }}</td></tr>
+                    <tr><td>Used Pile:</td><td class="value">{{ board_state.my_used }}</td></tr>
+                    <tr><td>Reserve Deck:</td><td class="value">{{ board_state.my_reserve }}</td></tr>
+                    <tr><td>Lost Pile:</td><td class="value">{{ board_state.my_lost }}</td></tr>
+                    <tr><td>Hand:</td><td class="value">{{ board_state.my_hand_count }} cards</td></tr>
+                </table>
+            </div>
+
+            <div class="power-column">
+                <h2>⚔️ Power</h2>
+                <table class="power-table">
+                    <tr>
+                        <td>My Power:</td>
+                        <td class="value power-mine">{{ board_state.my_total_power }}</td>
+                    </tr>
+                    <tr>
+                        <td>Their Power:</td>
+                        <td class="value power-theirs">{{ board_state.their_total_power }}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Advantage:</strong></td>
+                        <td class="value {% if board_state.power_advantage > 0 %}power-positive{% elif board_state.power_advantage < 0 %}power-negative{% else %}power-neutral{% endif %}">
+                            {{ board_state.power_advantage|abs }}
+                            {% if board_state.power_advantage > 0 %}↑{% elif board_state.power_advantage < 0 %}↓{% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Force Advantage:</td>
+                        <td class="value {% if board_state.force_advantage > 0 %}power-positive{% elif board_state.force_advantage < 0 %}power-negative{% else %}power-neutral{% endif %}">
+                            {{ board_state.force_advantage|abs }}
+                            {% if board_state.force_advantage > 0 %}↑{% elif board_state.force_advantage < 0 %}↓{% endif %}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="resource-column">
+                <h2>💰 Opponent Resources</h2>
+                <table class="resource-table">
+                    <tr><td>Force Pile:</td><td class="value">{{ board_state.their_force }}</td></tr>
+                    <tr><td>Used Pile:</td><td class="value">{{ board_state.their_used }}</td></tr>
+                    <tr><td>Reserve Deck:</td><td class="value">{{ board_state.their_reserve }}</td></tr>
+                    <tr><td>Lost Pile:</td><td class="value">{{ board_state.their_lost }}</td></tr>
+                    <tr><td>Hand:</td><td class="value">{{ board_state.their_hand_count }} cards</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- Locations -->
+        <div class="locations-section">
+            <h2>🏛️ Locations ({{ board_state.locations|length }})</h2>
+            {% if board_state.locations %}
+                {% for loc in board_state.locations %}
+                <div class="location-card">
+                    <h3>{{ loc.name }} (Index: {{ loc.index }})</h3>
+                    <div class="location-power">
+                        <span class="my-power">My Power: {{ loc.my_power }}</span>
+                        <span class="their-power">Their Power: {{ loc.their_power }}</span>
+                    </div>
+                    <div class="location-cards">
+                        <div class="my-cards">
+                            <h4>My Cards ({{ loc.my_cards|length }})</h4>
+                            {% if loc.my_cards %}
+                            <ul>
+                                {% for card in loc.my_cards %}
+                                <li>
+                                    <strong>{{ card.name }}</strong>
+                                    {% if card.power or card.ability %}
+                                    <span class="card-stats">[P:{{ card.power }}/A:{{ card.ability }}]</span>
+                                    {% endif %}
+                                    <br><small><code>{{ card.blueprint }}</code> ({{ card.id }})</small>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            {% else %}
+                            <p class="empty">None</p>
+                            {% endif %}
+                        </div>
+                        <div class="their-cards">
+                            <h4>Their Cards ({{ loc.their_cards|length }})</h4>
+                            {% if loc.their_cards %}
+                            <ul>
+                                {% for card in loc.their_cards %}
+                                <li>
+                                    <strong>{{ card.name }}</strong>
+                                    {% if card.power or card.ability %}
+                                    <span class="card-stats">[P:{{ card.power }}/A:{{ card.ability }}]</span>
+                                    {% endif %}
+                                    <br><small><code>{{ card.blueprint }}</code> ({{ card.id }})</small>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            {% else %}
+                            <p class="empty">None</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p class="empty">No locations on the board yet.</p>
+            {% endif %}
+        </div>
+
+        <!-- Hand -->
+        <div class="hand-section">
+            <h2>🃏 My Hand ({{ board_state.hand|length }} cards)</h2>
+            {% if board_state.hand %}
+            <ul class="hand-list">
+                {% for card in board_state.hand %}
+                <li>
+                    <strong>{{ card.name }}</strong>
+                    {% if card.type %}<span class="card-type">({{ card.type }})</span>{% endif %}
+                    {% if card.deploy %}<span class="card-deploy">Deploy: {{ card.deploy }}</span>{% endif %}
+                    <br><small><code>{{ card.blueprint_id }}</code></small>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="empty">No cards in hand.</p>
+            {% endif %}
+        </div>
+
+        <!-- Debug Info -->
+        <div class="debug-section">
+            <h2>🐛 Debug Info</h2>
+            <p>Total cards tracked: <strong>{{ board_state.total_cards_in_play }}</strong></p>
+            <p><a href="/board_state" class="refresh-link">🔄 Refresh</a></p>
+        </div>
+    {% endif %}
+</div>
+
+<style>
+    .board-state-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+
+    .game-info, .resources-power, .locations-section, .hand-section, .debug-section {
+        background: #2c2c2c;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+
+    .info-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .info-table td {
+        padding: 8px;
+        border: 1px solid #444;
+    }
+
+    .resources-power {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+    }
+
+    .resource-column, .power-column {
+        flex: 1;
+    }
+
+    .resource-table, .power-table {
+        width: 100%;
+        margin-top: 10px;
+    }
+
+    .resource-table td, .power-table td {
+        padding: 6px;
+        border-bottom: 1px solid #444;
+    }
+
+    .value {
+        text-align: right;
+        font-weight: bold;
+        color: #4CAF50;
+    }
+
+    .power-mine { color: #4CAF50; }
+    .power-theirs { color: #f44336; }
+    .power-positive { color: #4CAF50; }
+    .power-negative { color: #f44336; }
+    .power-neutral { color: #999; }
+
+    .location-card {
+        background: #1e1e1e;
+        border: 2px solid #444;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 15px;
+    }
+
+    .location-card h3 {
+        margin: 0 0 10px 0;
+        color: #61dafb;
+    }
+
+    .location-power {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        font-size: 14px;
+    }
+
+    .my-power { color: #4CAF50; }
+    .their-power { color: #f44336; }
+
+    .location-cards {
+        display: flex;
+        gap: 20px;
+    }
+
+    .my-cards, .their-cards {
+        flex: 1;
+    }
+
+    .my-cards h4 { color: #4CAF50; }
+    .their-cards h4 { color: #f44336; }
+
+    .location-cards ul {
+        list-style: none;
+        padding: 0;
+        margin: 5px 0;
+    }
+
+    .location-cards li {
+        padding: 8px;
+        background: #2c2c2c;
+        margin-bottom: 5px;
+        border-radius: 3px;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    .card-stats {
+        color: #ffa726;
+        font-size: 11px;
+        margin-left: 5px;
+    }
+
+    .card-type {
+        color: #999;
+        font-size: 11px;
+        margin-left: 5px;
+    }
+
+    .card-deploy {
+        color: #64b5f6;
+        font-size: 11px;
+        margin-left: 5px;
+    }
+
+    .hand-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        list-style: none;
+        padding: 0;
+    }
+
+    .hand-list li {
+        background: #1e1e1e;
+        padding: 10px;
+        border-radius: 5px;
+        border: 1px solid #444;
+        font-family: monospace;
+    }
+
+    .empty {
+        color: #999;
+        font-style: italic;
+    }
+
+    .debug-section {
+        background: #1e1e1e;
+        border: 1px dashed #666;
+    }
+
+    .refresh-link {
+        color: #61dafb;
+        text-decoration: none;
+    }
+
+    .refresh-link:hover {
+        text-decoration: underline;
+    }
+
+    .alert {
+        padding: 20px;
+        border-radius: 8px;
+        background: #2c2c2c;
+        border-left: 4px solid #ff9800;
+    }
+
+    .alert-warning {
+        border-color: #ff9800;
+    }
+</style>
+{% endblock %}

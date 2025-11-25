@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="dashboard">
+    <!-- Status Panel -->
+    <div class="panel status-panel">
+        <h2>Bot Status</h2>
+        <div class="status-indicator">
+            <span id="status-text" class="status-text">{{ state.state }}</span>
+            <span id="status-dot" class="dot"></span>
+        </div>
+
+        <div class="controls">
+            <button id="btn-start" class="btn btn-primary" onclick="startBot()">Start Bot</button>
+            <button id="btn-stop" class="btn btn-danger" onclick="stopBot()">Stop Bot</button>
+        </div>
+
+        <div id="error-message" class="error"></div>
+    </div>
+
+    <!-- Stats Panel - moved up for grid placement -->
+    <div class="panel stats-panel">
+        <h2>Astrogator Stats</h2>
+        <div id="bot-stats">
+            <table class="stats-table">
+                <tr>
+                    <td><strong>Total Games:</strong></td>
+                    <td id="stats-total-games">0</td>
+                </tr>
+                <tr>
+                    <td><strong>Wins:</strong></td>
+                    <td id="stats-wins">0</td>
+                </tr>
+                <tr>
+                    <td><strong>Losses:</strong></td>
+                    <td id="stats-losses">0</td>
+                </tr>
+                <tr>
+                    <td><strong>Win Rate:</strong></td>
+                    <td id="stats-win-rate">0%</td>
+                </tr>
+                <tr>
+                    <td><strong>Unique Players:</strong></td>
+                    <td id="stats-players">0</td>
+                </tr>
+                <tr>
+                    <td><strong>Achievements Awarded:</strong></td>
+                    <td id="stats-achievements">0</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Configuration Panel -->
+    <div class="panel config-panel">
+        <h2>Configuration</h2>
+
+        <div class="config-item">
+            <label class="config-label">GEMP Server:</label>
+            <span id="gemp-server" class="config-value">{{ state.config.gemp_server }}</span>
+        </div>
+
+        <div class="config-item">
+            <label class="config-label">Bot Mode:</label>
+            <span id="bot-mode" class="config-value">{{ state.config.bot_mode }}</span>
+        </div>
+
+        <div class="config-item">
+            <label class="config-label">Table Name:</label>
+            <span id="table-name-display" class="config-value">{{ state.config.table_name }}</span>
+        </div>
+
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color: #888;">Hand Management</h3>
+        <div class="config-item">
+            <label for="hand-soft-cap" class="config-label">Hand Soft Cap:</label>
+            <input type="range" id="hand-soft-cap" min="8" max="16"
+                   value="{{ state.config.hand_soft_cap }}"
+                   onchange="sendConfigUpdate('hand_soft_cap', this.value)">
+            <span id="hand-soft-cap-value" class="config-value">{{ state.config.hand_soft_cap }}</span>
+        </div>
+
+        <div class="config-item">
+            <label for="max-hand-size" class="config-label">Max Hand Size:</label>
+            <input type="range" id="max-hand-size" min="10" max="20"
+                   value="{{ state.config.max_hand_size }}"
+                   onchange="sendConfigUpdate('max_hand_size', this.value)">
+            <span id="max-hand-value" class="config-value">{{ state.config.max_hand_size }}</span>
+        </div>
+
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color: #888;">Force Economy</h3>
+        <div class="config-item">
+            <label for="force-gen-target" class="config-label">Force Gen Target:</label>
+            <input type="range" id="force-gen-target" min="3" max="10"
+                   value="{{ state.config.force_gen_target }}"
+                   onchange="sendConfigUpdate('force_gen_target', this.value)">
+            <span id="force-gen-target-value" class="config-value">{{ state.config.force_gen_target }}</span>
+        </div>
+
+        <div class="config-item">
+            <label for="max-reserve-checks" class="config-label">Max Reserve Checks/Turn:</label>
+            <input type="range" id="max-reserve-checks" min="0" max="5"
+                   value="{{ state.config.max_reserve_checks }}"
+                   onchange="sendConfigUpdate('max_reserve_checks', this.value)">
+            <span id="max-reserve-checks-value" class="config-value">{{ state.config.max_reserve_checks }}</span>
+        </div>
+
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color: #888;">Battle Strategy</h3>
+        <div class="config-item">
+            <label for="deploy-threshold" class="config-label">Deploy Threshold:</label>
+            <input type="range" id="deploy-threshold" min="0" max="30"
+                   value="{{ state.config.deploy_threshold }}"
+                   onchange="sendConfigUpdate('deploy_threshold', this.value)">
+            <span id="deploy-threshold-value" class="config-value">{{ state.config.deploy_threshold }}</span>
+        </div>
+
+        <div class="config-item">
+            <label for="battle-favorable" class="config-label">Battle Favorable (+power):</label>
+            <input type="range" id="battle-favorable" min="1" max="8"
+                   value="{{ state.config.battle_favorable_threshold }}"
+                   onchange="sendConfigUpdate('battle_favorable_threshold', this.value)">
+            <span id="battle-favorable-value" class="config-value">{{ state.config.battle_favorable_threshold }}</span>
+        </div>
+
+        <div class="config-item">
+            <label for="battle-danger" class="config-label">Battle Danger (-power):</label>
+            <input type="range" id="battle-danger" min="-12" max="-2"
+                   value="{{ state.config.battle_danger_threshold }}"
+                   onchange="sendConfigUpdate('battle_danger_threshold', this.value)">
+            <span id="battle-danger-value" class="config-value">{{ state.config.battle_danger_threshold }}</span>
+        </div>
+    </div>
+
+    <!-- Tables Panel (Phase 2) -->
+    <div class="panel tables-panel">
+        <h2>Hall Tables</h2>
+        <div id="tables-list">
+            <p class="placeholder">Not connected to GEMP server (Phase 2)</p>
+        </div>
+
+        <div class="create-table-form">
+            <h3>Table Management</h3>
+            <input type="text" id="new-table-name" placeholder="Bot Table: Random" value="{{ state.config.table_name }}">
+            <select id="deck-select">
+                <option value="Hunt Down And Destroy The Jedi">Hunt Down (Dark)</option>
+                <option value="Your Insight Serves You Well">Insight (Light)</option>
+            </select>
+            <button id="btn-create-table" class="btn btn-secondary" onclick="createTable()">Create Table</button>
+            <button id="btn-leave-table" class="btn btn-danger" onclick="leaveTable()" style="display: none;">Leave Table</button>
+        </div>
+    </div>
+
+    <!-- Game State Panel (Phase 4+) -->
+    <div class="panel game-panel">
+        <h2>Game State</h2>
+        <div id="game-state">
+            <p class="placeholder">No game in progress</p>
+        </div>
+        <div id="board-state-summary" style="display: none; margin-top: 15px;">
+            <h3>Board Summary</h3>
+            <table class="state-table">
+                <tr>
+                    <td><strong>Phase:</strong></td>
+                    <td id="bs-phase">-</td>
+                    <td><strong>My Turn:</strong></td>
+                    <td id="bs-my-turn">-</td>
+                </tr>
+                <tr>
+                    <td><strong>My Side:</strong></td>
+                    <td id="bs-my-side">-</td>
+                    <td><strong>Force:</strong></td>
+                    <td id="bs-force">-</td>
+                </tr>
+                <tr>
+                    <td><strong>Reserve:</strong></td>
+                    <td id="bs-reserve">-</td>
+                    <td><strong>Hand:</strong></td>
+                    <td id="bs-hand">-</td>
+                </tr>
+                <tr>
+                    <td><strong>My Power:</strong></td>
+                    <td id="bs-my-power" class="power-value">-</td>
+                    <td><strong>Their Power:</strong></td>
+                    <td id="bs-their-power" class="power-value">-</td>
+                </tr>
+                <tr>
+                    <td><strong>Locations:</strong></td>
+                    <td id="bs-locations">-</td>
+                    <td></td>
+                    <td></td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Board Visualization (Phase 4+) -->
+    <div class="panel board-panel">
+        <h2>Board State</h2>
+        <pre id="board-visualization" class="board-viz">
+<span class="placeholder">Waiting for game to start...</span>
+        </pre>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="panel log-panel">
+        <h2>Activity Log</h2>
+        <div id="activity-log">
+            <p class="log-entry"><span class="timestamp">[{{ "now"|default("--:--:--") }}]</span> <span class="log-msg">Bot initialized - Phase 5 (Strategic AI)</span></p>
+        </div>
+    </div>
+</div>
+{% endblock %}

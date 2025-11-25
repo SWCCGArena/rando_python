@@ -1,0 +1,1294 @@
+"""
+Rando Cal - Flask Application
+
+Main entry point for the bot. Runs Flask web server with WebSocket
+support for admin UI, and manages the bot worker greenlet that handles
+game operations using eventlet for async I/O.
+"""
+
+from flask import Flask, render_template
+from flask_socketio import SocketIO, emit
+import logging
+import os
+import xml.etree.ElementTree as ET
+from config import config
+from engine.state import GameState
+from engine.client import GEMPClient
+from engine.decision_handler import DecisionHandler
+from engine.board_state import BoardState
+from engine.event_processor import EventProcessor
+from engine.strategy_controller import StrategyController
+from engine.table_manager import TableManager, TableManagerConfig, ConnectionMonitor
+from brain import StaticBrain
+from brain.astrogator_brain import AstrogatorBrain
+from brain.achievements import AchievementTracker
+from brain.chat_manager import ChatManager
+from brain.command_handler import CommandHandler
+from persistence import init_db, StatsRepository
+
+# Setup logging
+os.makedirs(config.LOG_DIR, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(config.LOG_DIR, 'rando.log')),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Initialize database
+db_path = os.path.join(config.LOG_DIR, 'rando_stats.db')
+db_url = f'sqlite:///{db_path}'
+init_db(db_url)
+logger.info(f"📊 Database initialized: {db_path}")
+
+# Initialize Flask with custom template and static folders
+app = Flask(__name__,
+            template_folder='admin/templates',
+            static_folder='admin/static')
+app.config['SECRET_KEY'] = config.SECRET_KEY
+
+# Initialize SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
+
+class BotState:
+    """
+    Global bot state.
+
+    This will be expanded in later phases with game client,
+    board state, brain, etc.
+    """
+
+    def __init__(self):
+        self.state = GameState.STOPPED
+        self.config = config
+        self.last_error = None
+
+        # Will be populated in later phases
+        self.client = None
+        self.running = False
+        self.game_session = None
+
+        # Persistence layer
+        self.stats_repo = StatsRepository()
+        logger.info("📊 Initialized stats repository")
+
+        # Brain for decision-making (Astrogator personality)
+        self.brain = AstrogatorBrain()
+        logger.info(f"🧠 Initialized brain: {self.brain.get_personality_name()}")
+
+        # Achievement tracking
+        self.achievement_tracker = AchievementTracker(self.stats_repo)
+        logger.info("🏆 Initialized achievement tracker")
+
+        # Chat manager (client set later when available)
+        self.chat_manager = None  # Initialized after client is created
+
+        # Command handler for chat commands (client set later when available)
+        self.command_handler = None  # Initialized after client is created
+
+        # Strategy controller for Battle Order rules and location checking
+        # Pass config so GameStrategy can use live config values
+        self.strategy_controller = StrategyController(config=config)
+        logger.info(f"📊 Initialized strategy controller")
+
+        # Table manager for autonomous table lifecycle
+        self.table_manager = None  # Initialized after client is created
+        self.connection_monitor = None
+        logger.info(f"🎯 Table manager will be initialized after login")
+
+        # Phase 4: Board state tracking
+        self.board_state = None
+        self.event_processor = None
+
+        # Game state (Phase 2+)
+        self.current_tables = []
+        self.current_table_id = None
+        self.opponent_name = None
+
+        # Deck lists
+        self.library_decks = []
+        self.user_decks = []
+
+        # Game session state
+        self.game_id = None
+        self.channel_number = 0
+
+    def initialize_table_manager(self):
+        """Initialize table manager after client is ready"""
+        if self.client and not self.table_manager:
+            table_config = TableManagerConfig(
+                table_name=config.TABLE_NAME,
+                create_delay_seconds=2.0,
+                retry_delay_seconds=5.0,
+            )
+            self.table_manager = TableManager(self.client, table_config)
+            self.connection_monitor = ConnectionMonitor(self.client)
+            logger.info(f"🎯 TableManager initialized")
+
+    def initialize_chat_manager(self):
+        """Initialize chat manager after client is ready"""
+        if self.client and not self.chat_manager:
+            self.chat_manager = ChatManager(
+                brain=self.brain,
+                stats_repo=self.stats_repo,
+                client=self.client,
+                achievement_tracker=self.achievement_tracker
+            )
+            logger.info("💬 ChatManager initialized")
+
+    def initialize_command_handler(self):
+        """Initialize command handler after client is ready"""
+        if self.client and not self.command_handler:
+            self.command_handler = CommandHandler(
+                client=self.client,
+                stats_repo=self.stats_repo,
+                bot_username=config.GEMP_USERNAME
+            )
+            logger.info("🎮 CommandHandler initialized")
+
+    def to_dict(self):
+        """Convert state to dictionary for JSON serialization"""
+        result = {
+            'state': self.state.value,
+            'config': {
+                'gemp_server': self.config.GEMP_SERVER_URL,
+                'bot_mode': self.config.BOT_MODE,
+                'table_name': self.config.TABLE_NAME,
+                # Hand management
+                'max_hand_size': self.config.MAX_HAND_SIZE,
+                'hand_soft_cap': self.config.HAND_SOFT_CAP,
+                # Force economy
+                'force_gen_target': self.config.FORCE_GEN_TARGET,
+                'max_reserve_checks': self.config.MAX_RESERVE_CHECKS,
+                # Battle strategy
+                'deploy_threshold': self.config.DEPLOY_THRESHOLD,
+                'battle_favorable_threshold': self.config.BATTLE_FAVORABLE_THRESHOLD,
+                'battle_danger_threshold': self.config.BATTLE_DANGER_THRESHOLD,
+            },
+            'last_error': self.last_error,
+            'tables': [
+                {
+                    'id': getattr(t, 'table_id', ''),
+                    'name': getattr(t, 'table_name', ''),
+                    'status': getattr(t, 'status', ''),
+                    'players': [getattr(p, 'name', '') for p in getattr(t, 'players', [])]
+                } for t in self.current_tables
+            ] if hasattr(self, 'current_tables') and self.current_tables else [],
+            'current_table_id': self.current_table_id,
+            'opponent': self.opponent_name,
+            'decks': {
+                'library': [{'name': d.name, 'side': d.side} for d in self.library_decks],
+                'user': [{'name': d.name, 'side': d.side} for d in self.user_decks]
+            }
+        }
+
+        # Add board state if in game
+        if self.board_state:
+            bs = self.board_state
+            result['board_state'] = {
+                'phase': bs.current_phase,
+                'my_turn': bs.is_my_turn(),
+                'my_side': bs.my_side,
+                'my_player': bs.my_player_name,
+                'opponent': bs.opponent_name,
+
+                # Resources
+                'force': bs.force_pile,
+                'used': bs.used_pile,
+                'reserve': bs.reserve_deck,
+                'lost': bs.lost_pile,
+                'hand_size': len(bs.cards_in_hand),
+
+                # Their resources
+                'their_force': bs.their_force_pile,
+                'their_used': bs.their_used_pile,
+                'their_reserve': bs.their_reserve_deck,
+                'their_lost': bs.their_lost_pile,
+                'their_hand_size': bs.their_hand_size,
+
+                # Power
+                'my_power': bs.total_my_power(),
+                'their_power': bs.total_their_power(),
+                'power_advantage': bs.power_advantage(),
+                'force_advantage': bs.force_advantage(),
+
+                # Locations with cards
+                'locations': [{
+                    'index': i,
+                    'system_name': loc.system_name or '',
+                    'site_name': loc.site_name or loc.system_name or loc.blueprint_id,
+                    'is_site': loc.is_site,
+                    'is_space': loc.is_space,
+                    'is_ground': loc.is_ground,
+                    'my_power': max(0, bs.my_power_at_location(i)),  # Show 0 instead of -1
+                    'their_power': max(0, bs.their_power_at_location(i)),  # Show 0 instead of -1
+                    'my_cards': [{
+                        'name': c.card_title or c.blueprint_id,
+                        'blueprint': c.blueprint_id,
+                        'power': c.power,
+                        'ability': c.ability,
+                    } for c in loc.my_cards],
+                    'their_cards': [{
+                        'name': c.card_title or c.blueprint_id,
+                        'blueprint': c.blueprint_id,
+                        'power': c.power,
+                        'ability': c.ability,
+                    } for c in loc.their_cards],
+                } for i, loc in enumerate(bs.locations) if loc],
+
+                # Hand
+                'hand': [{
+                    'name': c.card_title or c.blueprint_id,
+                    'blueprint': c.blueprint_id,
+                    'type': c.card_type,
+                    'deploy': c.deploy,
+                } for c in bs.cards_in_hand],
+            }
+
+        # Add overall bot stats
+        if self.stats_repo:
+            try:
+                overall = self.stats_repo.get_overall_stats()
+                result['bot_stats'] = {
+                    'total_games': overall.get('total_games', 0),
+                    'total_wins': overall.get('total_wins', 0),
+                    'total_losses': overall.get('total_losses', 0),
+                    'win_rate': round(overall.get('win_rate', 0), 1),
+                    'unique_players': overall.get('unique_players', 0),
+                    'total_achievements': overall.get('total_achievements_awarded', 0),
+                }
+            except Exception as e:
+                logger.error(f"Error getting bot stats: {e}")
+                result['bot_stats'] = None
+
+        return result
+
+
+# Global bot instance
+bot_state = BotState()
+
+
+def process_events_iteratively(initial_events, game_id, initial_channel_number, client, event_processor=None, max_iterations=50):
+    """
+    Process game events iteratively, handling decisions that lead to more events.
+    Uses a loop instead of recursion to avoid stack overflow and detect infinite loops.
+
+    Args:
+        initial_events: List of initial event elements to process
+        game_id: Current game ID
+        initial_channel_number: Starting channel number
+        client: GEMPClient instance
+        event_processor: Optional EventProcessor to update board state
+        max_iterations: Maximum number of decision loops to prevent infinite loops
+
+    Returns:
+        Updated channel number
+    """
+    current_cn = initial_channel_number
+    events_to_process = list(initial_events)
+    iteration = 0
+    last_decision_key = None  # Track (decision_id, decision_type, decision_text) tuple
+    repeat_count = 0
+
+    while events_to_process and iteration < max_iterations:
+        iteration += 1
+        current_events = events_to_process
+        events_to_process = []
+
+        for i, event in enumerate(current_events):
+            event_type = event.get('type', 'unknown')
+
+            # Log all event types for debugging
+            if i < 5 or event_type in ['D', 'PCIP', 'TC', 'GPC']:
+                logger.info(f"  [Iter {iteration}] Event {i+1}/{len(current_events)}: type={event_type}, attrs={dict(event.attrib)}")
+
+            if event_type == 'D':
+                # Decision event - handle it
+                decision_type = event.get('decisionType', 'unknown')
+                decision_text = event.get('text', '')
+                decision_id = event.get('id', '')
+
+                # Track for loop detection (but don't abort - DecisionHandler handles this)
+                decision_key = (decision_id, decision_type, decision_text)
+                if decision_key == last_decision_key:
+                    repeat_count += 1
+                    # Use higher threshold (50) for expected patterns, lower (20) for unexpected
+                    is_expected = any(p in decision_text for p in ['Optional responses', 'Choose Deploy action', 'Choose Move action'])
+                    threshold = 50 if is_expected else 20
+                    if repeat_count >= threshold:
+                        logger.error(f"⚠️  SEVERE LOOP: Decision '{decision_text[:50]}' repeated {repeat_count} times!")
+                        logger.error(f"    Safety system should have handled this. Breaking as last resort.")
+                        return current_cn
+                else:
+                    repeat_count = 0
+                    last_decision_key = decision_key
+
+                logger.info(f"  [Iter {iteration}] Event {i+1}: DECISION {decision_type} - '{decision_text[:80]}...'")
+
+                # Get decision response - GUARANTEED to return a value (never None)
+                board_state_for_decision = event_processor.board_state if event_processor else None
+                resp_id, resp_value = DecisionHandler.handle_decision(
+                    event,
+                    board_state=board_state_for_decision,
+                    brain=bot_state.brain
+                )
+
+                # Post the decision (handle_decision guarantees a response)
+                response_xml = client.post_decision(game_id, current_cn, resp_id, resp_value)
+                if response_xml:
+                    logger.info(f"  [Iter {iteration}] 📦 Decision response: {len(response_xml)} bytes")
+                    # Log the XML for debugging
+                    if repeat_count > 0 or iteration > 3:
+                        logger.warning(f"  [Iter {iteration}] XML Response (first 500 chars): {response_xml[:500]}")
+                    try:
+                        resp_root = ET.fromstring(response_xml)
+                        if resp_root.tag == 'update':
+                            # Update channel number
+                            new_cn = int(resp_root.get('cn', current_cn))
+                            if new_cn != current_cn:
+                                logger.info(f"  [Iter {iteration}] 📈 Channel number: {current_cn} -> {new_cn}")
+                                current_cn = new_cn
+                            else:
+                                logger.debug(f"  [Iter {iteration}] Channel number unchanged: {current_cn}")
+
+                            # Get new events from response - add to queue for next iteration
+                            resp_events = resp_root.findall('.//ge')
+                            if len(resp_events) > 0:
+                                logger.info(f"  [Iter {iteration}] 🔄 Adding {len(resp_events)} events to queue...")
+                                events_to_process.extend(resp_events)
+                    except Exception as e:
+                        logger.error(f"  [Iter {iteration}] Error parsing decision response: {e}")
+            else:
+                # Non-decision event - process through EventProcessor
+                if event_processor:
+                    event_processor.process_event(event)
+
+                # Log important events
+                if i < 3 or event_type in ['M', 'GS', 'PCIP', 'RCIP', 'MCIP', 'GPC', 'TC']:
+                    logger.debug(f"  [Iter {iteration}] Event {i+1}: {event_type}")
+
+    if iteration >= max_iterations:
+        logger.error(f"⚠️  Hit max iterations ({max_iterations}) in event processing!")
+
+    return current_cn
+
+
+def do_location_checks(game_id: str, client, board_state, strategy_controller):
+    """
+    Perform location checks during Control phase.
+
+    Queries cardInfo for locations to get:
+    - Force drain amounts
+    - Force icons
+    - Battle Order rules
+
+    Ported from C# AIStrategyController.StartNewPhase() + ContinuePendingChecks()
+    """
+    if not strategy_controller or not board_state:
+        return
+
+    # Only check if we're in Control phase
+    if not board_state.current_phase or 'Control' not in board_state.current_phase:
+        return
+
+    # Get locations to check (smart selection, max 5 per turn)
+    locations_to_check = strategy_controller.get_locations_to_check(board_state)
+
+    if not locations_to_check:
+        logger.debug("📊 No locations to check this turn")
+        return
+
+    logger.info(f"📊 Checking {len(locations_to_check)} locations for Battle Order rules...")
+
+    for loc in locations_to_check:
+        try:
+            html = client.get_card_info(game_id, loc.card_id)
+            if html:
+                result = strategy_controller.process_location_check(loc.card_id, html)
+                strategy_controller.update_location_with_check(loc, result)
+        except Exception as e:
+            logger.error(f"Error checking location {loc.card_id}: {e}")
+
+    if strategy_controller.under_battle_order_rules:
+        logger.info("⚠️  Under Battle Order rules - force drains cost extra!")
+
+
+# Bot worker greenlet
+def bot_worker():
+    """
+    Background worker greenlet for bot operations.
+
+    This runs in an eventlet greenlet (not a thread) and handles:
+    - Connecting to GEMP server
+    - Polling for hall tables
+    - Creating/joining games (Phase 3+)
+    - Playing games (Phase 4+)
+    """
+    logger.info("🤖 Bot worker greenlet started")
+
+    while bot_state.running:
+        try:
+            if bot_state.state == GameState.CONNECTING:
+                # Attempt login
+                logger.info(f"Connecting to GEMP at {config.GEMP_SERVER_URL}")
+                success = bot_state.client.login(
+                    config.GEMP_USERNAME,
+                    config.GEMP_PASSWORD
+                )
+
+                if success:
+                    bot_state.state = GameState.IN_LOBBY
+                    bot_state.last_error = None
+
+                    # Emit immediate state update (namespace required for background threads)
+                    socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                    socketio.emit('log_message', {'message': '✅ Connected to GEMP server', 'level': 'success'}, namespace='/')
+
+                    # Load deck lists (this can take a moment)
+                    logger.info("Loading deck lists...")
+                    bot_state.library_decks = bot_state.client.get_library_decks()
+                    bot_state.user_decks = bot_state.client.get_user_decks()
+                    logger.info(f"Loaded {len(bot_state.library_decks)} library decks, {len(bot_state.user_decks)} user decks")
+
+                    # Initialize table manager with decks
+                    bot_state.initialize_table_manager()
+                    if bot_state.table_manager:
+                        bot_state.table_manager.set_decks(bot_state.library_decks, bot_state.user_decks)
+
+                    # Initialize chat manager
+                    bot_state.initialize_chat_manager()
+
+                    # Initialize command handler
+                    bot_state.initialize_command_handler()
+
+                    # Emit updated state with decks
+                    socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                    socketio.emit('log_message', {'message': f'📚 Loaded {len(bot_state.library_decks)} library decks, {len(bot_state.user_decks)} user decks', 'level': 'info'}, namespace='/')
+                    logger.info("✅ Entered lobby")
+                else:
+                    bot_state.state = GameState.ERROR
+                    bot_state.last_error = "Login failed - check credentials"
+                    socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                    socketio.emit('log_message', {'message': '❌ Login failed', 'level': 'error'}, namespace='/')
+                    bot_state.running = False
+
+            elif bot_state.state == GameState.IN_LOBBY:
+                # Poll for tables
+                tables = bot_state.client.get_hall_tables()
+                bot_state.current_tables = tables
+                socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+
+                # Log table count periodically (every 5 polls = 15 seconds)
+                if not hasattr(bot_state, '_poll_count'):
+                    bot_state._poll_count = 0
+                bot_state._poll_count += 1
+
+                if bot_state._poll_count % 5 == 0:
+                    logger.debug(f"Hall: {len(tables)} tables")
+
+                # Check if we have an existing table to rejoin
+                my_table = None
+                for table in tables:
+                    # Check if we're in this table
+                    if any(p.name == config.GEMP_USERNAME for p in table.players):
+                        # Skip finished tables - don't rejoin them!
+                        if table.status == 'finished':
+                            logger.debug(f"Skipping finished table {table.table_id}")
+                            continue  # Skip to next table in the for loop
+                        my_table = table
+                        break
+
+                if my_table:
+
+                    # Found a table we're in!
+                    # Only log/update if this is a new table or state change
+                    is_new_table = bot_state.current_table_id != my_table.table_id
+
+                    bot_state.current_table_id = my_table.table_id
+
+                    # Check if we have an opponent
+                    opponent = my_table.get_opponent(config.GEMP_USERNAME)
+                    if opponent:
+                        is_new_opponent = bot_state.opponent_name != opponent.name
+                        bot_state.opponent_name = opponent.name
+
+                        if is_new_table or is_new_opponent:
+                            logger.info(f"🎮 Rejoined table {my_table.table_id} with opponent: {opponent.name}")
+                            socketio.emit('log_message', {'message': f'🎮 Rejoined table with {opponent.name}', 'level': 'success'}, namespace='/')
+
+                        # If game is started, we'd join it (Phase 3+)
+                        if my_table.game_id:
+                            if is_new_table:
+                                logger.info(f"Game in progress: {my_table.game_id} (Phase 3: will join)")
+                                socketio.emit('log_message', {'message': 'Game in progress - Phase 3 will handle this', 'level': 'warning'}, namespace='/')
+
+                        bot_state.state = GameState.WAITING_FOR_OPPONENT
+                        socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                    else:
+                        # Still waiting for opponent
+                        if is_new_table:
+                            logger.info(f"⏳ Waiting for opponent at table {my_table.table_id}")
+                            socketio.emit('log_message', {'message': '⏳ Waiting for opponent to join', 'level': 'info'}, namespace='/')
+
+                        bot_state.state = GameState.WAITING_FOR_OPPONENT
+                        socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                else:
+                    # No table found - auto-create one!
+                    if bot_state.current_table_id is not None:
+                        logger.info("Table no longer exists in hall")
+                        socketio.emit('log_message', {'message': 'Table closed', 'level': 'info'}, namespace='/')
+                        bot_state.current_table_id = None
+                        bot_state.opponent_name = None
+
+                    # Use TableManager to auto-create a table
+                    if bot_state.table_manager:
+                        action = bot_state.table_manager.get_required_action(tables, config.GEMP_USERNAME)
+                        if action == 'create_table':
+                            logger.info("🔄 Auto-creating table...")
+                            socketio.emit('log_message', {'message': '🔄 Auto-creating table...', 'level': 'info'}, namespace='/')
+
+                            # Small delay before creating
+                            socketio.sleep(2)
+
+                            table_id = bot_state.table_manager.create_table()
+                            if table_id:
+                                bot_state.current_table_id = table_id
+                                bot_state.state = GameState.WAITING_FOR_OPPONENT
+                                logger.info(f"✅ Table created: {table_id}")
+                                socketio.emit('log_message', {
+                                    'message': f'✅ Table created with deck: {bot_state.table_manager.state.current_deck_name}',
+                                    'level': 'success'
+                                }, namespace='/')
+                            else:
+                                logger.warning(f"Table creation failed (attempt {bot_state.table_manager.state.consecutive_failures})")
+                                socketio.emit('log_message', {
+                                    'message': f'⚠️ Table creation failed, will retry...',
+                                    'level': 'warning'
+                                }, namespace='/')
+
+                    socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+
+                socketio.sleep(config.POLL_INTERVAL)
+
+            elif bot_state.state == GameState.WAITING_FOR_OPPONENT:
+                # Poll hall to check if opponent joined
+                tables = bot_state.client.get_hall_tables()
+                bot_state.current_tables = tables
+
+                # Find our table
+                my_table = None
+                for table in tables:
+                    if table.table_id == bot_state.current_table_id:
+                        my_table = table
+                        break
+
+                if my_table:
+                    # Check if opponent joined
+                    if len(my_table.players) >= 2:
+                        opponent = my_table.get_opponent(config.GEMP_USERNAME)
+                        if opponent and bot_state.opponent_name != opponent.name:
+                            # New opponent joined!
+                            bot_state.opponent_name = opponent.name
+                            logger.info(f"🎮 Opponent joined: {opponent.name}")
+                            socketio.emit('log_message', {'message': f'🎮 Opponent {opponent.name} joined!', 'level': 'success'}, namespace='/')
+                            socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+
+                    # Check if game started (has gameId)
+                    if my_table.game_id and bot_state.game_id != my_table.game_id:
+                        logger.info(f"🎲 Game started! Game ID: {my_table.game_id}")
+                        socketio.emit('log_message', {'message': f'🎲 Game started vs {bot_state.opponent_name}!', 'level': 'success'}, namespace='/')
+
+                        # Join the game
+                        game_state_xml = bot_state.client.join_game(my_table.game_id)
+                        if game_state_xml:
+                            bot_state.game_id = my_table.game_id
+
+                            # Initialize board state tracking
+                            bot_state.board_state = BoardState(my_player_name=config.GEMP_USERNAME)
+                            bot_state.board_state.strategy_controller = bot_state.strategy_controller
+                            # Sync my_side from strategy controller (default "dark")
+                            bot_state.board_state.my_side = bot_state.strategy_controller.my_side
+                            bot_state.event_processor = EventProcessor(bot_state.board_state)
+                            bot_state.strategy_controller.setup()  # Reset for new game
+                            logger.info(f"🎮 Board state tracking initialized (side: {bot_state.board_state.my_side})")
+
+                            # Register callback for card placements (achievements)
+                            if bot_state.chat_manager:
+                                def on_card_placed(card_title, blueprint_id, zone, owner):
+                                    # Only check achievements for cards deployed to board (not hand/deck)
+                                    board_zones = ['AT_LOCATION', 'ATTACHED', 'LOCATIONS', 'STACKED_ON']
+                                    if zone in board_zones:
+                                        bot_state.chat_manager.on_card_deployed(
+                                            card_title, blueprint_id, zone, owner,
+                                            bot_state.board_state
+                                        )
+                                bot_state.event_processor.register_card_placed_callback(on_card_placed)
+
+                            # Parse initial game state and events
+                            try:
+                                import xml.etree.ElementTree as ET
+                                root = ET.fromstring(game_state_xml)
+                                logger.info(f"Join response root tag: {root.tag}, attribs: {root.attrib}")
+                                # Root IS the gameState element
+                                if root.tag == 'gameState':
+                                    cn_raw = root.get('cn', '0')
+                                    bot_state.channel_number = int(cn_raw)
+                                    logger.info(f"Joined game, raw cn='{cn_raw}', channel number: {bot_state.channel_number}")
+
+                                    # Parse initial game events (just like C# does)
+                                    game_events = root.findall('.//ge')
+                                    if len(game_events) > 0:
+                                        logger.info(f"📬 Initial game state has {len(game_events)} events")
+                                        logger.info(f"First event type: {game_events[0].get('type', 'unknown')}")
+
+                                        # Process all events iteratively (handles decisions and their responses)
+                                        logger.info(f"🔄 Processing initial events... (starting cn={bot_state.channel_number})")
+                                        new_cn = process_events_iteratively(
+                                            game_events,
+                                            bot_state.game_id,
+                                            bot_state.channel_number,
+                                            bot_state.client,
+                                            bot_state.event_processor
+                                        )
+                                        logger.info(f"✅ Initial events processed, cn: {bot_state.channel_number} -> {new_cn}")
+                                        bot_state.channel_number = new_cn
+                                    else:
+                                        logger.warning("No initial game events found")
+                                else:
+                                    logger.warning(f"Unexpected root element: {root.tag}")
+                                    bot_state.channel_number = 0
+                            except Exception as e:
+                                logger.warning(f"Could not parse game state: {e}")
+                                logger.info(f"XML content: {game_state_xml[:500]}")
+                                bot_state.channel_number = 0
+
+                            bot_state.state = GameState.PLAYING
+                            socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                            logger.info("✅ In game session")
+
+                            # Register with chat system for this game
+                            chat_registered, initial_chat_msg_id = bot_state.client.register_chat(bot_state.game_id)
+                            if chat_registered:
+                                logger.info(f"💬 Registered with chat system (last_msg_id={initial_chat_msg_id})")
+                            else:
+                                logger.warning("⚠️ Failed to register with chat system - commands won't work")
+                                initial_chat_msg_id = 0
+
+                            # Initialize chat manager for this game
+                            if bot_state.chat_manager:
+                                deck_name = "Unknown"
+                                if bot_state.table_manager and bot_state.table_manager.state:
+                                    deck_name = bot_state.table_manager.state.current_deck_name or "Unknown"
+
+                                my_side = bot_state.board_state.my_side or "unknown"
+                                opponent_side = "Light" if my_side == "Dark" else "Dark"
+
+                                bot_state.chat_manager.reset_for_game(
+                                    game_id=bot_state.game_id,
+                                    opponent_name=bot_state.opponent_name or "Unknown",
+                                    deck_name=deck_name,
+                                    my_side=my_side,
+                                    opponent_side=opponent_side
+                                )
+                                bot_state.chat_manager.on_game_start()
+                                logger.info(f"💬 Chat manager initialized for game vs {bot_state.opponent_name}")
+
+                            # Initialize command handler for this game
+                            if bot_state.command_handler:
+                                bot_state.command_handler.reset_for_game(
+                                    game_id=bot_state.game_id,
+                                    opponent_name=bot_state.opponent_name or "Unknown",
+                                    initial_msg_id=initial_chat_msg_id
+                                )
+                                logger.info(f"🎮 Command handler initialized for game")
+                else:
+                    # Table disappeared - back to lobby
+                    logger.info("Table no longer exists - returning to lobby")
+                    socketio.emit('log_message', {'message': 'Table closed - back in lobby', 'level': 'info'}, namespace='/')
+                    bot_state.current_table_id = None
+                    bot_state.opponent_name = None
+                    bot_state.state = GameState.IN_LOBBY
+                    socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+
+                socketio.sleep(config.POLL_INTERVAL)
+
+            elif bot_state.state == GameState.PLAYING:
+                # Poll for game updates
+                if bot_state.game_id:
+                    logger.debug(f"⏱️  Polling game update (cn={bot_state.channel_number})")
+                    update_xml = bot_state.client.get_game_update(
+                        bot_state.game_id,
+                        bot_state.channel_number
+                    )
+
+                    if update_xml == "SESSION_EXPIRED":
+                        # Session expired - track failure and attempt recovery
+                        if bot_state.connection_monitor:
+                            bot_state.connection_monitor.record_failure("Session expired")
+
+                        logger.warning("🔄 Session expired, re-logging in...")
+                        socketio.emit('log_message', {'message': '🔄 Session expired, re-logging in...', 'level': 'warning'}, namespace='/')
+
+                        if bot_state.client.login(config.GEMP_USERNAME, config.GEMP_PASSWORD):
+                            logger.info("✅ Re-login successful, re-joining game...")
+                            if bot_state.connection_monitor:
+                                bot_state.connection_monitor.record_success()
+
+                            # Re-join the game
+                            game_state_xml = bot_state.client.join_game(bot_state.game_id)
+                            if game_state_xml:
+                                # Re-parse channel number
+                                try:
+                                    import xml.etree.ElementTree as ET
+                                    root = ET.fromstring(game_state_xml)
+                                    if root.tag == 'gameState':
+                                        bot_state.channel_number = int(root.get('cn', 0))
+                                        logger.info(f"✅ Re-joined game, channel number: {bot_state.channel_number}")
+                                except Exception as e:
+                                    logger.error(f"Error re-parsing game state: {e}")
+                            else:
+                                logger.error("❌ Failed to re-join game")
+                        else:
+                            logger.error("❌ Re-login failed")
+                            # Try recovery via ConnectionMonitor
+                            if bot_state.connection_monitor:
+                                socketio.sleep(5)  # Wait before retry
+                                if bot_state.connection_monitor.attempt_recovery(config.GEMP_USERNAME, config.GEMP_PASSWORD):
+                                    logger.info("✅ Connection recovered via monitor")
+                                else:
+                                    bot_state.state = GameState.STOPPED
+                                    bot_state.last_error = "Session expired and recovery failed"
+                            else:
+                                bot_state.state = GameState.STOPPED
+                                bot_state.last_error = "Session expired and re-login failed"
+
+                    elif update_xml is None:
+                        # Request failed completely - track failure
+                        if bot_state.connection_monitor:
+                            should_recover = bot_state.connection_monitor.record_failure("Request returned None")
+                            if should_recover:
+                                logger.warning("🔄 Multiple failures detected, attempting recovery...")
+                                socketio.emit('log_message', {'message': '🔄 Connection issues, attempting recovery...', 'level': 'warning'}, namespace='/')
+                                socketio.sleep(3)
+                                if bot_state.connection_monitor.attempt_recovery(config.GEMP_USERNAME, config.GEMP_PASSWORD):
+                                    logger.info("✅ Connection recovered")
+                                    socketio.emit('log_message', {'message': '✅ Connection recovered', 'level': 'success'}, namespace='/')
+                                else:
+                                    logger.error("❌ Recovery failed")
+                                    socketio.emit('log_message', {'message': '❌ Recovery failed', 'level': 'error'}, namespace='/')
+                        else:
+                            logger.warning("⚠️  Game update returned None (request failed)")
+
+                    elif update_xml:
+                        # Successful request - track it
+                        if bot_state.connection_monitor:
+                            bot_state.connection_monitor.record_success()
+
+                        logger.debug(f"📥 Received update XML ({len(update_xml)} bytes)")
+
+                        # Parse channel number and check for game end
+                        try:
+                            import xml.etree.ElementTree as ET
+                            root = ET.fromstring(update_xml)
+                            logger.debug(f"Update root element: <{root.tag}> with attributes: {root.attrib}")
+
+                            # Update response has root element <update> (not <gameState>)
+                            if root.tag == 'update':
+                                # Update channel number
+                                new_cn = int(root.get('cn', bot_state.channel_number))
+                                if new_cn > bot_state.channel_number:
+                                    logger.info(f"📈 Channel number updated: {bot_state.channel_number} -> {new_cn}")
+                                    bot_state.channel_number = new_cn
+                                else:
+                                    logger.debug(f"Channel number unchanged: {new_cn}")
+
+                                # Check for game events
+                                game_events = root.findall('.//ge')
+                                if len(game_events) > 0:
+                                    # Log summary of event types
+                                    event_types = {}
+                                    for ev in game_events:
+                                        t = ev.get('type', 'unknown')
+                                        event_types[t] = event_types.get(t, 0) + 1
+                                    logger.info(f"📬 Received {len(game_events)} game events: {event_types}")
+                                    # Process all events iteratively
+                                    logger.debug("🔄 Processing game update events...")
+                                    bot_state.channel_number = process_events_iteratively(
+                                        game_events,
+                                        bot_state.game_id,
+                                        bot_state.channel_number,
+                                        bot_state.client,
+                                        bot_state.event_processor
+                                    )
+                                    logger.debug(f"✅ Events processed, channel number: {bot_state.channel_number}")
+
+                                    # Do location checks during Control phase (Battle Order rules)
+                                    do_location_checks(
+                                        bot_state.game_id,
+                                        bot_state.client,
+                                        bot_state.board_state,
+                                        bot_state.strategy_controller
+                                    )
+
+                                    # Check for turn change and notify chat manager
+                                    if (bot_state.chat_manager and bot_state.board_state and
+                                        bot_state.board_state.turn_number > bot_state.chat_manager.current_turn):
+                                        bot_state.chat_manager.on_turn_start(
+                                            bot_state.board_state.turn_number,
+                                            bot_state.board_state
+                                        )
+                                else:
+                                    logger.debug("No new game events")
+
+                                # Poll for chat commands
+                                if bot_state.command_handler:
+                                    try:
+                                        bot_state.command_handler.poll_and_handle_commands()
+                                    except Exception as e:
+                                        logger.error(f"Error polling chat commands: {e}")
+
+                                # Check if game ended
+                                if root.get('finished') == 'true':
+                                    logger.info("🏁 Game finished (from game state)")
+                                    # Will trigger cleanup below
+                            else:
+                                logger.warning(f"Unexpected root element: {root.tag}")
+
+                        except Exception as e:
+                            logger.error(f"Error parsing game update: {e}", exc_info=True)
+                    else:
+                        logger.warning("⚠️  Game update returned None (request failed)")
+
+                # Also check hall to see if table disappeared
+                tables = bot_state.client.get_hall_tables()
+                bot_state.current_tables = tables
+
+                # Check if our table still exists
+                my_table = None
+                for table in tables:
+                    if table.table_id == bot_state.current_table_id:
+                        my_table = table
+                        break
+
+                if not my_table or my_table.status == 'finished':
+                    # Game ended!
+                    logger.info("🏁 Game ended!")
+                    socketio.emit('log_message', {'message': '🏁 Game ended', 'level': 'info'}, namespace='/')
+
+                    # Determine if we won
+                    won = False
+                    if bot_state.board_state:
+                        # First check if game_winner was set from message events (most reliable)
+                        if bot_state.board_state.game_winner:
+                            won = (bot_state.board_state.game_winner == config.GEMP_USERNAME or
+                                   bot_state.board_state.game_winner == bot_state.board_state.my_player_name)
+                            logger.info(f"Game result from message: {'Won' if won else 'Lost'} "
+                                       f"(winner: {bot_state.board_state.game_winner}, "
+                                       f"reason: {bot_state.board_state.game_win_reason})")
+                        else:
+                            # Fallback: check life force totals
+                            their_life = (bot_state.board_state.their_reserve_deck +
+                                         bot_state.board_state.their_force_pile +
+                                         bot_state.board_state.their_used_pile)
+                            my_life = (bot_state.board_state.reserve_deck +
+                                      bot_state.board_state.force_pile +
+                                      bot_state.board_state.used_pile)
+                            won = their_life <= my_life  # We won if they have less life force
+                            logger.info(f"Game result from life force: {'Won' if won else 'Lost'} "
+                                       f"(my life: {my_life}, their life: {their_life})")
+
+                    # Send game end message
+                    if bot_state.chat_manager:
+                        bot_state.chat_manager.on_game_end(won=won, board_state=bot_state.board_state)
+
+                    # Record game to stats database
+                    if bot_state.stats_repo and bot_state.opponent_name:
+                        try:
+                            # Get game stats
+                            route_score = 0
+                            damage = 0
+                            turns = 0
+                            if bot_state.board_state:
+                                turns = bot_state.board_state.turn_number
+                                # Route score from chat_manager if available
+                                if bot_state.chat_manager:
+                                    route_score = bot_state.chat_manager.last_route_score or 0
+
+                            # Get deck name from table manager
+                            deck_name = "Unknown"
+                            if bot_state.table_manager and bot_state.table_manager.state:
+                                deck_name = bot_state.table_manager.state.current_deck_name or "Unknown"
+
+                            # Record to game history
+                            bot_state.stats_repo.record_game(
+                                opponent_name=bot_state.opponent_name,
+                                deck_name=deck_name,
+                                my_side=bot_state.board_state.my_side if bot_state.board_state else "dark",
+                                won=won,
+                                route_score=route_score,
+                                damage=damage,
+                                turns=turns
+                            )
+
+                            # Also update opponent's player stats
+                            # Note: In record_game_result, 'won' is from opponent's perspective
+                            # If we won, opponent lost
+                            bot_state.stats_repo.record_game_result(
+                                player_name=bot_state.opponent_name,
+                                won=not won,  # Opponent won if we lost
+                                route_score=route_score
+                            )
+
+                            logger.info(f"📊 Stats recorded: {'Won' if won else 'Lost'} vs {bot_state.opponent_name}")
+                        except Exception as e:
+                            logger.error(f"Error recording game stats: {e}")
+
+                    # Notify table manager
+                    if bot_state.table_manager:
+                        bot_state.table_manager.on_game_ended()
+
+                    # Leave chat system (must be before clearing game_id)
+                    if bot_state.game_id and bot_state.client:
+                        bot_state.client.leave_chat(bot_state.game_id)
+                        logger.info(f"💬 Left chat system for game {bot_state.game_id}")
+
+                    # Clear old game state
+                    bot_state.current_table_id = None
+                    bot_state.opponent_name = None
+                    bot_state.game_id = None
+                    bot_state.channel_number = 0
+                    bot_state.state = GameState.IN_LOBBY  # Go back to lobby, it will auto-create table
+                    socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                    # Note: Table will be auto-created by IN_LOBBY state handler
+
+                socketio.sleep(config.POLL_INTERVAL)
+
+            else:
+                # Unknown state or not ready yet
+                socketio.sleep(0.5)
+
+        except Exception as e:
+            logger.error(f"💥 Worker error: {e}", exc_info=True)
+            bot_state.state = GameState.ERROR
+            bot_state.last_error = str(e)
+            socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+            socketio.emit('log_message', {'message': f'Error: {e}', 'level': 'error'}, namespace='/')
+            bot_state.running = False
+
+    logger.info("Bot worker greenlet stopped")
+
+
+# Flask routes
+@app.route('/')
+def index():
+    """Admin dashboard"""
+    return render_template('dashboard.html', state=bot_state.to_dict())
+
+
+@app.route('/health')
+def health():
+    """Health check endpoint for monitoring"""
+    return {
+        'status': 'ok',
+        'bot_state': bot_state.state.value,
+        'version': '0.1.0-alpha'
+    }
+
+
+@app.route('/board_state')
+def board_state_view():
+    """View current board state (for debugging)"""
+    if not bot_state.board_state:
+        return render_template('board_state.html', board_state=None)
+
+    bs = bot_state.board_state
+
+    # Build a simplified view for the template
+    view_data = {
+        'my_player': bs.my_player_name,
+        'opponent': bs.opponent_name or "Unknown",
+        'my_side': bs.my_side or "Unknown",
+        'current_phase': bs.current_phase or "Unknown",
+        'current_turn': bs.current_turn_player or "Unknown",
+        'is_my_turn': bs.is_my_turn(),
+
+        # Resources
+        'my_force': bs.force_pile,
+        'my_used': bs.used_pile,
+        'my_reserve': bs.reserve_deck,
+        'my_lost': bs.lost_pile,
+        'my_hand_count': len(bs.cards_in_hand),
+
+        'their_force': bs.their_force_pile,
+        'their_used': bs.their_used_pile,
+        'their_reserve': bs.their_reserve_deck,
+        'their_lost': bs.their_lost_pile,
+        'their_hand_count': bs.their_hand_size,
+
+        # Power
+        'my_total_power': bs.total_my_power(),
+        'their_total_power': bs.total_their_power(),
+        'power_advantage': bs.power_advantage(),
+        'force_advantage': bs.force_advantage(),
+
+        # Locations
+        'locations': [],
+
+        # Hand
+        'hand': [{
+            'blueprint_id': c.blueprint_id,
+            'card_id': c.card_id,
+            'name': c.card_title or c.blueprint_id,
+            'type': c.card_type,
+            'deploy': c.deploy
+        } for c in bs.cards_in_hand],
+
+        # Stats
+        'total_cards_in_play': len(bs.cards_in_play),
+    }
+
+    # Add location details
+    for i, loc in enumerate(bs.locations):
+        if loc:
+            # Prefer site_name (full name like "Tatooine: Mos Eisley")
+            # Fall back to system_name (for space locations)
+            # Finally fall back to blueprint_id
+            loc_name = loc.site_name or loc.system_name or loc.blueprint_id
+            view_data['locations'].append({
+                'index': i,
+                'name': loc_name,
+                'my_power': bs.my_power_at_location(i),
+                'their_power': bs.their_power_at_location(i),
+                'my_cards': [{
+                    'blueprint': c.blueprint_id,
+                    'id': c.card_id,
+                    'name': c.card_title or c.blueprint_id,
+                    'power': c.power,
+                    'ability': c.ability
+                } for c in loc.my_cards],
+                'their_cards': [{
+                    'blueprint': c.blueprint_id,
+                    'id': c.card_id,
+                    'name': c.card_title or c.blueprint_id,
+                    'power': c.power,
+                    'ability': c.ability
+                } for c in loc.their_cards],
+            })
+
+    return render_template('board_state.html', board_state=view_data)
+
+
+# WebSocket event handlers
+@socketio.on('connect')
+def handle_connect():
+    """Client connected to WebSocket"""
+    logger.info('Admin UI connected via WebSocket')
+    emit('state_update', bot_state.to_dict())
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Client disconnected from WebSocket"""
+    logger.info('Admin UI disconnected from WebSocket')
+
+
+@socketio.on('request_state')
+def handle_request_state():
+    """Client requesting current state"""
+    emit('state_update', bot_state.to_dict())
+
+
+@socketio.on('start_bot')
+def handle_start_bot():
+    """Start the bot - create GEMP client and start worker greenlet"""
+    if bot_state.state in [GameState.STOPPED, GameState.ERROR]:
+        logger.info('🚀 Start bot requested')
+
+        # Create GEMP client
+        bot_state.client = GEMPClient(config.GEMP_SERVER_URL)
+        bot_state.state = GameState.CONNECTING
+        bot_state.last_error = None
+        bot_state.running = True
+        bot_state.current_tables = []
+
+        # Start worker greenlet (NOT a thread!)
+        socketio.start_background_task(bot_worker)
+
+        emit('state_update', bot_state.to_dict())
+        emit('log_message', {'message': '🚀 Bot starting...', 'level': 'info'})
+    else:
+        emit('log_message', {'message': f'Cannot start - bot is in state: {bot_state.state.value}', 'level': 'warning'})
+
+
+@socketio.on('stop_bot')
+def handle_stop_bot():
+    """Stop the bot"""
+    logger.info('🛑 Stop bot requested')
+    bot_state.running = False
+    bot_state.state = GameState.STOPPED
+
+    # Clear table state
+    bot_state.current_table_id = None
+    bot_state.opponent_name = None
+    bot_state.current_tables = []
+
+    if bot_state.client:
+        bot_state.client.logout()
+
+    emit('state_update', bot_state.to_dict())
+    emit('log_message', {'message': '🛑 Bot stopped', 'level': 'info'})
+
+
+@socketio.on('update_config')
+def handle_update_config(data):
+    """Update bot configuration from admin UI"""
+    key = data.get('key')
+    value = data.get('value')
+
+    logger.info(f'Config update: {key} = {value}')
+
+    # Update config and sync to GameStrategy if needed
+    if key == 'max_hand_size':
+        bot_state.config.MAX_HAND_SIZE = int(value)
+        _sync_config_to_strategy()
+    elif key == 'hand_soft_cap':
+        bot_state.config.HAND_SOFT_CAP = int(value)
+        _sync_config_to_strategy()
+    elif key == 'force_gen_target':
+        bot_state.config.FORCE_GEN_TARGET = int(value)
+        _sync_config_to_strategy()
+    elif key == 'max_reserve_checks':
+        bot_state.config.MAX_RESERVE_CHECKS = int(value)
+        _sync_config_to_strategy()
+    elif key == 'deploy_threshold':
+        bot_state.config.DEPLOY_THRESHOLD = int(value)
+    elif key == 'battle_favorable_threshold':
+        bot_state.config.BATTLE_FAVORABLE_THRESHOLD = int(value)
+        _sync_config_to_strategy()
+    elif key == 'battle_danger_threshold':
+        bot_state.config.BATTLE_DANGER_THRESHOLD = int(value)
+        _sync_config_to_strategy()
+    elif key == 'bot_mode':
+        bot_state.config.BOT_MODE = value
+
+    emit('state_update', bot_state.to_dict())
+    emit('log_message', {'message': f'Updated {key} to {value}'})
+
+
+def _sync_config_to_strategy():
+    """Sync config values to GameStrategy instance"""
+    if bot_state.strategy_controller and bot_state.strategy_controller.game_strategy:
+        gs = bot_state.strategy_controller.game_strategy
+        gs.force_generation_target = bot_state.config.FORCE_GEN_TARGET
+        gs.max_reserve_checks_per_turn = bot_state.config.MAX_RESERVE_CHECKS
+        gs.battle_favorable_threshold = bot_state.config.BATTLE_FAVORABLE_THRESHOLD
+        gs.battle_danger_threshold = bot_state.config.BATTLE_DANGER_THRESHOLD
+        logger.debug(f"Synced config to GameStrategy: gen_target={gs.force_generation_target}, max_reserve={gs.max_reserve_checks_per_turn}, battle_favorable={gs.battle_favorable_threshold}, battle_danger={gs.battle_danger_threshold}")
+
+
+@socketio.on('create_table')
+def handle_create_table(data):
+    """Create a new game table"""
+    import random
+
+    deck_name = data.get('deck_name')
+    table_name = data.get('table_name', config.TABLE_NAME)
+    is_library = data.get('is_library', True)
+
+    # Ensure table name has "Bot Table:" prefix
+    if not table_name.startswith('Bot Table:'):
+        table_name = f'Bot Table: {table_name}'
+
+    # Handle random deck selection
+    if deck_name == '__RANDOM__':
+        if bot_state.library_decks:
+            random_deck = random.choice(bot_state.library_decks)
+            deck_name = random_deck.name
+            is_library = True
+            logger.info(f'🎲 Random deck selected: {deck_name}')
+            emit('log_message', {'message': f'🎲 Random deck selected: {deck_name}', 'level': 'info'})
+        else:
+            emit('log_message', {'message': '❌ No library decks available for random selection', 'level': 'error'})
+            return
+
+    logger.info(f'📋 Create table requested: {table_name} with deck {deck_name} (library: {is_library})')
+
+    if bot_state.state != GameState.IN_LOBBY:
+        emit('log_message', {'message': 'Bot must be in lobby to create table', 'level': 'warning'})
+        return
+
+    if not bot_state.client:
+        emit('log_message', {'message': 'No GEMP client available', 'level': 'error'})
+        return
+
+    # Create table
+    table_id = bot_state.client.create_table(deck_name, table_name, is_library=is_library)
+
+    if table_id:
+        bot_state.current_table_id = table_id
+        bot_state.state = GameState.WAITING_FOR_OPPONENT
+        emit('state_update', bot_state.to_dict())
+        emit('log_message', {'message': f'✅ Table created: {table_name}', 'level': 'success'})
+    else:
+        emit('log_message', {'message': '❌ Failed to create table', 'level': 'error'})
+
+
+@socketio.on('leave_table')
+def handle_leave_table():
+    """Leave the current table"""
+    logger.info('🚪 Leave table requested')
+
+    if not bot_state.current_table_id:
+        emit('log_message', {'message': '⚠️ Not at any table', 'level': 'warning'})
+        return
+
+    if not bot_state.client:
+        emit('log_message', {'message': '❌ No GEMP client available', 'level': 'error'})
+        return
+
+    # Drop from the table
+    success = bot_state.client.leave_table(bot_state.current_table_id)
+
+    if success:
+        logger.info(f'✅ Left table {bot_state.current_table_id}')
+        emit('log_message', {'message': '✅ Left table', 'level': 'success'})
+
+        # Clear table state
+        bot_state.current_table_id = None
+        bot_state.opponent_name = None
+        bot_state.state = GameState.IN_LOBBY
+
+        emit('state_update', bot_state.to_dict())
+    else:
+        logger.warning('Failed to leave table gracefully, clearing state anyway')
+        emit('log_message', {'message': '⚠️ Left table (may need manual cleanup)', 'level': 'warning'})
+
+        # Clear state anyway
+        bot_state.current_table_id = None
+        bot_state.opponent_name = None
+        bot_state.state = GameState.IN_LOBBY
+
+        emit('state_update', bot_state.to_dict())
+
+
+if __name__ == '__main__':
+    logger.info(f'=' * 60)
+    logger.info(f'🤖 Rando Cal Bot Starting')
+    logger.info(f'Version: 0.2.0-alpha (Phase 2 - Networking)')
+    logger.info(f'Host: {config.HOST}:{config.PORT}')
+    logger.info(f'GEMP Server: {config.GEMP_SERVER_URL}')
+    logger.info(f'GEMP Username: {config.GEMP_USERNAME}')
+    logger.info(f'Bot Mode: {config.BOT_MODE}')
+    logger.info(f'=' * 60)
+
+    # Run Flask with SocketIO
+    socketio.run(
+        app,
+        host=config.HOST,
+        port=config.PORT,
+        debug=config.DEBUG
+    )

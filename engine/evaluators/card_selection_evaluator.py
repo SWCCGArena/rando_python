@@ -1,0 +1,464 @@
+"""
+Card Selection Evaluator
+
+Handles CARD_SELECTION decisions - choosing cards from a list.
+Ported from C# AICSHandler.cs
+
+Decision types handled:
+- "choose card to set sabacc value" -> PASS (don't set value)
+- "choose where to deploy" -> Pick best location
+- "choose force to lose" -> Pick best card to lose
+- "move/transport/transit" -> Pick best destination
+- "choose a card from battle to forfeit" -> Pick lowest forfeit value
+- "choose a pilot" -> Pick best pilot
+- "choose card to cancel" -> Cancel opponent's cards, not ours
+- "choose...clone" -> PASS (don't clone sabacc cards)
+"""
+
+import logging
+import re
+from typing import List, Optional
+from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
+
+logger = logging.getLogger(__name__)
+
+# Rank deltas (from C# BotAIHelper)
+VERY_GOOD_DELTA = 999.0
+GOOD_DELTA = 10.0
+BAD_DELTA = -10.0
+VERY_BAD_DELTA = -999.0
+
+
+class CardSelectionEvaluator(ActionEvaluator):
+    """
+    Evaluates CARD_SELECTION decisions.
+
+    These are decisions where the player must select one or more cards
+    from a list (e.g., choosing where to deploy, which card to forfeit).
+    """
+
+    def __init__(self):
+        super().__init__("CardSelection")
+
+    def can_evaluate(self, context: DecisionContext) -> bool:
+        """Handle CARD_SELECTION decisions"""
+        return context.decision_type == 'CARD_SELECTION'
+
+    def evaluate(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """Evaluate card selection options based on decision text"""
+        actions = []
+        bs = context.board_state
+        text = context.decision_text
+        text_lower = text.lower()
+
+        # Get all card IDs from the decision
+        card_ids = context.card_ids
+
+        if not card_ids:
+            logger.warning("No card IDs in CARD_SELECTION decision")
+            return []
+
+        # Determine the type of card selection
+        if "choose card to set sabacc value" in text_lower:
+            actions = self._evaluate_sabacc_set_value(context)
+        elif "choose" in text_lower and "clone" in text_lower:
+            actions = self._evaluate_sabacc_clone(context)
+        elif "choose where to deploy" in text_lower:
+            actions = self._evaluate_deploy_location(context)
+        elif "choose force to lose" in text_lower:
+            actions = self._evaluate_force_loss(context)
+        elif any(x in text_lower for x in ["move", "transport", "transit"]):
+            actions = self._evaluate_move_destination(context)
+        elif "choose a card from battle to forfeit" in text_lower:
+            actions = self._evaluate_forfeit(context)
+        elif "if desired" in text_lower and not context.no_pass:
+            actions = self._evaluate_optional_action(context)
+        elif "choose a pilot" in text_lower:
+            actions = self._evaluate_pilot_selection(context)
+        elif "choose card to cancel" in text_lower:
+            actions = self._evaluate_cancel_selection(context)
+        elif "choose card from hand" in text_lower:
+            actions = self._evaluate_hand_selection(context)
+        elif "choose" in text_lower and "location" in text_lower and "deploy" in text_lower:
+            actions = self._evaluate_location_deploy(context)
+        else:
+            # Unknown card selection - create neutral actions
+            actions = self._evaluate_unknown(context)
+
+        return actions
+
+    def _evaluate_sabacc_set_value(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Sabacc value setting - we DON'T want to set a value.
+
+        If min=0, we can pass. If min=1, pick the first option but rank low.
+        Ported from C# AICSHandler: "choose card to set sabacc value" -> veryBadActionDelta
+        """
+        actions = []
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SABACC,
+                score=VERY_BAD_DELTA,
+                display_text=f"Set sabacc value (card {card_id})"
+            )
+            action.add_reasoning("Avoid setting sabacc value", VERY_BAD_DELTA)
+            actions.append(action)
+
+        logger.info(f"Sabacc set value - marking all {len(actions)} options as very bad")
+        return actions
+
+    def _evaluate_sabacc_clone(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Sabacc clone - we DON'T want to clone.
+
+        Ported from C# AICSHandler: "choose...clone" -> veryBadActionDelta
+        """
+        actions = []
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SABACC,
+                score=VERY_BAD_DELTA,
+                display_text=f"Clone sabacc value (card {card_id})"
+            )
+            action.add_reasoning("Avoid cloning sabacc cards", VERY_BAD_DELTA)
+            actions.append(action)
+
+        logger.info(f"Sabacc clone - marking all {len(actions)} options as very bad")
+        return actions
+
+    def _evaluate_deploy_location(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose where to deploy a card.
+
+        Consider:
+        - Power differential at location
+        - Force icons
+        - Whether we already have presence
+        - Whether enemy is present
+        """
+        actions = []
+        bs = context.board_state
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=0.0,
+                display_text=f"Deploy to {card_id}"
+            )
+
+            if bs:
+                # Try to find location info
+                card = bs.cards_in_play.get(card_id)
+                if card:
+                    loc_idx = card.location_index
+                    if loc_idx >= 0 and loc_idx < len(bs.locations):
+                        loc = bs.locations[loc_idx]
+                        my_power = bs.my_power_at_location(loc_idx)
+                        their_power = bs.their_power_at_location(loc_idx)
+
+                        action.display_text = f"Deploy to {loc.site_name or loc.system_name}"
+
+                        if their_power > 0:
+                            # Enemy present
+                            power_diff = my_power - their_power
+                            if power_diff >= 0:
+                                action.add_reasoning(f"We match or exceed enemy power ({my_power} vs {their_power})", GOOD_DELTA * 2)
+                            elif power_diff >= -6:
+                                action.add_reasoning(f"Can catch up to enemy ({my_power} vs {their_power})", GOOD_DELTA)
+                            else:
+                                action.add_reasoning(f"Enemy too strong here ({my_power} vs {their_power})", BAD_DELTA)
+                        else:
+                            # Enemy not present
+                            if my_power >= 12:
+                                action.add_reasoning("Already have strong presence", BAD_DELTA)
+                            elif my_power > 0:
+                                action.add_reasoning("Bolster existing presence", GOOD_DELTA)
+                            else:
+                                action.add_reasoning("New location - spread out", GOOD_DELTA)
+                else:
+                    action.add_reasoning("Location info not found", 0.0)
+            else:
+                action.add_reasoning("No board state", 0.0)
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_force_loss(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose which card to lose.
+
+        Prefer:
+        - Cards from hand (if we have many)
+        - Low-value interrupts/effects
+        - Low forfeit value cards
+        Avoid:
+        - High-value characters
+        - Cards from force pile
+        - Cards when low on life
+        """
+        actions = []
+        bs = context.board_state
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=0.0,
+                display_text=f"Lose card {card_id}"
+            )
+
+            if bs:
+                card = bs.cards_in_play.get(card_id)
+                if card:
+                    action.display_text = f"Lose {card.card_title or card_id}"
+
+                    # Check zone
+                    if card.zone == "HAND":
+                        if bs.hand_size >= 15:
+                            action.add_reasoning("Many cards in hand", GOOD_DELTA)
+                        elif bs.hand_size <= 5:
+                            action.add_reasoning("Few cards in hand", BAD_DELTA)
+
+                        # Prefer losing interrupts/effects/weapons from hand
+                        if card.card_type in ["Interrupt", "Effect", "Weapon"]:
+                            action.add_reasoning("Low-value card type in hand", GOOD_DELTA)
+
+                    elif card.zone == "FORCE_PILE":
+                        action.add_reasoning("Avoid losing from force pile", BAD_DELTA)
+
+                    else:
+                        # Card in play - use forfeit value
+                        forfeit = card.forfeit if hasattr(card, 'forfeit') else 0
+                        forfeit = forfeit if isinstance(forfeit, int) else 0
+                        # Prefer forfeiting low-value cards
+                        forfeit_bonus = (20 - forfeit)
+                        action.add_reasoning(f"Forfeit value {forfeit}", forfeit_bonus)
+
+                # Check overall life
+                total_reserve = bs.total_reserve_force()
+                if total_reserve < 10:
+                    action.add_reasoning("Low on life - be careful", BAD_DELTA)
+                elif total_reserve >= 30:
+                    action.add_reasoning("Plenty of life left", GOOD_DELTA)
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_move_destination(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose where to move a card.
+
+        Prefer:
+        - Locations where we have power advantage
+        - Locations with enemy icons (to force drain)
+        Avoid:
+        - Locations where enemy is much stronger
+        """
+        actions = []
+        bs = context.board_state
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.MOVE,
+                score=0.0,
+                display_text=f"Move to {card_id}"
+            )
+
+            if bs:
+                # Find destination location
+                card = bs.cards_in_play.get(card_id)
+                if card and card.location_index >= 0:
+                    loc_idx = card.location_index
+                    if loc_idx < len(bs.locations):
+                        loc = bs.locations[loc_idx]
+                        my_power = bs.my_power_at_location(loc_idx)
+                        their_power = bs.their_power_at_location(loc_idx)
+
+                        action.display_text = f"Move to {loc.site_name or loc.system_name}"
+
+                        if my_power >= their_power and their_power > 0:
+                            action.add_reasoning("We have power advantage", GOOD_DELTA)
+                        elif their_power - my_power <= 2 and their_power > 0:
+                            action.add_reasoning("Can help out here", GOOD_DELTA)
+                        elif their_power == 0:
+                            action.add_reasoning("Unoccupied - can force drain", GOOD_DELTA)
+                        else:
+                            action.add_reasoning(f"Enemy too strong ({their_power} power)", BAD_DELTA * their_power)
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_forfeit(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose which card to forfeit in battle.
+
+        Prefer lowest forfeit value cards.
+        """
+        actions = []
+        bs = context.board_state
+        is_optional = "if desired" in context.decision_text.lower()
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=0.0,
+                display_text=f"Forfeit {card_id}"
+            )
+
+            if is_optional:
+                # Optional forfeit - avoid it
+                action.score = VERY_BAD_DELTA
+                action.add_reasoning("Optional forfeit - avoid", VERY_BAD_DELTA)
+            elif bs:
+                card = bs.cards_in_play.get(card_id)
+                if card:
+                    forfeit = card.forfeit if hasattr(card, 'forfeit') else 0
+                    forfeit = forfeit if isinstance(forfeit, int) else 0
+                    # Higher bonus for lower forfeit value
+                    forfeit_bonus = GOOD_DELTA * (20 - forfeit)
+                    action.add_reasoning(f"Forfeit value {forfeit}", forfeit_bonus)
+                    action.display_text = f"Forfeit {card.card_title or card_id}"
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_optional_action(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Optional action with "if desired" - usually want to pass.
+        """
+        actions = []
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=VERY_BAD_DELTA,
+                display_text=f"Optional action (card {card_id})"
+            )
+            action.add_reasoning("Optional action - prefer to pass", VERY_BAD_DELTA)
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_pilot_selection(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose a pilot to deploy aboard a ship.
+        """
+        actions = []
+        bs = context.board_state
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.DEPLOY,
+                score=VERY_GOOD_DELTA,
+                display_text=f"Deploy pilot {card_id}"
+            )
+
+            if bs:
+                card = bs.cards_in_play.get(card_id)
+                if card:
+                    action.display_text = f"Deploy pilot {card.card_title or card_id}"
+                    action.add_reasoning("Pilot deployment is good", VERY_GOOD_DELTA)
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_cancel_selection(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose which card to cancel.
+
+        Cancel opponent's cards, not ours.
+        """
+        actions = []
+        bs = context.board_state
+        my_name = bs.my_player_name if bs else "rando_cal"
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.CANCEL,
+                score=0.0,
+                display_text=f"Cancel card {card_id}"
+            )
+
+            if bs:
+                card = bs.cards_in_play.get(card_id)
+                if card:
+                    if card.owner == my_name:
+                        action.add_reasoning("Don't cancel own cards", BAD_DELTA)
+                    else:
+                        action.add_reasoning("Cancel opponent's cards", GOOD_DELTA)
+                    action.display_text = f"Cancel {card.card_title or card_id}"
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_hand_selection(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose a card from hand - usually for game effects.
+        """
+        actions = []
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=GOOD_DELTA,
+                display_text=f"Select card {card_id} from hand"
+            )
+            action.add_reasoning("Selecting card from hand", GOOD_DELTA)
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_location_deploy(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose a location to deploy - for special deployment effects.
+        """
+        actions = []
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=GOOD_DELTA,
+                display_text=f"Deploy to location {card_id}"
+            )
+            action.add_reasoning("Location deployment", GOOD_DELTA)
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_unknown(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Unknown card selection - create neutral-scored actions.
+        """
+        actions = []
+
+        logger.warning(f"Unknown CARD_SELECTION type: '{context.decision_text}'")
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.UNKNOWN,
+                score=0.0,
+                display_text=f"Select card {card_id}"
+            )
+            action.add_reasoning("Unknown selection type - neutral", 0.0)
+            actions.append(action)
+
+        return actions
