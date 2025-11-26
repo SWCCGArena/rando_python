@@ -485,7 +485,8 @@ class AstrogatorBrain(StaticBrain):
     def get_damage_message(self, damage: int, is_new_global_record: bool = False,
                           is_new_personal_record: bool = False,
                           previous_holder: str = None,
-                          previous_record: int = None) -> Optional[str]:
+                          previous_record: int = None,
+                          current_player: str = None) -> Optional[str]:
         """
         Generate battle damage commentary.
 
@@ -495,13 +496,14 @@ class AstrogatorBrain(StaticBrain):
             is_new_personal_record: Whether this sets a new personal record
             previous_holder: Previous record holder name
             previous_record: Previous record value
+            current_player: Current player setting the record
         """
         if damage <= 0:
             return None
 
         # New global record
         if is_new_global_record:
-            if previous_holder:
+            if previous_holder and previous_holder != current_player:
                 return f"Nice damage score! You just set the high score, beating: {previous_holder}. Your score was: {damage}"
             else:
                 return f"Wow! You set a new damage high score: {damage}"

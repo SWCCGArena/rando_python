@@ -414,7 +414,7 @@ class CardSelectionEvaluator(ActionEvaluator):
                 logger.debug(f"Battle at location {battle_location_idx}: my={my_power}, their={their_power}, diff={power_diff}")
 
         # Get reserve deck size
-        reserve_size = bs.reserve_deck_size if bs else 30
+        reserve_size = bs.reserve_deck if bs else 30
 
         # Separate cards into Force (from reserve) vs cards in battle
         force_options = []  # Cards representing Force loss (usually -1_2 blueprint)

@@ -143,6 +143,12 @@ class DeployEvaluator(ActionEvaluator):
                         action.card_name = card_metadata.title
                         action.deploy_cost = card_metadata.deploy_value
 
+                        # LOCATIONS ALWAYS DEPLOY FIRST
+                        # This is critical because deploying a location creates new options
+                        # for characters/ships that we can't evaluate until location exists
+                        if card_metadata.is_location:
+                            action.add_reasoning("LOCATION - always deploy first!", +2000.0)
+
                         # Score based on card value (with strategic bonuses)
                         game_strategy = self._get_game_strategy(context)
                         score = self._score_card_deployment(card_metadata, bs, game_strategy)
@@ -518,111 +524,209 @@ class DeployEvaluator(ActionEvaluator):
         """
         Score a location for deploying a card.
 
+        Key principle: Don't throw characters into lost battles!
+        - FREE BATTLEGROUND (no enemy) = safe drain, high priority
+        - CONTESTABLE (can win/tie) = worth fighting for
+        - LOSING BADLY (can't catch up) = avoid, deploy elsewhere
+
         Factors:
         - Force drain potential (opponent force icons = we can drain there)
         - GameStrategy location priority (if available)
-        - Do we already have cards there? (concentration vs spreading)
-        - Do they have cards there? (battle opportunity)
-        - Power differential at location
+        - Power differential and whether we can realistically contest
+        - Free battleground bonus (no enemy presence)
         - Threat level (avoid dangerous locations)
         """
         score = 0.0
-
-        # IMPORTANT: Force drain potential - locations where opponent has force icons
-        # In SWCCG, you can only drain at locations where YOU have presence AND
-        # there are OPPONENT force icons. Prioritize these locations!
-        their_icons = location.their_icons or ""
-        if their_icons and their_icons != "0":
-            # Parse icon count (could be "2" or "*2" format)
-            try:
-                icon_count = int(their_icons.replace("*", "").strip() or "0")
-            except ValueError:
-                icon_count = 1 if their_icons else 0
-
-            if icon_count > 0:
-                # Big bonus for locations where we can drain
-                drain_bonus = 15.0 + (icon_count * 5.0)  # Base 15 + 5 per icon
-                score += drain_bonus
-                logger.debug(f"Location {location.site_name}: +{drain_bonus:.1f} (can drain {icon_count} icons)")
-
-        # Penalty for locations where we CAN'T drain (no opponent icons)
-        # Only apply if there's no drain potential
-        if not their_icons or their_icons == "0":
-            # Check if we already have presence but can't drain
-            if len(location.my_cards) > 0:
-                score -= 5.0
-                logger.debug(f"Location {location.site_name}: -5 (have presence but can't drain)")
-
-        # Use GameStrategy location priority if available
-        if game_strategy:
-            priority = game_strategy.get_location_priority(location.location_index)
-            if priority:
-                # Use pre-calculated priority score (scaled down to avoid dominating)
-                score += priority.score * 0.5
-                logger.debug(f"Location {location.site_name}: priority score {priority.score:.1f}")
-
-                # Reduce score for dangerous locations
-                if priority.threat_level == ThreatLevel.DANGEROUS:
-                    score -= 15.0
-                    logger.debug(f"Location {location.site_name}: -15 (dangerous)")
-                elif priority.threat_level == ThreatLevel.RETREAT:
-                    score -= 30.0
-                    logger.debug(f"Location {location.site_name}: -30 (retreat)")
+        loc_name = location.site_name or location.system_name or str(location.location_index)
 
         # Calculate power differential
         my_power = board_state.my_power_at_location(location.location_index)
         their_power = board_state.their_power_at_location(location.location_index)
         power_diff = my_power - their_power
 
-        # OVERKILL PENALTY: If we already have overwhelming control (+4 or more),
-        # strongly penalize deploying more here - spread to other locations instead
-        if power_diff >= 8:
-            overkill_penalty = -40.0 - (power_diff - 8) * 2  # -40 base, worse as gap grows
-            score += overkill_penalty
-            logger.debug(f"Location {location.site_name}: {overkill_penalty:.1f} (overkill, +{power_diff} power)")
-        elif power_diff >= 4:
-            overkill_penalty = -20.0 - (power_diff - 4) * 2  # -20 base
-            score += overkill_penalty
-            logger.debug(f"Location {location.site_name}: {overkill_penalty:.1f} (already controlling +{power_diff})")
-
-        # CONTESTED BONUS: If opponent has presence/power here, prioritize based on power diff
-        # Check BOTH tracked cards AND power from game state (power is more reliable)
+        # Check if opponent has presence
         opponent_has_presence = len(location.their_cards) > 0 or their_power > 0
 
-        if opponent_has_presence:
-            if power_diff < -5:
-                # We're badly behind (-6 or worse) - CRITICAL to reinforce!
-                contest_bonus = 30.0 + abs(power_diff) * 3.0
-                score += contest_bonus
-                logger.debug(f"Location {location.site_name}: +{contest_bonus:.1f} (CRITICAL - badly losing by {abs(power_diff)})")
-            elif power_diff < 0:
-                # We're behind - prioritize this location
-                contest_bonus = 15.0 + abs(power_diff) * 2.0
-                score += contest_bonus
-                logger.debug(f"Location {location.site_name}: +{contest_bonus:.1f} (contest - losing by {abs(power_diff)})")
-            elif power_diff < 4:
-                # Close contest - still valuable
-                score += 10.0
-                logger.debug(f"Location {location.site_name}: +10.0 (close contest)")
+        # IMPORTANT: Force drain potential - locations where opponent has force icons
+        # In SWCCG, you can only drain at locations where YOU have presence AND
+        # there are OPPONENT force icons. Prioritize these locations!
+        their_icons = location.their_icons or ""
+        can_drain = False
+        icon_count = 0
+        if their_icons and their_icons != "0":
+            # Parse icon count (could be "2" or "*2" format)
+            try:
+                icon_count = int(their_icons.replace("*", "").strip() or "0")
+            except ValueError:
+                icon_count = 1 if their_icons else 0
+            can_drain = icon_count > 0
+
+        # =====================================================================
+        # FREE BATTLEGROUND: No enemy presence - HIGHEST PRIORITY!
+        # We can drain without risk of battle. This is the safest, best option.
+        # =====================================================================
+        if not opponent_has_presence:
+            if can_drain:
+                # FREE battleground with drain potential - EXCELLENT!
+                free_bonus = 80.0 + (icon_count * 10.0)
+                score += free_bonus
+                logger.debug(f"Location {loc_name}: +{free_bonus:.1f} (FREE battleground with {icon_count} drain)")
+            elif my_power == 0:
+                # Empty location, no drain - still worth establishing presence
+                score += 15.0
+                logger.debug(f"Location {loc_name}: +15.0 (establish presence)")
             else:
-                # We're winning - less need to deploy more here
-                score += 3.0
-                logger.debug(f"Location {location.site_name}: +3.0 (winning by {power_diff})")
-        elif my_power > 0:
-            # We have presence, opponent doesn't - minor bonus only if we can drain
-            if their_icons and their_icons != "0":
-                score += 3.0  # Small bonus - we control and can drain
-            # No bonus for locations we control but can't drain
+                # We already have presence, no drain potential, no enemy
+                score += 5.0
+                logger.debug(f"Location {loc_name}: +5.0 (we control, no drain)")
+
+            # Use GameStrategy priority for free locations
+            if game_strategy:
+                priority = game_strategy.get_location_priority(location.location_index)
+                if priority:
+                    score += priority.score * 0.3
+            return score
+
+        # =====================================================================
+        # CONTESTED LOCATION: Enemy has presence
+        # Only deploy here if we can reasonably win or tie the battle!
+        # =====================================================================
+
+        # Force drain bonus (if we have presence and can drain)
+        if can_drain and my_power > 0:
+            drain_bonus = 10.0 + (icon_count * 3.0)
+            score += drain_bonus
+            logger.debug(f"Location {loc_name}: +{drain_bonus:.1f} (can drain {icon_count})")
+
+        # Use GameStrategy location priority if available
+        if game_strategy:
+            priority = game_strategy.get_location_priority(location.location_index)
+            if priority:
+                score += priority.score * 0.3
+                logger.debug(f"Location {loc_name}: priority {priority.score:.1f}")
+
+                # Extra penalty for dangerous/retreat locations
+                if priority.threat_level == ThreatLevel.DANGEROUS:
+                    score -= 20.0
+                    logger.debug(f"Location {loc_name}: -20 (dangerous)")
+                elif priority.threat_level == ThreatLevel.RETREAT:
+                    score -= 40.0
+                    logger.debug(f"Location {loc_name}: -40 (retreat)")
+
+        # =====================================================================
+        # POWER DIFFERENTIAL SCORING
+        # Key insight: Don't reinforce lost causes! If we can't win, deploy elsewhere.
+        # =====================================================================
+
+        if power_diff >= 8:
+            # OVERKILL: We have overwhelming control, deploy elsewhere
+            overkill_penalty = -50.0 - (power_diff - 8) * 3
+            score += overkill_penalty
+            logger.debug(f"Location {loc_name}: {overkill_penalty:.1f} (overkill +{power_diff})")
+
+        elif power_diff >= 4:
+            # Comfortable lead - less need to reinforce
+            score -= 25.0
+            logger.debug(f"Location {loc_name}: -25.0 (comfortable lead +{power_diff})")
+
+        elif power_diff >= 0:
+            # WINNING or TIE - good to maintain/extend lead
+            score += 20.0 + power_diff * 2
+            logger.debug(f"Location {loc_name}: +{20 + power_diff * 2:.1f} (winning/tie by {power_diff})")
+
+        elif power_diff >= -4:
+            # CLOSE CONTEST (-1 to -4): We might catch up with deployment
+            # This is worth fighting for!
+            score += 25.0 + (4 + power_diff) * 3  # +25 at -4, +37 at -1
+            logger.debug(f"Location {loc_name}: +{25 + (4 + power_diff) * 3:.1f} (close contest, losing by {abs(power_diff)})")
+
         else:
-            # EMPTY LOCATION: Deploying to establish presence
-            # Slight bonus for expanding - prefer locations with drain potential
-            if their_icons and their_icons != "0":
+            # LOSING BADLY (-5 or worse): Check if we can actually catch up this turn!
+            # Calculate: we'd need to deploy (their_power - my_power + 1) power to win
+            power_needed_to_win = their_power - my_power + 1
+
+            # Calculate total deployable power from hand this turn
+            deployable_power = self._calculate_deployable_power(board_state, location)
+            logger.debug(f"Location {loc_name}: need {power_needed_to_win} power to win, have {deployable_power} deployable")
+
+            if deployable_power >= power_needed_to_win:
+                # We CAN catch up this turn! This is actually a GOOD play.
+                catch_up_bonus = 30.0 + (deployable_power - power_needed_to_win) * 3
+                score += catch_up_bonus
+                logger.debug(f"Location {loc_name}: +{catch_up_bonus:.1f} (CAN WIN - {deployable_power} power deployable vs {power_needed_to_win} needed)")
+            elif deployable_power >= power_needed_to_win - 2:
+                # Close - might be worth trying if we draw well or get destiny
                 score += 10.0
-                logger.debug(f"Location {location.site_name}: +10.0 (establish presence with drain)")
+                logger.debug(f"Location {loc_name}: +10.0 (close to catching up)")
+            elif power_needed_to_win <= 6:
+                # Might be able to catch up with a strong character
+                catch_up_bonus = 15.0 - (power_needed_to_win * 2)  # +3 at need 6, +13 at need 1
+                score += catch_up_bonus
+                logger.debug(f"Location {loc_name}: +{catch_up_bonus:.1f} (might catch up, need {power_needed_to_win} power)")
             else:
-                score += 2.0  # Minor bonus for presence without drain potential
+                # Need too much power - this is a lost cause
+                lost_cause_penalty = -40.0 - (power_needed_to_win - 6) * 5
+                score += lost_cause_penalty
+                logger.debug(f"Location {loc_name}: {lost_cause_penalty:.1f} (LOST CAUSE - need {power_needed_to_win} power, only {deployable_power} available)")
 
         return score
+
+    def _calculate_deployable_power(self, board_state, location) -> int:
+        """
+        Calculate total power we could deploy to this location this turn.
+
+        Considers:
+        - Cards in hand that can deploy to this location type
+        - Available Force to pay deploy costs
+        - Whether cards are characters/vehicles (ground) or starships (space)
+
+        Returns estimated total deployable power.
+        """
+        if not board_state or not board_state.cards_in_hand:
+            return 0
+
+        available_force = board_state.force_pile
+        total_power = 0
+
+        # Sort hand by power-to-cost ratio (best value first)
+        deployable_cards = []
+        for card in board_state.cards_in_hand:
+            metadata = get_card(card.blueprint_id)
+            if not metadata:
+                continue
+
+            # Check if card can deploy to this location type
+            can_deploy_here = False
+            if location.is_space and not location.is_ground:
+                # Pure space - only starships
+                can_deploy_here = metadata.is_starship
+            elif location.is_ground:
+                # Ground or docking bay - characters, vehicles, (starships at 0 power)
+                can_deploy_here = metadata.is_character or metadata.is_vehicle
+                # Don't count starships at docking bays - they have 0 power there
+            else:
+                # Default - assume characters/vehicles can deploy
+                can_deploy_here = metadata.is_character or metadata.is_vehicle
+
+            if can_deploy_here and metadata.deploy_value > 0:
+                deployable_cards.append({
+                    'power': metadata.power_value or 0,
+                    'cost': metadata.deploy_value,
+                    'name': metadata.title
+                })
+
+        # Sort by power (highest first) to maximize power deployed
+        deployable_cards.sort(key=lambda x: x['power'], reverse=True)
+
+        # "Deploy" cards until we run out of Force
+        remaining_force = available_force
+        for card in deployable_cards:
+            if card['cost'] <= remaining_force:
+                total_power += card['power']
+                remaining_force -= card['cost']
+                logger.debug(f"  Could deploy {card['name']} (power {card['power']}, cost {card['cost']})")
+
+        return total_power
 
     def _extract_blueprint_from_action(self, action_text: str) -> str:
         """

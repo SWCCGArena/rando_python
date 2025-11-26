@@ -245,6 +245,18 @@ select {
     margin-bottom: 10px;
 }
 
+select.config-select {
+    width: auto;
+    min-width: 200px;
+    margin-bottom: 0;
+    margin-left: 10px;
+}
+
+select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* Config Panel */
 .config-panel {
     grid-column: 1;

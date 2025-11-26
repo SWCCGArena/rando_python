@@ -281,7 +281,8 @@ class ChatManager:
                 is_new_global_record=is_new_global,
                 is_new_personal_record=is_new_personal,
                 previous_holder=previous_holder,
-                previous_record=previous_record
+                previous_record=previous_record,
+                current_player=self.opponent_name
             )
             if message:
                 self._send_chat(message, message_type='damage')

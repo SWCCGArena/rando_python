@@ -121,14 +121,37 @@ function updateStatus() {
 function updateConfig() {
     if (!botState.config) return;
 
-    // Update config display values
-    const gempServer = document.getElementById('gemp-server');
+    // Update server selector
+    const serverSelect = document.getElementById('gemp-server-select');
+    const serverWarning = document.getElementById('server-change-warning');
     const botMode = document.getElementById('bot-mode');
     const tableNameDisplay = document.getElementById('table-name-display');
 
-    if (gempServer) gempServer.textContent = botState.config.gemp_server || 'Not set';
+    if (serverSelect) {
+        // Update selected value based on current server
+        const currentServer = botState.config.gemp_server || '';
+        if (currentServer.includes('localhost')) {
+            serverSelect.value = 'http://localhost:8082/gemp-swccg-server/';
+        } else if (currentServer.includes('starwarsccg.org')) {
+            serverSelect.value = 'https://gemp.starwarsccg.org/gemp-swccg-server/';
+        }
+
+        // Enable/disable based on bot state - only allow changes when stopped
+        const isStopped = botState.state === 'stopped' || botState.state === 'error';
+        serverSelect.disabled = !isStopped;
+        if (serverWarning) {
+            serverWarning.style.display = isStopped ? 'none' : 'inline';
+        }
+    }
+
     if (botMode) botMode.textContent = botState.config.bot_mode || 'Not set';
     if (tableNameDisplay) tableNameDisplay.textContent = botState.config.table_name || 'Not set';
+
+    // Update auto-start checkbox
+    const autoStartCheckbox = document.getElementById('auto-start-checkbox');
+    if (autoStartCheckbox && botState.config.auto_start !== undefined) {
+        autoStartCheckbox.checked = botState.config.auto_start;
+    }
 
     // Update slider values - Hand Management
     const maxHandSize = document.getElementById('max-hand-size');
@@ -519,6 +542,26 @@ function sendConfigUpdate(key, value) {
     if (display) {
         display.textContent = value;
     }
+}
+
+function changeServer(serverUrl) {
+    // Only allow changing when bot is stopped
+    if (botState.state !== 'stopped' && botState.state !== 'error') {
+        addLog('Cannot change server while bot is running. Stop the bot first.', 'warning');
+        // Reset selector to current value
+        updateConfig();
+        return;
+    }
+
+    console.log(`Changing GEMP server to: ${serverUrl}`);
+    socket.emit('change_server', { server_url: serverUrl });
+    addLog(`Changing server to: ${serverUrl}`, 'info');
+}
+
+function toggleAutoStart(enabled) {
+    console.log(`Toggling auto-start: ${enabled}`);
+    socket.emit('toggle_auto_start', { enabled: enabled });
+    addLog(`Auto-start ${enabled ? 'enabled' : 'disabled'}`, 'info');
 }
 
 function createTable() {

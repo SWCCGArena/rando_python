@@ -25,6 +25,7 @@ from brain.achievements import AchievementTracker
 from brain.chat_manager import ChatManager
 from brain.command_handler import CommandHandler
 from persistence import init_db, StatsRepository
+import settings
 
 # Setup logging
 os.makedirs(config.LOG_DIR, exist_ok=True)
@@ -43,6 +44,12 @@ db_path = os.path.join(config.LOG_DIR, 'rando_stats.db')
 db_url = f'sqlite:///{db_path}'
 init_db(db_url)
 logger.info(f"📊 Database initialized: {db_path}")
+
+# Load user settings and apply to config
+user_settings = settings.load_settings()
+if user_settings.get('gemp_server_url'):
+    config.GEMP_SERVER_URL = user_settings['gemp_server_url']
+    logger.info(f"📡 Loaded GEMP server from settings: {config.GEMP_SERVER_URL}")
 
 # Initialize Flask with custom template and static folders
 app = Flask(__name__,
@@ -158,6 +165,7 @@ class BotState:
                 'gemp_server': self.config.GEMP_SERVER_URL,
                 'bot_mode': self.config.BOT_MODE,
                 'table_name': self.config.TABLE_NAME,
+                'auto_start': settings.get_setting('auto_start', False),
                 # Hand management
                 'max_hand_size': self.config.MAX_HAND_SIZE,
                 'hand_soft_cap': self.config.HAND_SOFT_CAP,
@@ -432,6 +440,7 @@ def bot_worker():
 
     while bot_state.running:
         try:
+            logger.debug(f"🔄 Worker loop iteration, state={bot_state.state.value}")
             if bot_state.state == GameState.CONNECTING:
                 # Attempt login
                 logger.info(f"Connecting to GEMP at {config.GEMP_SERVER_URL}")
@@ -572,7 +581,7 @@ def bot_worker():
 
                     socketio.emit('state_update', bot_state.to_dict(), namespace='/')
 
-                socketio.sleep(config.POLL_INTERVAL)
+                socketio.sleep(config.HALL_POLL_INTERVAL)
 
             elif bot_state.state == GameState.WAITING_FOR_OPPONENT:
                 # Poll hall to check if opponent joined
@@ -719,7 +728,7 @@ def bot_worker():
                     bot_state.state = GameState.IN_LOBBY
                     socketio.emit('state_update', bot_state.to_dict(), namespace='/')
 
-                socketio.sleep(config.POLL_INTERVAL)
+                socketio.sleep(config.HALL_POLL_INTERVAL)
 
             elif bot_state.state == GameState.PLAYING:
                 # Poll for game updates
@@ -936,7 +945,7 @@ def bot_worker():
                                 opponent_name=bot_state.opponent_name,
                                 deck_name=deck_name,
                                 my_side=bot_state.board_state.my_side if bot_state.board_state else "dark",
-                                won=won,
+                                won=bot_won,
                                 route_score=route_score,
                                 damage=damage,
                                 turns=turns
@@ -944,14 +953,14 @@ def bot_worker():
 
                             # Also update opponent's player stats
                             # Note: In record_game_result, 'won' is from opponent's perspective
-                            # If we won, opponent lost
+                            # If bot won, opponent lost
                             bot_state.stats_repo.record_game_result(
                                 player_name=bot_state.opponent_name,
-                                won=not won,  # Opponent won if we lost
+                                won=not bot_won,  # Opponent won if bot lost
                                 route_score=route_score
                             )
 
-                            logger.info(f"📊 Stats recorded: {'Won' if won else 'Lost'} vs {bot_state.opponent_name}")
+                            logger.info(f"📊 Stats recorded: {'Won' if bot_won else 'Lost'} vs {bot_state.opponent_name}")
                         except Exception as e:
                             logger.error(f"Error recording game stats: {e}")
 
@@ -973,7 +982,7 @@ def bot_worker():
                     socketio.emit('state_update', bot_state.to_dict(), namespace='/')
                     # Note: Table will be auto-created by IN_LOBBY state handler
 
-                socketio.sleep(config.POLL_INTERVAL)
+                socketio.sleep(config.GAME_POLL_INTERVAL)
 
             else:
                 # Unknown state or not ready yet
@@ -1110,22 +1119,30 @@ def handle_request_state():
     emit('state_update', bot_state.to_dict())
 
 
+def _start_bot_internal():
+    """Internal function to start the bot - used by both manual start and auto-start"""
+    if bot_state.state not in [GameState.STOPPED, GameState.ERROR]:
+        logger.warning(f'Cannot start - bot is in state: {bot_state.state.value}')
+        return False
+
+    logger.info('🚀 Starting bot...')
+
+    # Create GEMP client
+    bot_state.client = GEMPClient(config.GEMP_SERVER_URL)
+    bot_state.state = GameState.CONNECTING
+    bot_state.last_error = None
+    bot_state.running = True
+    bot_state.current_tables = []
+
+    # Start worker greenlet (NOT a thread!)
+    socketio.start_background_task(bot_worker)
+    return True
+
+
 @socketio.on('start_bot')
 def handle_start_bot():
     """Start the bot - create GEMP client and start worker greenlet"""
-    if bot_state.state in [GameState.STOPPED, GameState.ERROR]:
-        logger.info('🚀 Start bot requested')
-
-        # Create GEMP client
-        bot_state.client = GEMPClient(config.GEMP_SERVER_URL)
-        bot_state.state = GameState.CONNECTING
-        bot_state.last_error = None
-        bot_state.running = True
-        bot_state.current_tables = []
-
-        # Start worker greenlet (NOT a thread!)
-        socketio.start_background_task(bot_worker)
-
+    if _start_bot_internal():
         emit('state_update', bot_state.to_dict())
         emit('log_message', {'message': '🚀 Bot starting...', 'level': 'info'})
     else:
@@ -1139,10 +1156,19 @@ def handle_stop_bot():
     bot_state.running = False
     bot_state.state = GameState.STOPPED
 
-    # Clear table state
+    # Clear table and game state (important: clear game_id so we rejoin on restart!)
     bot_state.current_table_id = None
     bot_state.opponent_name = None
     bot_state.current_tables = []
+    bot_state.game_id = None
+    bot_state.channel_number = 0
+    bot_state.board_state = None
+    bot_state.event_processor = None
+
+    # Reset table manager to clear failure counter
+    if bot_state.table_manager:
+        bot_state.table_manager.reset()
+        logger.info("🔄 TableManager reset")
 
     if bot_state.client:
         bot_state.client.logout()
@@ -1185,6 +1211,51 @@ def handle_update_config(data):
 
     emit('state_update', bot_state.to_dict())
     emit('log_message', {'message': f'Updated {key} to {value}'})
+
+
+@socketio.on('change_server')
+def handle_change_server(data):
+    """Change GEMP server URL - only allowed when bot is stopped"""
+    server_url = data.get('server_url')
+
+    if not server_url:
+        emit('log_message', {'message': 'No server URL provided', 'level': 'error'})
+        return
+
+    # Only allow when bot is stopped
+    if bot_state.state not in [GameState.STOPPED, GameState.ERROR]:
+        emit('log_message', {'message': 'Cannot change server while bot is running. Stop the bot first.', 'level': 'error'})
+        emit('state_update', bot_state.to_dict())
+        return
+
+    logger.info(f'Changing GEMP server to: {server_url}')
+
+    # Update config
+    config.GEMP_SERVER_URL = server_url
+
+    # Save to persistent settings
+    settings.set_setting('gemp_server_url', server_url)
+
+    # Recreate client with new URL
+    from engine.client import GEMPClient
+    bot_state.client = GEMPClient(server_url)
+
+    emit('state_update', bot_state.to_dict())
+    emit('log_message', {'message': f'✅ Server changed to: {server_url}', 'level': 'success'})
+
+
+@socketio.on('toggle_auto_start')
+def handle_toggle_auto_start(data):
+    """Toggle auto-start setting"""
+    enabled = data.get('enabled', False)
+
+    logger.info(f'Auto-start {"enabled" if enabled else "disabled"}')
+
+    # Save to persistent settings
+    settings.set_setting('auto_start', enabled)
+
+    emit('state_update', bot_state.to_dict())
+    emit('log_message', {'message': f'✅ Auto-start {"enabled" if enabled else "disabled"}', 'level': 'success'})
 
 
 def _sync_config_to_strategy():
@@ -1283,6 +1354,21 @@ def handle_leave_table():
         emit('state_update', bot_state.to_dict())
 
 
+def _auto_start_check():
+    """Check if auto-start is enabled and start the bot after a delay"""
+    import eventlet
+    eventlet.sleep(3)  # Wait for server to be fully ready
+
+    if user_settings.get('auto_start', False):
+        logger.info('🚀 Auto-start enabled - starting bot automatically...')
+        if _start_bot_internal():
+            logger.info('✅ Bot auto-started successfully')
+        else:
+            logger.error('❌ Bot auto-start failed')
+    else:
+        logger.info('ℹ️ Auto-start disabled - waiting for manual start')
+
+
 if __name__ == '__main__':
     logger.info(f'=' * 60)
     logger.info(f'🤖 Rando Cal Bot Starting')
@@ -1291,7 +1377,11 @@ if __name__ == '__main__':
     logger.info(f'GEMP Server: {config.GEMP_SERVER_URL}')
     logger.info(f'GEMP Username: {config.GEMP_USERNAME}')
     logger.info(f'Bot Mode: {config.BOT_MODE}')
+    logger.info(f'Auto-start: {user_settings.get("auto_start", False)}')
     logger.info(f'=' * 60)
+
+    # Schedule auto-start check (runs after server starts)
+    socketio.start_background_task(_auto_start_check)
 
     # Run Flask with SocketIO
     socketio.run(

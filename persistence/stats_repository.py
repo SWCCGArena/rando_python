@@ -333,13 +333,14 @@ class StatsRepository:
                 is_new_record = value < record.value and value > 0
 
             previous_holder = record.player_name
+            previous_value = record.value
 
             if is_new_record:
                 record.value = value
                 record.player_name = player_name
                 record.updated_at = datetime.utcnow()
                 session.commit()
-                logger.info(f"New global record for {stat_type}: {value} by {player_name} (was {record.value} by {previous_holder})")
+                logger.info(f"New global record for {stat_type}: {value} by {player_name} (was {previous_value} by {previous_holder})")
                 return True, previous_holder
 
             return False, None

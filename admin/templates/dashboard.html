@@ -57,12 +57,24 @@
 
         <div class="config-item">
             <label class="config-label">GEMP Server:</label>
-            <span id="gemp-server" class="config-value">{{ state.config.gemp_server }}</span>
+            <select id="gemp-server-select" class="config-select" onchange="changeServer(this.value)">
+                <option value="http://localhost:8082/gemp-swccg-server/" {% if 'localhost' in state.config.gemp_server %}selected{% endif %}>Local (localhost:8082)</option>
+                <option value="https://gemp.starwarsccg.org/gemp-swccg-server/" {% if 'starwarsccg.org' in state.config.gemp_server %}selected{% endif %}>Production (gemp.starwarsccg.org)</option>
+            </select>
+            <span id="server-change-warning" class="warning-text" style="display: none; color: #f39c12; font-size: 0.8em;">⚠️ Stop bot first</span>
         </div>
 
         <div class="config-item">
             <label class="config-label">Bot Mode:</label>
             <span id="bot-mode" class="config-value">{{ state.config.bot_mode }}</span>
+        </div>
+
+        <div class="config-item">
+            <label class="config-label">Auto-Start:</label>
+            <input type="checkbox" id="auto-start-checkbox"
+                   {% if state.config.auto_start %}checked{% endif %}
+                   onchange="toggleAutoStart(this.checked)">
+            <span class="config-hint" style="color: #888; font-size: 0.85em; margin-left: 8px;">Start bot automatically on server startup</span>
         </div>
 
         <div class="config-item">
