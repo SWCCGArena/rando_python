@@ -63,6 +63,7 @@ htmlcov/
 
 # Secrets
 secrets.py
+credentials.py
 secrets.txt
 credentials.json
 *.pem
