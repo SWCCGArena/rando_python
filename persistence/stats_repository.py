@@ -11,7 +11,7 @@ from typing import Optional, List, Dict, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
-from .models import GlobalStats, DeckStats, PlayerStats, Achievement, GameHistory, ChatMessage
+from .models import GlobalStats, DeckStats, PlayerStats, PlayerDeckStats, Achievement, GameHistory, ChatMessage
 from .database import session_scope, get_session
 
 logger = logging.getLogger(__name__)
@@ -231,6 +231,62 @@ class StatsRepository:
             session.expunge(deck)
 
             return deck, is_new_record
+
+    # =========================================================================
+    # Player-Deck Stats (per-player-per-deck scores)
+    # =========================================================================
+
+    def get_player_deck_stats(self, player_name: str, deck_name: str) -> Optional[PlayerDeckStats]:
+        """Get a player's stats for a specific deck"""
+        with session_scope() as session:
+            stats = session.query(PlayerDeckStats).filter_by(
+                player_name=player_name,
+                deck_name=deck_name
+            ).first()
+            if stats:
+                session.expunge(stats)
+            return stats
+
+    def update_player_deck_score(self, player_name: str, deck_name: str, score: int) -> Tuple[PlayerDeckStats, bool]:
+        """
+        Update a player's score on a specific deck.
+
+        Args:
+            player_name: Player's name
+            deck_name: Deck name
+            score: Route score achieved
+
+        Returns:
+            Tuple of (PlayerDeckStats, is_new_personal_record)
+        """
+        with session_scope() as session:
+            stats = session.query(PlayerDeckStats).filter_by(
+                player_name=player_name,
+                deck_name=deck_name
+            ).first()
+
+            if not stats:
+                stats = PlayerDeckStats(
+                    player_name=player_name,
+                    deck_name=deck_name,
+                    best_score=0,
+                    games_played=0
+                )
+                session.add(stats)
+
+            stats.games_played += 1
+            is_new_record = score > stats.best_score
+
+            if is_new_record:
+                old_score = stats.best_score
+                stats.best_score = score
+                logger.info(f"New personal deck record for {player_name} on '{deck_name}': {score} (was {old_score})")
+
+            session.commit()
+            session.refresh(stats)
+            session.expunge(stats)
+
+            return stats, is_new_record
 
     # =========================================================================
     # Global Records

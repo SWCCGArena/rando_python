@@ -327,8 +327,11 @@ class AstrogatorBrain(StaticBrain):
             f"to make any real money, the higher the better!"
         )
 
-        # Deck context
+        # Deck context (includes player's score on this deck if returning)
         deck_context = self._get_deck_context_message(deck_name, opponent_name)
+
+        # Player's cumulative astrogation score (if returning player)
+        player_score_context = self._get_player_score_context(opponent_name)
 
         # Global leaderboard context
         leader_context = self._get_leader_context()
@@ -336,54 +339,75 @@ class AstrogatorBrain(StaticBrain):
         # Help reminder
         help_text = "Type 'rando help' for commands."
 
-        return f"{greeting}{intro} {deck_context} {leader_context} {help_text} gl, hf {opponent_name}!"
+        return f"{greeting}{intro} {deck_context}{player_score_context} {leader_context} {help_text} gl, hf {opponent_name}!"
+
+    def _get_player_score_context(self, opponent_name: str) -> str:
+        """Get player's cumulative astrogation score context"""
+        if not self.stats_repo:
+            return ""
+
+        player_stats = self.stats_repo.get_player_stats(opponent_name)
+        if player_stats and player_stats.total_ast_score > 0:
+            return f" Your current astrogation score is: {player_stats.total_ast_score} (cumulative over all games played)."
+        return ""
 
     def _get_deck_context_message(self, deck_name: str, opponent_name: str) -> str:
-        """Get context message about this deck's history"""
+        """
+        Get context message about this deck's history.
+
+        Matches C# SendWelcomeMessage logic:
+        - Shows deck's global high score (any player)
+        - Shows player's previous score on THIS specific deck
+        - Different messages based on whether player holds record
+        """
         if not self.stats_repo:
             origin = self._get_deck_origin()
             return f"I just picked this deck up {origin}, help me find the secrets it holds."
 
         deck_stats = self.stats_repo.get_deck_stats(deck_name)
-        player_stats = self.stats_repo.get_player_stats(opponent_name)
+        player_deck_stats = self.stats_repo.get_player_deck_stats(opponent_name, deck_name)
 
-        if not deck_stats or deck_stats.best_score == 0:
-            # No history for this deck
+        # Check if deck has any history
+        has_deck_high_score = deck_stats and deck_stats.best_score > 0
+        has_player_deck_score = player_deck_stats and player_deck_stats.best_score > 0
+
+        if not has_deck_high_score:
+            # No history for this deck at all
             origin = self._get_deck_origin()
             return f"I just picked this deck up {origin}, help me find the secrets it holds."
 
         high_score = deck_stats.best_score
         high_player = deck_stats.best_player
+        player_score = player_deck_stats.best_score if has_player_deck_score else 0
 
-        # Check if this player holds the record
+        # Check if this player holds the deck record
         player_is_holder = high_player == opponent_name
 
         if player_is_holder:
+            # Player holds the record on this deck
             if high_score > 50:
                 return f"This deck is almost fully optimized, you've already found a route score of {high_score}. Not quite perfect yet, help me find the final shortcuts."
             elif high_score > 30:
                 return f"This deck's route score of {high_score} feels suboptimal, we must improve it."
             else:
                 return f"I appreciate your help with this, but the current route score of {high_score} is not... great. I'm certain you can beat it this time."
-        else:
-            # Someone else holds the record
-            player_best = player_stats.best_route_score if player_stats else 0
-            diff = high_score - player_best
-
-            if player_best > 0:
-                if diff > 30:
-                    return f"Hmm are you sure you can do this? Your score of {player_best} is over 30 points behind the route found by {high_player}. They scored {high_score}, but I guess you can try if you want."
-                elif diff < 10:
-                    return f"Your score of {player_best} is only {diff} points behind the leader. Let's focus and try to beat {high_player}'s score of {high_score}."
-                else:
-                    return f"Your score of {player_best} is {diff} points behind the leader. {high_player} has a score of {high_score}."
+        elif has_player_deck_score:
+            # Player has a score on this deck but doesn't hold the record
+            diff = high_score - player_score
+            if diff > 30:
+                return f"Hmm are you sure you can do this? Your score of {player_score} is over 30 points behind the route found by {high_player}. They scored {high_score}, but I guess you can try if you want."
+            elif diff < 10:
+                return f"Your score of {player_score} is only {diff} points behind the leader. Let's focus and try to beat {high_player}'s score of {high_score}."
             else:
-                if high_score > 50:
-                    return f"This deck is almost fully optimized, {high_player} found a route score of {high_score}. Not quite perfect yet, help me find the final shortcuts."
-                elif high_score > 30:
-                    return f"This deck's route score of {high_score}, held by {high_player} feels suboptimal, we must improve it."
-                else:
-                    return f"I appreciate {high_player}'s help with this, but the current route score of {high_score} is not... great. I'm certain even you can beat it."
+                return f"Your score of {player_score} is {diff} points behind the leader. {high_player} has a score of {high_score}."
+        else:
+            # Player has never played this deck, but others have
+            if high_score > 50:
+                return f"This deck is almost fully optimized, {high_player} found a route score of {high_score}. Not quite perfect yet, help me find the final shortcuts."
+            elif high_score > 30:
+                return f"This deck's route score of {high_score}, held by {high_player} feels suboptimal, we must improve it."
+            else:
+                return f"I appreciate {high_player}'s help with this, but the current route score of {high_score} is not... great. I'm certain even you can beat it."
 
     def _get_leader_context(self) -> str:
         """Get global leaderboard context"""

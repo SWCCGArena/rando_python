@@ -316,7 +316,7 @@ class ChatManager:
         is_new_top_astrogator = False
 
         if self.stats_repo and self.opponent_name and won:
-            # Update deck stats
+            # Update deck stats (global high score for this deck)
             if self.deck_name:
                 deck_stats, is_new_deck_record = self.stats_repo.update_deck_score(
                     self.deck_name, self.opponent_name, route_score
@@ -324,6 +324,11 @@ class ChatManager:
                 if not is_new_deck_record and deck_stats:
                     previous_holder = deck_stats.best_player
                     previous_score = deck_stats.best_score
+
+                # Update player's score on this specific deck
+                self.stats_repo.update_player_deck_score(
+                    self.opponent_name, self.deck_name, route_score
+                )
 
             # Update player stats
             player = self.stats_repo.record_game_result(

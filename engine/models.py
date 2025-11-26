@@ -33,7 +33,10 @@ class GameTable:
 
     def is_rando_table(self) -> bool:
         """Is this a table created by rando?"""
-        return "bot table:" in self.table_name.lower() or "rando" in self.table_name.lower()
+        name_lower = self.table_name.lower()
+        return ("bot table" in name_lower or
+                "astrogation chart" in name_lower or
+                "rando" in name_lower)
 
     def get_opponent(self, my_name: str) -> Optional[Player]:
         """Get the opponent player (not me)"""

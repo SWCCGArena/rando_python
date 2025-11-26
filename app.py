@@ -628,6 +628,11 @@ def bot_worker():
                                         )
                                 bot_state.event_processor.register_card_placed_callback(on_card_placed)
 
+                                # Register callback for battle damage (high score tracking)
+                                def on_battle_damage(damage: int):
+                                    bot_state.chat_manager.on_battle_damage(damage, bot_state.board_state)
+                                bot_state.event_processor.register_battle_damage_callback(on_battle_damage)
+
                             # Parse initial game state and events
                             try:
                                 import xml.etree.ElementTree as ET

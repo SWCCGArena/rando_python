@@ -25,6 +25,8 @@ class EventProcessor:
         self.board_state = board_state
         # Callbacks for card placement events (for achievements, etc.)
         self._on_card_placed_callbacks = []
+        # Callbacks for battle damage events
+        self._on_battle_damage_callbacks = []
 
     def register_card_placed_callback(self, callback):
         """
@@ -33,6 +35,22 @@ class EventProcessor:
         Callback signature: callback(card_title: str, blueprint_id: str, zone: str, owner: str)
         """
         self._on_card_placed_callbacks.append(callback)
+
+    def register_battle_damage_callback(self, callback):
+        """
+        Register a callback to be called when battle damage is detected from messages.
+
+        Callback signature: callback(damage: int)
+        """
+        self._on_battle_damage_callbacks.append(callback)
+
+    def _notify_battle_damage(self, damage: int):
+        """Notify all registered callbacks that battle damage occurred"""
+        for callback in self._on_battle_damage_callbacks:
+            try:
+                callback(damage)
+            except Exception as e:
+                logger.error(f"Error in battle damage callback: {e}")
 
     def _notify_card_placed(self, card_title: str, blueprint_id: str, zone: str, owner: str):
         """Notify all registered callbacks that a card was placed"""
@@ -492,12 +510,19 @@ class EventProcessor:
         """
         Handle M (Message) events.
 
-        Checks for game-ending messages like:
-        - "PlayerName lost due to: Conceded"
-        - "PlayerName is the winner due to: Opponent conceded"
-        - "PlayerName is the winner due to: Life Force depleted"
+        Checks for:
+        - Game-ending messages (winner/loser)
+        - Battle damage messages (e.g., "10 battle damage")
+
+        Ported from C# AIBotModeAstrogator.SendBattleMessage
         """
         message = event.get('message', '')
+
+        # Check for battle damage messages
+        # Format: "X battle damage" where X is a number before "battle"
+        # C# parsing: splits message and looks for number before "battle"
+        if ' battle' in message.lower():
+            self._parse_battle_damage(message)
 
         # Check for winner message: "PlayerName is the winner due to: Reason"
         if 'is the winner due to:' in message:
@@ -528,3 +553,30 @@ class EventProcessor:
                         self.board_state.game_winner = "opponent"
                     self.board_state.game_win_reason = reason
                     logger.info(f"🏁 Game ended: {loser_name} lost ({reason})")
+
+    def _parse_battle_damage(self, message: str):
+        """
+        Parse battle damage from message text.
+
+        Matches C# AIBotModeAstrogator.SendBattleMessage parsing:
+        - Splits message by spaces
+        - Looks for number preceding "battle" word
+        - Example: "10 battle damage" -> damage = 10
+
+        Args:
+            message: Raw message text from event
+        """
+        tokens = message.split()
+        previous_token = None
+
+        for token in tokens:
+            if token.lower() == 'battle' and previous_token is not None:
+                try:
+                    damage = int(previous_token)
+                    if damage > 0:
+                        logger.info(f"💥 Battle damage detected: {damage}")
+                        self._notify_battle_damage(damage)
+                        return
+                except ValueError:
+                    pass
+            previous_token = token

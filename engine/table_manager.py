@@ -13,6 +13,7 @@ Responsibilities:
 Design Goal: Bot should maintain a table 24/7 without human intervention.
 """
 
+import hashlib
 import logging
 import random
 import time
@@ -21,6 +22,26 @@ from typing import Optional, List, Callable
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+def get_astrogation_chart_number(deck_name: str) -> str:
+    """
+    Generate a 4-digit astrogation chart number from deck name.
+
+    Uses MD5 hash to ensure same deck always gets same number.
+    This makes it easy to identify which deck a table is using.
+
+    Args:
+        deck_name: Name of the deck
+
+    Returns:
+        4-digit string (0000-9999)
+    """
+    # Hash the deck name and take first 4 hex digits, convert to decimal mod 10000
+    hash_bytes = hashlib.md5(deck_name.encode('utf-8')).hexdigest()
+    # Take first 8 hex chars (4 bytes) and convert to int, then mod 10000
+    chart_number = int(hash_bytes[:8], 16) % 10000
+    return f"{chart_number:04d}"
 
 
 class TableState(Enum):
@@ -38,7 +59,8 @@ class TableState(Enum):
 class TableManagerConfig:
     """Configuration for table management"""
     # Table creation settings
-    table_name: str = "rando_cal's table"
+    # Table name prefix - astrogation chart number will be appended
+    table_name_prefix: str = "Bot Table"
     create_delay_seconds: float = 2.0          # Delay before creating table
     retry_delay_seconds: float = 5.0           # Delay between retries
     max_retry_delay_seconds: float = 60.0      # Max backoff delay
@@ -49,7 +71,8 @@ class TableManagerConfig:
     health_check_interval: int = 30            # Seconds between health checks
 
     # Deck selection
-    prefer_library_decks: bool = True          # Use library decks by default
+    # Prefer user (personal) decks over library decks - these are optimized for the bot
+    prefer_user_decks: bool = True             # Use user's personal decks by default
     deck_rotation: bool = True                 # Rotate through decks
 
 
@@ -225,6 +248,9 @@ class TableManager:
         """
         Create a new table with a randomly selected deck.
 
+        Table name format: "Bot Table: Astrogation Chart XXXX"
+        where XXXX is a 4-digit hash of the deck name.
+
         Returns:
             Table ID if successful, None if failed
         """
@@ -240,12 +266,16 @@ class TableManager:
         deck_name = deck.name if hasattr(deck, 'name') else str(deck)
         is_library = deck in self.library_decks
 
-        logger.info(f"Creating table with deck: {deck_name} (library={is_library})")
+        # Generate table name with astrogation chart number
+        chart_number = get_astrogation_chart_number(deck_name)
+        table_name = f"{self.config.table_name_prefix}: Astrogation Chart {chart_number}"
+
+        logger.info(f"Creating table '{table_name}' with deck: {deck_name} (library={is_library})")
 
         try:
             table_id = self.client.create_table(
                 deck_name,
-                self.config.table_name,
+                table_name,
                 is_library=is_library
             )
 
@@ -271,15 +301,26 @@ class TableManager:
             return None
 
     def _select_deck(self):
-        """Select a deck for table creation"""
+        """
+        Select a deck for table creation.
+
+        Priority (matching C# behavior):
+        1. User's personal decks (prefer_user_decks=True) - these are bot-optimized
+        2. Library decks as fallback
+        """
         decks = []
 
-        if self.config.prefer_library_decks and self.library_decks:
-            decks = self.library_decks
-        elif self.user_decks:
+        if self.config.prefer_user_decks and self.user_decks:
+            # Prefer user's personal decks (bot-optimized)
             decks = self.user_decks
+            logger.debug(f"Selecting from {len(decks)} user decks")
         elif self.library_decks:
+            # Fallback to library decks
             decks = self.library_decks
+            logger.debug(f"Selecting from {len(decks)} library decks (no user decks available)")
+        elif self.user_decks:
+            # If prefer_user_decks is False but no library decks, use user decks
+            decks = self.user_decks
 
         if not decks:
             return None

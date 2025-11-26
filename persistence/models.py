@@ -108,6 +108,32 @@ class PlayerStats(Base):
         return (self.wins / self.games_played) * 100
 
 
+class PlayerDeckStats(Base):
+    """
+    Per-player-per-deck statistics.
+
+    Tracks each player's best score on each deck they've played.
+    This matches the C# behavior where {deckName}_score is stored per player.
+    """
+    __tablename__ = 'player_deck_stats'
+
+    id = Column(Integer, primary_key=True)
+    player_name = Column(String(100), nullable=False)
+    deck_name = Column(String(200), nullable=False)
+    best_score = Column(Integer, default=0)
+    games_played = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('player_name', 'deck_name', name='uq_player_deck'),
+        Index('idx_player_deck_player', 'player_name'),
+        Index('idx_player_deck_deck', 'deck_name'),
+    )
+
+    def __repr__(self):
+        return f"<PlayerDeckStats({self.player_name} on {self.deck_name}: {self.best_score})>"
+
+
 class Achievement(Base):
     """
     Achievements unlocked by players.
