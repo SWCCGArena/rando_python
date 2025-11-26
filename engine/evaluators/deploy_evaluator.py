@@ -39,6 +39,18 @@ class DeployEvaluator(ActionEvaluator):
 
     def __init__(self):
         super().__init__("Deploy")
+        # Track cards we've already tried deploying this turn to avoid retry loops
+        # Ported from C# BotAIHelper.pendingDeployCards
+        self.pending_deploy_card_ids: set = set()
+        self._last_turn_number = -1
+
+    def reset_pending_deploys(self):
+        """Reset pending deploy tracking (call at turn start)"""
+        self.pending_deploy_card_ids.clear()
+
+    def track_deploy(self, card_id: str):
+        """Track that we tried deploying this card"""
+        self.pending_deploy_card_ids.add(card_id)
 
     def _get_game_strategy(self, context: DecisionContext) -> Optional[GameStrategy]:
         """Get GameStrategy from board_state's strategy_controller"""
@@ -87,6 +99,11 @@ class DeployEvaluator(ActionEvaluator):
         actions = []
         bs = context.board_state
 
+        # Reset pending deploy tracking at the start of each turn
+        if context.turn_number != self._last_turn_number:
+            self.reset_pending_deploys()
+            self._last_turn_number = context.turn_number
+
         for i, action_id in enumerate(context.action_ids):
             action_text = context.action_texts[i] if i < len(context.action_texts) else "Unknown"
 
@@ -100,6 +117,13 @@ class DeployEvaluator(ActionEvaluator):
                 score=50.0,  # Base score
                 display_text=action_text
             )
+
+            # Check if we already tried deploying this card (avoid loops)
+            card_id = context.card_ids[i] if i < len(context.card_ids) else None
+            if card_id and card_id in self.pending_deploy_card_ids:
+                action.add_reasoning("Already tried deploying this card this turn", -500.0)
+                actions.append(action)
+                continue
 
             # Penalize "Take card from Reserve Deck" - risky and often leads to loops
             if "Reserve Deck" in action_text:
@@ -139,9 +163,15 @@ class DeployEvaluator(ActionEvaluator):
 
     def _evaluate_location_selection(self, context: DecisionContext) -> List[EvaluatedAction]:
         """
-        Evaluate CARD_SELECTION for choosing deployment location.
+        Evaluate CARD_SELECTION for choosing deployment location/target.
 
-        Example: "Choose where to deploy •OS-72-1"
+        Example: "Choose where to deploy •Boba Fett In Slave I"
+        Example: "Choose where to deploy •X-wing Laser Cannon"
+
+        IMPORTANT rules:
+        - Starships should ONLY deploy to space locations (0 power at ground)
+        - Vehicles are fine at ground locations
+        - Weapons should prefer targets WITHOUT existing weapons
         """
         actions = []
         bs = context.board_state
@@ -151,26 +181,96 @@ class DeployEvaluator(ActionEvaluator):
             logger.warning("No card IDs in CARD_SELECTION decision")
             return actions
 
-        # Each card_id represents a location where we can deploy
+        # Extract the card being deployed from decision text
+        # Format: "Choose where to deploy <div class='cardHint' value='109_8'>•Boba Fett In Slave I</div>"
+        deploying_card_blueprint = self._extract_blueprint_from_action(context.decision_text)
+        deploying_card = get_card(deploying_card_blueprint) if deploying_card_blueprint else None
+
+        # Check card type being deployed
+        is_starship = deploying_card and deploying_card.is_starship
+        is_vehicle = deploying_card and deploying_card.is_vehicle
+        is_weapon = deploying_card and deploying_card.is_weapon
+        is_device = deploying_card and deploying_card.is_device
+
+        if deploying_card:
+            logger.debug(f"Deploying {deploying_card.title}: starship={is_starship}, vehicle={is_vehicle}, weapon={is_weapon}")
+
+        # Each card_id represents a target where we can deploy (location or card)
         for card_id in context.card_ids:
             action = EvaluatedAction(
                 action_id=card_id,
                 action_type=ActionType.SELECT_CARD,
                 score=50.0,  # Base score
-                display_text=f"Deploy to location (card {card_id})"
+                display_text=f"Deploy to (card {card_id})"
             )
 
-            # Try to find this location in board state
             if bs:
-                location = bs.get_location_by_card_id(card_id)
-                if location:
-                    action.display_text = f"Deploy to {location.site_name or location.system_name or location.blueprint_id}"
+                # For weapons/devices, target is a card (character, starship, vehicle)
+                if is_weapon or is_device:
+                    target_card = bs.cards_in_play.get(card_id)
+                    if target_card:
+                        target_meta = get_card(target_card.blueprint_id)
+                        target_name = target_card.card_title or target_card.blueprint_id
+                        action.display_text = f"Deploy to {target_name}"
 
-                    # Score based on strategic value (with GameStrategy)
-                    score = self._score_deployment_location(location, bs, game_strategy)
-                    action.score += score
+                        # Check if target already has a weapon attached
+                        has_existing_weapon = any(
+                            get_card(ac.blueprint_id) and get_card(ac.blueprint_id).is_weapon
+                            for ac in target_card.attached_cards
+                        )
+
+                        if has_existing_weapon:
+                            # Target already has a weapon - VERY BAD
+                            action.add_reasoning("TARGET ALREADY HAS WEAPON!", -500.0)
+                            logger.warning(f"⚠️  {target_name} already has a weapon attached")
+                        else:
+                            # Target has no weapon - good!
+                            action.add_reasoning("Target has no weapon - good", +20.0)
+
+                        # Prefer our own cards over opponent's (if weapon can go on either)
+                        if target_card.owner == bs.my_player_name:
+                            action.add_reasoning("Our card", +10.0)
+                    else:
+                        action.add_reasoning("Target card not found", -5.0)
+
+                # For starships/vehicles/characters, target is a location
                 else:
-                    action.add_reasoning("Location not found in board state", -5.0)
+                    location = bs.get_location_by_card_id(card_id)
+                    if location:
+                        action.display_text = f"Deploy to {location.site_name or location.system_name or location.blueprint_id}"
+
+                        # CRITICAL: Starships have 0 power at ground locations!
+                        # - Pure space (systems, sectors): is_space=True, is_ground=False -> has power
+                        # - Docking bays: is_space=True, is_ground=True -> can deploy, but 0 power!
+                        # - Pure ground sites: is_space=False, is_ground=True -> usually can't deploy
+                        if is_starship:
+                            is_pure_space = location.is_space and not getattr(location, 'is_ground', False)
+                            is_docking_bay = location.is_space and getattr(location, 'is_ground', False)
+
+                            if is_pure_space:
+                                # System or Sector - starship has power here
+                                action.add_reasoning("Starship to space - has power!", +20.0)
+                            elif is_docking_bay:
+                                # Docking bay - starship can deploy but has 0 power
+                                action.add_reasoning("STARSHIP TO DOCKING BAY - 0 power!", -500.0)
+                                logger.warning(f"⚠️  Starship {deploying_card.title} would have 0 power at docking bay {location.site_name}")
+                            else:
+                                # Pure ground site - starship shouldn't deploy here
+                                action.add_reasoning("STARSHIP TO GROUND - invalid!", -500.0)
+                                logger.warning(f"⚠️  Starship {deploying_card.title} cannot deploy to ground site {location.site_name}")
+
+                        # Vehicles are fine at ground locations but not space
+                        if is_vehicle and not is_starship:
+                            if not location.is_space:
+                                action.add_reasoning("Vehicle to ground location - good", +10.0)
+                            else:
+                                action.add_reasoning("Vehicle to space - check if valid", 0.0)
+
+                        # Score based on strategic value (with GameStrategy)
+                        score = self._score_deployment_location(location, bs, game_strategy)
+                        action.score += score
+                    else:
+                        action.add_reasoning("Location not found in board state", -5.0)
 
             actions.append(action)
 
@@ -181,8 +281,31 @@ class DeployEvaluator(ActionEvaluator):
         Evaluate ARBITRARY_CARDS for selecting cards to deploy/play.
 
         Example: "Choose starting location" or "Choose card from Reserve Deck"
+
+        Includes specific logic ported from C# BotAIHelper.ParseArbritraryCardDecision:
+        - Main Power Generators priority
+        - Massassi Throne Room priority
+        - "This Deal Is Getting Worse" deck detection
+        - "Slip Sliding Away" deck detection
+        - Priority defensive shields list
         """
         actions = []
+        text_lower = context.decision_text.lower()
+        is_setup = "starting location" in text_lower or context.turn_number <= 1
+
+        # Track if we're playing defensive shields
+        is_playing_shields = False
+
+        # Priority defensive shields (from C# logic)
+        PRIORITY_SHIELDS = [
+            "aim high",
+            "secret plans",
+            "allegations of corruption",
+            "come here you big coward",
+            "goldenrod",
+            "simple tricks and nonsense",
+            "tragedy has occurred",
+        ]
 
         # Only evaluate selectable cards
         for i, card_id in enumerate(context.card_ids):
@@ -205,14 +328,52 @@ class DeployEvaluator(ActionEvaluator):
                 if card_metadata:
                     action.card_name = card_metadata.title
                     action.display_text = f"Select {card_metadata.title}"
+                    title_lower = card_metadata.title.lower()
 
-                    # Score based on card type if deploying from Reserve Deck
-                    if "Reserve Deck" in context.decision_text:
+                    # === SETUP LOGIC (ported from C#) ===
+                    if is_setup:
+                        # Main Power Generators is always best starting location
+                        if "main power generators" in title_lower:
+                            action.add_reasoning("Main Power Generators - ideal start", +500.0)
+
+                        # Massassi Throne Room priority
+                        if "massassi throne room" in title_lower:
+                            action.add_reasoning("Massassi Throne Room priority", +400.0)
+
+                        # Slip Sliding Away bonus (blueprint 212_4) - prefer 2 dark icon sites
+                        # that aren't Imperial Square or Palace
+                        if blueprint == "212_4" or "slip sliding away" in title_lower:
+                            action.add_reasoning("Slip Sliding Away card", +300.0)
+
+                        # For decks with "This Deal Is Getting Worse" - prefer 2+ dark icon locations
+                        if card_metadata.dark_side_icons >= 2:
+                            action.add_reasoning(f"{card_metadata.dark_side_icons} dark icons", +50.0)
+
+                        # Prefer sites that aren't Imperial Square or Palace for SSA decks
+                        if (card_metadata.subtype and "site" in card_metadata.subtype.lower() and
+                            card_metadata.dark_side_icons == 2):
+                            if "imperial square" not in title_lower and "palace" not in title_lower:
+                                action.add_reasoning("Good 2-icon site for deck", +30.0)
+
+                    # === DEFENSIVE SHIELD LOGIC ===
+                    if card_metadata.is_defensive_shield:
+                        is_playing_shields = True
+                        # Check if it's a priority shield
+                        for shield_name in PRIORITY_SHIELDS:
+                            if shield_name in title_lower:
+                                action.add_reasoning(f"Priority shield: {shield_name}", +100.0)
+                                break
+                        else:
+                            # Not a priority shield - lower score
+                            action.add_reasoning("Non-priority defensive shield", +20.0)
+
+                    # === RESERVE DECK DEPLOY LOGIC ===
+                    if "reserve deck" in text_lower:
                         # Prefer locations and defensive shields
                         if card_metadata.is_location:
-                            action.add_reasoning("Location card", +10.0)
+                            action.add_reasoning("Location card from Reserve", +10.0)
                         elif card_metadata.is_defensive_shield:
-                            action.add_reasoning("Defensive Shield", +5.0)
+                            action.add_reasoning("Defensive Shield from Reserve", +5.0)
 
             actions.append(action)
 
@@ -317,19 +478,32 @@ class DeployEvaluator(ActionEvaluator):
         return score
 
     def _have_empty_warriors(self, board_state) -> bool:
-        """Check if we have warriors on the board without weapons"""
-        # Simplified - just check if we have any warriors
+        """
+        Check if we have warriors/starships/vehicles on the board without weapons.
+
+        Weapons can be attached to:
+        - Warriors (characters)
+        - Starships (e.g., X-wing Laser Cannon on X-wing)
+        - Vehicles
+        """
         for card in board_state.cards_in_play.values():
             if card.owner == board_state.my_player_name:
                 metadata = get_card(card.blueprint_id)
-                if metadata and metadata.is_warrior:
-                    # Check if warrior has no attached weapons
-                    has_weapon = any(
-                        get_card(ac.blueprint_id) and get_card(ac.blueprint_id).is_weapon
-                        for ac in card.attached_cards
+                if metadata:
+                    # Check warriors, starships, and vehicles
+                    can_have_weapon = (
+                        metadata.is_warrior or
+                        metadata.is_starship or
+                        metadata.is_vehicle
                     )
-                    if not has_weapon:
-                        return True
+                    if can_have_weapon:
+                        # Check if card has no attached weapons
+                        has_weapon = any(
+                            get_card(ac.blueprint_id) and get_card(ac.blueprint_id).is_weapon
+                            for ac in card.attached_cards
+                        )
+                        if not has_weapon:
+                            return True
         return False
 
     def _have_pilot_in_hand(self, board_state, max_cost: int) -> bool:
@@ -411,26 +585,36 @@ class DeployEvaluator(ActionEvaluator):
             score += overkill_penalty
             logger.debug(f"Location {location.site_name}: {overkill_penalty:.1f} (already controlling +{power_diff})")
 
-        # CONTESTED BONUS: If opponent has presence but we don't control yet
-        # This is a key strategic location to contest
-        if len(location.their_cards) > 0:
-            if power_diff < 0:
-                # We're behind - prioritize this location
-                contest_bonus = 15.0 + abs(power_diff) * 1.5
+        # CONTESTED BONUS: If opponent has presence/power here, prioritize based on power diff
+        # Check BOTH tracked cards AND power from game state (power is more reliable)
+        opponent_has_presence = len(location.their_cards) > 0 or their_power > 0
+
+        if opponent_has_presence:
+            if power_diff < -5:
+                # We're badly behind (-6 or worse) - CRITICAL to reinforce!
+                contest_bonus = 30.0 + abs(power_diff) * 3.0
                 score += contest_bonus
-                logger.debug(f"Location {location.site_name}: +{contest_bonus:.1f} (contest opponent)")
+                logger.debug(f"Location {location.site_name}: +{contest_bonus:.1f} (CRITICAL - badly losing by {abs(power_diff)})")
+            elif power_diff < 0:
+                # We're behind - prioritize this location
+                contest_bonus = 15.0 + abs(power_diff) * 2.0
+                score += contest_bonus
+                logger.debug(f"Location {location.site_name}: +{contest_bonus:.1f} (contest - losing by {abs(power_diff)})")
             elif power_diff < 4:
                 # Close contest - still valuable
-                score += 8.0
-                logger.debug(f"Location {location.site_name}: +8.0 (close contest)")
-        elif len(location.my_cards) > 0:
+                score += 10.0
+                logger.debug(f"Location {location.site_name}: +10.0 (close contest)")
+            else:
+                # We're winning - less need to deploy more here
+                score += 3.0
+                logger.debug(f"Location {location.site_name}: +3.0 (winning by {power_diff})")
+        elif my_power > 0:
             # We have presence, opponent doesn't - minor bonus only if we can drain
             if their_icons and their_icons != "0":
                 score += 3.0  # Small bonus - we control and can drain
             # No bonus for locations we control but can't drain
-
-        # EMPTY LOCATION: Deploying to establish presence
-        if len(location.my_cards) == 0 and len(location.their_cards) == 0:
+        else:
+            # EMPTY LOCATION: Deploying to establish presence
             # Slight bonus for expanding - prefer locations with drain potential
             if their_icons and their_icons != "0":
                 score += 10.0

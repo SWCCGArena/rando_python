@@ -382,8 +382,11 @@ class ChatManager:
         self._send_chat(message, message_type='end')
 
         # Notify brain
+        # Note: brain.on_game_end expects won=True to mean BOT won (per interface.py)
+        # but this method receives won=True meaning PLAYER won, so we invert
         if self.brain:
-            self.brain.on_game_end(won, board_state)
+            bot_won = not won
+            self.brain.on_game_end(bot_won, board_state)
 
     # =========================================================================
     # Utility Methods

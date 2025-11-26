@@ -74,6 +74,16 @@ class StaticBrain(Brain):
                 best_action.score
             ))
 
+            # Track action for loop prevention (deploys, moves)
+            # Find card_id from the chosen action
+            card_id = None
+            for opt in context.decision_request.options:
+                if opt.option_id == best_action.action_id and opt.card:
+                    card_id = opt.card.card_id
+                    break
+            if card_id:
+                self.combined_evaluator.track_action(best_action, card_id)
+
             # Build reasoning from evaluator output
             reasoning = best_action.display_text
             if best_action.reasoning:

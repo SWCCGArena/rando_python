@@ -880,13 +880,14 @@ def bot_worker():
                     socketio.emit('log_message', {'message': '🏁 Game ended', 'level': 'info'}, namespace='/')
 
                     # Determine if we won
-                    won = False
+                    # Note: bot_won means the bot won; player_won means the human opponent won
+                    bot_won = False
                     if bot_state.board_state:
                         # First check if game_winner was set from message events (most reliable)
                         if bot_state.board_state.game_winner:
-                            won = (bot_state.board_state.game_winner == config.GEMP_USERNAME or
-                                   bot_state.board_state.game_winner == bot_state.board_state.my_player_name)
-                            logger.info(f"Game result from message: {'Won' if won else 'Lost'} "
+                            bot_won = (bot_state.board_state.game_winner == config.GEMP_USERNAME or
+                                       bot_state.board_state.game_winner == bot_state.board_state.my_player_name)
+                            logger.info(f"Game result from message: {'Won' if bot_won else 'Lost'} "
                                        f"(winner: {bot_state.board_state.game_winner}, "
                                        f"reason: {bot_state.board_state.game_win_reason})")
                         else:
@@ -897,13 +898,15 @@ def bot_worker():
                             my_life = (bot_state.board_state.reserve_deck +
                                       bot_state.board_state.force_pile +
                                       bot_state.board_state.used_pile)
-                            won = their_life <= my_life  # We won if they have less life force
-                            logger.info(f"Game result from life force: {'Won' if won else 'Lost'} "
+                            bot_won = their_life <= my_life  # We won if they have less life force
+                            logger.info(f"Game result from life force: {'Won' if bot_won else 'Lost'} "
                                        f"(my life: {my_life}, their life: {their_life})")
 
                     # Send game end message
+                    # chat_manager expects won=True when the PLAYER (human) won
+                    player_won = not bot_won
                     if bot_state.chat_manager:
-                        bot_state.chat_manager.on_game_end(won=won, board_state=bot_state.board_state)
+                        bot_state.chat_manager.on_game_end(won=player_won, board_state=bot_state.board_state)
 
                     # Record game to stats database
                     if bot_state.stats_repo and bot_state.opponent_name:

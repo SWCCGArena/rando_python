@@ -65,6 +65,10 @@ class CardSelectionEvaluator(ActionEvaluator):
             actions = self._evaluate_sabacc_clone(context)
         elif "choose where to deploy" in text_lower:
             actions = self._evaluate_deploy_location(context)
+        elif "force to lose or" in text_lower and "forfeit" in text_lower:
+            # COMBINED decision: lose force OR forfeit card
+            # Must come before individual force_loss/forfeit checks
+            actions = self._evaluate_force_loss_or_forfeit(context)
         elif "choose force to lose" in text_lower:
             actions = self._evaluate_force_loss(context)
         elif any(x in text_lower for x in ["move", "transport", "transit"]):
@@ -328,6 +332,164 @@ class CardSelectionEvaluator(ActionEvaluator):
                     forfeit_bonus = GOOD_DELTA * (20 - forfeit)
                     action.add_reasoning(f"Forfeit value {forfeit}", forfeit_bonus)
                     action.display_text = f"Forfeit {card.card_title or card_id}"
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_force_loss_or_forfeit(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose between losing Force from reserve deck OR forfeiting a card in battle.
+
+        Strategic considerations:
+        1. Power differential at battle location - if we're badly losing (5+ power behind),
+           prefer to forfeit cards since they'll just get beat up again next turn
+        2. Reserve deck size - if reserve is low, prefer forfeiting to save deck
+        3. Pilots attached to ships - ALWAYS forfeit pilots before their ships
+        4. Card value - prefer losing low-value force over forfeiting high-value cards
+
+        Ported from C# AICSHandler.cs battle damage assignment logic.
+        """
+        actions = []
+        bs = context.board_state
+        from ..card_loader import get_card
+
+        # Get battle location info for power differential
+        power_diff = 0
+        battle_location_idx = -1
+        if bs:
+            # Try to find the battle location from board state
+            # The bot should track which location the battle is at
+            battle_location_idx = getattr(bs, 'current_battle_location', -1)
+            if battle_location_idx >= 0:
+                my_power = bs.my_power_at_location(battle_location_idx)
+                their_power = bs.their_power_at_location(battle_location_idx)
+                power_diff = my_power - their_power
+                logger.debug(f"Battle at location {battle_location_idx}: my={my_power}, their={their_power}, diff={power_diff}")
+
+        # Get reserve deck size
+        reserve_size = bs.reserve_deck_size if bs else 30
+
+        # Separate cards into Force (from reserve) vs cards in battle
+        force_options = []  # Cards representing Force loss (usually -1_2 blueprint)
+        battle_cards = []   # Actual cards in battle to forfeit
+
+        for card_id in context.card_ids:
+            card = bs.cards_in_play.get(card_id) if bs else None
+
+            # Check if this is a Force card (blueprint -1_2 or similar)
+            # Force cards represent losing from reserve deck
+            blueprint = card.blueprint_id if card else ""
+            if blueprint.startswith("-1_") or blueprint == "":
+                # This is a Force loss option (not a real card)
+                force_options.append(card_id)
+            else:
+                battle_cards.append((card_id, card))
+
+        logger.debug(f"Force loss options: {len(force_options)}, Battle cards: {len(battle_cards)}")
+
+        # Identify pilots attached to ships (should be forfeited first)
+        pilots_on_ships = []
+        ships_with_pilots = []
+        standalone_cards = []
+
+        for card_id, card in battle_cards:
+            if card:
+                card_meta = get_card(card.blueprint_id)
+                is_pilot = card_meta and card_meta.is_pilot if card_meta else False
+                is_ship = card_meta and (card_meta.is_starship or card_meta.is_vehicle) if card_meta else False
+
+                # Check if this card is attached to something (pilot on ship)
+                if card.target_card_id:
+                    pilots_on_ships.append((card_id, card, card_meta))
+                elif is_ship and card.attached_cards:
+                    # Ship with pilots - should forfeit pilots first
+                    ships_with_pilots.append((card_id, card, card_meta))
+                else:
+                    standalone_cards.append((card_id, card, card_meta))
+            else:
+                standalone_cards.append((card_id, None, None))
+
+        # Determine base strategy based on power differential
+        # If we're badly losing, prefer forfeiting cards to save reserve deck
+        prefer_forfeit = power_diff <= -5 or reserve_size <= 15
+
+        # Score Force loss options
+        for card_id in force_options:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=50.0,  # Base score
+                display_text=f"Lose Force from reserve"
+            )
+
+            # Adjust based on strategic situation
+            if prefer_forfeit:
+                action.add_reasoning("Badly losing battle - prefer forfeit", -30.0)
+            else:
+                action.add_reasoning("Force loss is acceptable", 0.0)
+
+            if reserve_size <= 10:
+                action.add_reasoning(f"Low reserve ({reserve_size}) - avoid force loss", -40.0)
+            elif reserve_size <= 20:
+                action.add_reasoning(f"Medium reserve ({reserve_size})", -10.0)
+
+            actions.append(action)
+
+        # Score pilots attached to ships (ALWAYS forfeit these first when on ships)
+        for card_id, card, card_meta in pilots_on_ships:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=100.0,  # High base score - pilots should go first
+                display_text=f"Forfeit pilot {card.card_title if card else card_id}"
+            )
+            action.add_reasoning("PILOT ON SHIP - forfeit first!", +50.0)
+
+            # Still prefer low forfeit value pilots
+            if card:
+                forfeit = getattr(card, 'forfeit', 0) or 0
+                forfeit_bonus = 20 - forfeit
+                action.add_reasoning(f"Forfeit value {forfeit}", forfeit_bonus)
+
+            actions.append(action)
+
+        # Score ships with pilots (should NOT be forfeited until pilots are gone)
+        for card_id, card, card_meta in ships_with_pilots:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=-50.0,  # Low score - don't forfeit ship while pilots attached
+                display_text=f"Forfeit ship {card.card_title if card else card_id}"
+            )
+            action.add_reasoning("Ship has pilots - forfeit pilots first!", -100.0)
+            actions.append(action)
+
+        # Score standalone cards (characters, unpiloted ships, etc.)
+        for card_id, card, card_meta in standalone_cards:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=40.0,  # Base score
+                display_text=f"Forfeit {card.card_title if card else card_id}"
+            )
+
+            if prefer_forfeit:
+                action.add_reasoning("Badly losing - forfeit preferred", +20.0)
+
+            if card:
+                forfeit = getattr(card, 'forfeit', 0) or 0
+                # Prefer low forfeit value cards
+                forfeit_bonus = (10 - forfeit) * 2
+                action.add_reasoning(f"Forfeit value {forfeit}", forfeit_bonus)
+
+                # Penalize forfeiting high-value cards (unique characters, ships)
+                if card_meta:
+                    if card_meta.is_starship or card_meta.is_vehicle:
+                        if not prefer_forfeit:
+                            action.add_reasoning("Ship/vehicle - prefer force loss", -15.0)
+                    if card_meta.uniqueness and "*" in card_meta.uniqueness:
+                        action.add_reasoning("Unique card - valuable", -10.0)
 
             actions.append(action)
 

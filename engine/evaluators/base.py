@@ -228,6 +228,31 @@ class CombinedEvaluator:
         self.evaluators = evaluators
         self.logger = logging.getLogger(__name__)
 
+    def track_action(self, action: EvaluatedAction, card_id: str = None):
+        """
+        Track that an action was chosen.
+
+        This allows evaluators to avoid selecting the same action again
+        if the game presents the same decision (avoid loops).
+
+        Args:
+            action: The action that was chosen
+            card_id: Optional card ID associated with the action
+        """
+        # Track deploys
+        if action.action_type == ActionType.DEPLOY and card_id:
+            for evaluator in self.evaluators:
+                if hasattr(evaluator, 'track_deploy'):
+                    evaluator.track_deploy(card_id)
+                    self.logger.debug(f"📝 Tracked deploy of card {card_id}")
+
+        # Track moves
+        if action.action_type == ActionType.MOVE and card_id:
+            for evaluator in self.evaluators:
+                if hasattr(evaluator, 'track_move'):
+                    evaluator.track_move(card_id)
+                    self.logger.debug(f"📝 Tracked move of card {card_id}")
+
     def evaluate_decision(self, context: DecisionContext) -> Optional[EvaluatedAction]:
         """
         Run all applicable evaluators and return the best action.

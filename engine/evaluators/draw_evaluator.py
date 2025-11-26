@@ -107,25 +107,46 @@ class DrawEvaluator(ActionEvaluator):
 
         Ported from C# AICACHandler.RankDrawAction
         Enhanced with GameStrategy hand size caps and force gen awareness.
+
+        CRITICAL: When life force is low, reduce max hand size proportionally.
+        Having 12 cards in hand but only 2 force to spend is TERRIBLE.
         """
         hand_size = board_state.hand_size if hasattr(board_state, 'hand_size') else 7
-        reserve = board_state.total_reserve_force() if hasattr(board_state, 'total_reserve_force') else 20
+        reserve_deck = board_state.reserve_deck if hasattr(board_state, 'reserve_deck') else 20
+        used_pile = board_state.used_pile if hasattr(board_state, 'used_pile') else 0
         force_pile = board_state.force_pile if hasattr(board_state, 'force_pile') else 5
         turn_number = board_state.turn_number if hasattr(board_state, 'turn_number') else 1
 
-        # === DYNAMIC MAX HAND SIZE ===
-        # If we're running low on cards in deck, reduce effective max hand size
-        # Every card below 12 in combined piles reduces max hand by 1
+        # Total reserve force (old method) - just reserve deck
+        reserve = board_state.total_reserve_force() if hasattr(board_state, 'total_reserve_force') else reserve_deck
+
+        # === CRITICAL: LIFE FORCE BASED HAND LIMIT ===
+        # Total remaining life force = cards that can still circulate
+        # (reserve deck + used pile + force pile)
+        # Hand cards are STUCK until played, so don't count them
+        remaining_life_force = reserve_deck + used_pile + force_pile
+
+        # When remaining life force drops below MAX_HAND_SIZE (16),
+        # reduce max hand proportionally. Formula:
+        # effective_max_hand = min(MAX_HAND_SIZE, remaining_life_force)
+        #
+        # Example: 2 remaining life force -> max hand = 2
+        # This ensures we always have force to pay for what's in hand
         effective_max_hand = MAX_HAND_SIZE
-        if reserve < DECK_SIZE_FOR_FULL_HAND:
-            deck_deficit = DECK_SIZE_FOR_FULL_HAND - reserve
-            effective_max_hand = max(6, MAX_HAND_SIZE - deck_deficit)  # Floor at 6
-            if hand_size >= effective_max_hand:
-                penalty = BAD_DELTA * 2 * (hand_size - effective_max_hand + 1)
-                action.add_reasoning(
-                    f"Low deck ({reserve}) - effective max hand {effective_max_hand}",
-                    penalty
-                )
+        if remaining_life_force < MAX_HAND_SIZE:
+            effective_max_hand = max(2, remaining_life_force)  # Floor at 2
+            logger.debug(f"Life force {remaining_life_force} < {MAX_HAND_SIZE}: effective max hand = {effective_max_hand}")
+
+        # If hand already exceeds effective max, STRONGLY penalize drawing
+        if hand_size >= effective_max_hand:
+            overflow = hand_size - effective_max_hand + 1
+            penalty = VERY_BAD_DELTA  # -999 to strongly discourage
+            action.add_reasoning(
+                f"CRITICAL: Hand {hand_size} >= life force limit {effective_max_hand} (only {remaining_life_force} cards left!)",
+                penalty
+            )
+            # Return early - don't add any bonuses for drawing
+            return
 
         # === FORCE RESERVATION FOR OPPONENT'S TURN ===
         # After turn 4, keep some force for reactions/battles

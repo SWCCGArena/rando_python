@@ -446,11 +446,18 @@ class EventProcessor:
         """
         Handle SB/SD/SLC/SA (Start Battle/Duel/Lightsaber Combat/Attack) events.
 
-        Sets in_battle flag for strategic decisions.
+        Sets in_battle flag and tracks battle location for strategic decisions.
         Ported from C# BotAIHelper.StartBattle()
         """
         event_type = event.get('type', '')
         self.board_state.in_battle = True
+
+        # Track battle location for damage assignment decisions
+        location_index_str = event.get('locationIndex', '-1')
+        try:
+            self.board_state.current_battle_location = int(location_index_str)
+        except ValueError:
+            self.board_state.current_battle_location = -1
 
         battle_types = {
             'SB': 'Battle',
@@ -459,17 +466,18 @@ class EventProcessor:
             'SA': 'Attack',
         }
         battle_name = battle_types.get(event_type, 'Combat')
-        logger.info(f"⚔️  {battle_name} started")
+        logger.info(f"⚔️  {battle_name} started at location {self.board_state.current_battle_location}")
 
     def _handle_end_battle(self, event: ET.Element):
         """
         Handle EB/EA/ED/ELC (End Battle/Attack/Duel/Lightsaber Combat) events.
 
-        Clears in_battle flag.
+        Clears in_battle flag and battle location.
         Ported from C# BotAIHelper.EndBattle()
         """
         event_type = event.get('type', '')
         self.board_state.in_battle = False
+        self.board_state.current_battle_location = -1  # Clear battle location
 
         battle_types = {
             'EB': 'Battle',

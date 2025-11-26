@@ -16,6 +16,7 @@ import re
 from typing import List, Optional
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 from ..game_strategy import GameStrategy
+from ..card_loader import get_card
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,83 @@ class ActionTextEvaluator(ActionEvaluator):
 
     def __init__(self):
         super().__init__("ActionText")
+
+    def _extract_blueprint_from_text(self, action_text: str) -> Optional[str]:
+        """
+        Extract blueprint ID from action text HTML.
+
+        Example: "Embark <div class='cardHint' value='7_305'>•OS-72-1</div>"
+        Returns: "7_305"
+        """
+        match = re.search(r"value='([^']+)'", action_text)
+        if match:
+            return match.group(1)
+        return None
+
+    def _get_card_owner_from_context(self, context: DecisionContext, card_id: str) -> Optional[str]:
+        """
+        Get the owner of a card from the board state.
+
+        Returns the player name who owns the card, or None if not found.
+        """
+        bs = context.board_state
+        if bs and card_id:
+            card = bs.cards_in_play.get(card_id)
+            if card:
+                return card.owner
+        return None
+
+    def _is_my_card(self, context: DecisionContext, card_id: str) -> bool:
+        """Check if a card belongs to us"""
+        bs = context.board_state
+        if not bs:
+            return False
+        owner = self._get_card_owner_from_context(context, card_id)
+        return owner == bs.my_player_name if owner else False
+
+    def _get_target_from_action_text(self, action_text: str, context: DecisionContext) -> dict:
+        """
+        Try to identify the target of an action from the action text.
+
+        Returns dict with blueprint, card_metadata, is_mine, card_id
+        """
+        blueprint = self._extract_blueprint_from_text(action_text)
+        result = {
+            'blueprint': blueprint,
+            'card_metadata': None,
+            'is_mine': False,
+            'card_id': None,
+            'is_vehicle': False,
+            'is_starship': False,
+            'has_pilot': False,
+            'is_spy': False,
+        }
+
+        if blueprint:
+            result['card_metadata'] = get_card(blueprint)
+            if result['card_metadata']:
+                result['is_vehicle'] = result['card_metadata'].is_vehicle
+                result['is_starship'] = result['card_metadata'].is_starship
+                result['is_spy'] = result['card_metadata'].is_spy if hasattr(result['card_metadata'], 'is_spy') else False
+
+        # Try to find the card in board state
+        bs = context.board_state
+        if bs and blueprint:
+            # Search for cards with this blueprint
+            for card_id, card in bs.cards_in_play.items():
+                if card.blueprint_id == blueprint:
+                    result['card_id'] = card_id
+                    result['is_mine'] = (card.owner == bs.my_player_name)
+                    # Check if vehicle/starship has a pilot attached
+                    if (result['is_vehicle'] or result['is_starship']) and card.attached_cards:
+                        for attached in card.attached_cards:
+                            attached_meta = get_card(attached.blueprint_id)
+                            if attached_meta and attached_meta.is_pilot:
+                                result['has_pilot'] = True
+                                break
+                    break
+
+        return result
 
     def _get_game_strategy(self, context: DecisionContext) -> Optional[GameStrategy]:
         """Get GameStrategy from board_state's strategy_controller"""
@@ -99,21 +177,56 @@ class ActionTextEvaluator(ActionEvaluator):
             elif action_text == "Force drain":
                 action.action_type = ActionType.FORCE_DRAIN
 
+                # Get the location card_id for this drain action
+                location_card_id = context.card_ids[i] if i < len(context.card_ids) else None
+
+                # Check actual drain amount from location check data
+                drain_amount = -1  # -1 = unknown
+                if bs and location_card_id:
+                    location = bs.get_location_by_card_id(location_card_id)
+                    if location and hasattr(location, 'my_drain_amount'):
+                        drain_str = location.my_drain_amount or ""
+                        try:
+                            drain_amount = int(drain_str) if drain_str else -1
+                        except ValueError:
+                            drain_amount = -1
+                        logger.debug(f"Force drain at {location.site_name}: drain_amount={drain_amount}")
+
+                # If drain amount is 0, strongly avoid this drain
+                if drain_amount == 0:
+                    action.score = VERY_BAD_DELTA
+                    action.add_reasoning("Drain amount is 0 - pointless!", VERY_BAD_DELTA)
+                    # Still append action but with very bad score
+                    actions.append(action)
+                    continue  # Skip further evaluation for this action
+
                 # Check for Battle Order rules (force drains cost extra)
                 under_battle_order = False
                 if bs and hasattr(bs, 'strategy_controller') and bs.strategy_controller:
                     under_battle_order = bs.strategy_controller.under_battle_order_rules
 
                 if under_battle_order:
-                    # Under Battle Order - avoid low force drains
-                    # TODO: Get actual drain amount from location check
-                    # For now, assume drain amount is 1-2 (typical)
-                    # C# logic: if forceDrainAmount < 2 && underBattleOrderRules -> bad
-                    action.score = BAD_DELTA
-                    action.add_reasoning("Under Battle Order - drain costs extra", BAD_DELTA)
+                    # Under Battle Order - avoid low force drains (< 2)
+                    if drain_amount >= 0 and drain_amount < 2:
+                        action.score = VERY_BAD_DELTA
+                        action.add_reasoning(f"Under Battle Order - drain {drain_amount} too low", VERY_BAD_DELTA)
+                    elif drain_amount >= 2:
+                        action.score = GOOD_DELTA
+                        action.add_reasoning(f"Under Battle Order - drain {drain_amount} worth it", GOOD_DELTA)
+                    else:
+                        # Unknown drain amount - be cautious under battle order
+                        action.score = BAD_DELTA
+                        action.add_reasoning("Under Battle Order - drain costs extra", BAD_DELTA)
                 else:
-                    action.score = VERY_GOOD_DELTA
-                    action.add_reasoning("Force drain is good", VERY_GOOD_DELTA)
+                    # Not under battle order - drain is good if amount > 0
+                    if drain_amount > 0:
+                        action.score = VERY_GOOD_DELTA
+                        action.add_reasoning(f"Force drain {drain_amount} is good", VERY_GOOD_DELTA)
+                    elif drain_amount == -1:
+                        # Unknown amount - assume it's good
+                        action.score = GOOD_DELTA
+                        action.add_reasoning("Force drain (amount unknown)", GOOD_DELTA)
+                    # drain_amount == 0 already handled above
 
             # ========== Race Destiny ==========
             elif action_text == "Draw race destiny":
@@ -275,10 +388,41 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.add_reasoning("Rare action - neutral priority", 0.0)
 
             # ========== Embark (onto vehicles/ships) ==========
+            # Ported from C# AICACHandler.cs lines 738-767
             elif "Embark" in action_text:
-                # Embarking is situational - let it be neutral
                 action.action_type = ActionType.MOVE
-                action.add_reasoning("Embark action", 0.0)
+
+                # Get card being embarked (should be from context)
+                embarking_card_id = context.card_ids[i] if i < len(context.card_ids) else None
+                embarking_card = None
+                if bs and embarking_card_id:
+                    embarking_card = bs.cards_in_play.get(embarking_card_id)
+
+                # Get target vehicle/starship from action text
+                target_info = self._get_target_from_action_text(action_text, context)
+
+                # Check if embarking card is a pilot
+                is_pilot = False
+                if embarking_card:
+                    embarking_meta = get_card(embarking_card.blueprint_id)
+                    if embarking_meta:
+                        is_pilot = embarking_meta.is_pilot
+
+                # Embark logic from C#:
+                # - Only embark if we're a pilot and target vehicle/starship needs a pilot
+                if target_info['is_vehicle'] or target_info['is_starship']:
+                    if is_pilot and not target_info['has_pilot']:
+                        action.score = VERY_GOOD_DELTA
+                        action.add_reasoning("Pilot embarking on unpiloted vehicle/starship", VERY_GOOD_DELTA)
+                    elif target_info['has_pilot']:
+                        action.score = BAD_DELTA
+                        action.add_reasoning("Vehicle/starship already has pilot", BAD_DELTA)
+                    else:
+                        action.score = BAD_DELTA
+                        action.add_reasoning("Non-pilot embarking (usually bad)", BAD_DELTA)
+                else:
+                    # Generic embark - neutral
+                    action.add_reasoning("Generic embark action", 0.0)
 
             # ========== Disembark/Relocate/Transfer (usually bad) ==========
             elif any(x in action_text for x in ["Disembark", "Relocate", "Transfer"]):
@@ -297,15 +441,69 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.add_reasoning("Avoid losing cards", VERY_BAD_DELTA)
 
             # ========== Grab opponent's card ==========
+            # Ported from C# AICACHandler.cs lines 593-627
+            # Only grab opponent's cards (different side), not our own
             elif "Grab" in action_text:
-                # Grabbing is usually good if it's opponent's card
-                action.score = GOOD_DELTA
-                action.add_reasoning("Grabbing card", GOOD_DELTA)
+                target_info = self._get_target_from_action_text(action_text, context)
+
+                if target_info['card_id']:
+                    if target_info['is_mine']:
+                        # Grabbing our own card - bad!
+                        action.score = VERY_BAD_DELTA
+                        action.add_reasoning("Don't grab own card", VERY_BAD_DELTA)
+                    else:
+                        # Grabbing opponent's card - good!
+                        action.score = GOOD_DELTA
+                        action.add_reasoning("Grab opponent's card", GOOD_DELTA)
+                else:
+                    # Can't determine owner - check by card side in metadata
+                    if target_info['card_metadata']:
+                        my_side = bs.my_side if bs else "unknown"
+                        card_side = target_info['card_metadata'].side
+                        if card_side and card_side.lower() == my_side.lower():
+                            # Same side as us - probably our card
+                            action.score = BAD_DELTA
+                            action.add_reasoning("Grab appears to be same-side card", BAD_DELTA)
+                        else:
+                            # Different side - opponent's card
+                            action.score = GOOD_DELTA
+                            action.add_reasoning("Grab opponent-side card", GOOD_DELTA)
+                    else:
+                        # Unknown - be cautious
+                        action.add_reasoning("Grab card (owner unknown)", 0.0)
 
             # ========== Break cover (spies) ==========
+            # Ported from C# AICACHandler.cs lines 799-829
+            # Breaking opponent's spy is good, breaking our spy is bad
             elif "Break cover" in action_text:
-                # Default to neutral - breaking own spy is bad, theirs is good
-                action.add_reasoning("Break cover - check whose spy", 0.0)
+                target_info = self._get_target_from_action_text(action_text, context)
+
+                if target_info['card_id']:
+                    if target_info['is_mine']:
+                        # Breaking our own spy - very bad!
+                        action.score = VERY_BAD_DELTA
+                        action.add_reasoning("Don't break cover of own spy!", VERY_BAD_DELTA)
+                    else:
+                        # Breaking opponent's spy - good!
+                        action.score = GOOD_DELTA
+                        action.add_reasoning("Break opponent's spy cover", GOOD_DELTA)
+                else:
+                    # Can't determine owner from board - check card side
+                    if target_info['card_metadata']:
+                        my_side = bs.my_side if bs else "unknown"
+                        card_side = target_info['card_metadata'].side
+                        if card_side and card_side.lower() == my_side.lower():
+                            # Same side - probably our spy
+                            action.score = VERY_BAD_DELTA
+                            action.add_reasoning("Break cover appears to be own spy", VERY_BAD_DELTA)
+                        else:
+                            # Different side - opponent's spy
+                            action.score = GOOD_DELTA
+                            action.add_reasoning("Break opponent-side spy cover", GOOD_DELTA)
+                    else:
+                        # Unknown spy - be cautious, default to not doing it
+                        action.score = BAD_DELTA
+                        action.add_reasoning("Break cover (spy owner unknown - cautious)", BAD_DELTA)
 
             # ========== Retrieve force ==========
             elif "retrieve" in text_lower or "Place out of play to retrieve" in action_text:

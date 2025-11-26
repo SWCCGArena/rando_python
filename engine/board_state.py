@@ -158,6 +158,7 @@ class BoardState:
         self.activation: int = 0           # Max force that can be activated this turn
         self.force_activated_this_turn: int = 0  # Force already activated this turn
         self.in_battle: bool = False       # True during battles/duels/attacks
+        self.current_battle_location: int = -1  # Location index where battle is occurring (-1 if none)
 
         # Game result tracking (from message events)
         self.game_winner: Optional[str] = None  # Player name who won, or None if game ongoing

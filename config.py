@@ -1,6 +1,12 @@
 import os
 from dataclasses import dataclass
 
+# Try to load secrets from secrets.py (not committed to git)
+try:
+    from secrets import GEMP_PASSWORD as _SECRETS_PASSWORD
+except ImportError:
+    _SECRETS_PASSWORD = None
+
 @dataclass
 class Config:
     """Configuration for the Rando Cal bot"""
@@ -14,7 +20,8 @@ class Config:
     # GEMP server settings
     GEMP_SERVER_URL: str = os.environ.get('GEMP_SERVER_URL', 'http://localhost:8082/gemp-swccg-server/')
     GEMP_USERNAME: str = os.environ.get('GEMP_USERNAME', 'rando_cal')
-    GEMP_PASSWORD: str = os.environ.get('GEMP_PASSWORD', 'battmann')
+    # Password priority: env var > secrets.py > empty (will fail login)
+    GEMP_PASSWORD: str = os.environ.get('GEMP_PASSWORD', _SECRETS_PASSWORD or '')
 
     # Bot settings
     BOT_MODE: str = 'astrogator'  # 'standard', 'astrogator', 'scrap_trader'
