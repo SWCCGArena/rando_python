@@ -45,6 +45,13 @@ db_url = f'sqlite:///{db_path}'
 init_db(db_url)
 logger.info(f"📊 Database initialized: {db_path}")
 
+# Repair any data inconsistencies from previous bugs
+from persistence.stats_repository import StatsRepository
+_repair_repo = StatsRepository()
+_repaired = _repair_repo.repair_achievement_counts()
+if _repaired > 0:
+    logger.info(f"🔧 Repaired {_repaired} player achievement counts")
+
 # Load user settings and apply to config
 user_settings = settings.load_settings()
 if user_settings.get('gemp_server_url'):
@@ -922,47 +929,8 @@ def bot_worker():
                     if bot_state.chat_manager:
                         bot_state.chat_manager.on_game_end(won=player_won, board_state=bot_state.board_state)
 
-                    # Record game to stats database
-                    if bot_state.stats_repo and bot_state.opponent_name:
-                        try:
-                            # Get game stats
-                            route_score = 0
-                            damage = 0
-                            turns = 0
-                            if bot_state.board_state:
-                                turns = bot_state.board_state.turn_number
-                                # Route score from chat_manager if available
-                                if bot_state.chat_manager:
-                                    route_score = bot_state.chat_manager.last_route_score or 0
-
-                            # Get deck name from table manager
-                            deck_name = "Unknown"
-                            if bot_state.table_manager and bot_state.table_manager.state:
-                                deck_name = bot_state.table_manager.state.current_deck_name or "Unknown"
-
-                            # Record to game history
-                            bot_state.stats_repo.record_game(
-                                opponent_name=bot_state.opponent_name,
-                                deck_name=deck_name,
-                                my_side=bot_state.board_state.my_side if bot_state.board_state else "dark",
-                                won=bot_won,
-                                route_score=route_score,
-                                damage=damage,
-                                turns=turns
-                            )
-
-                            # Also update opponent's player stats
-                            # Note: In record_game_result, 'won' is from opponent's perspective
-                            # If bot won, opponent lost
-                            bot_state.stats_repo.record_game_result(
-                                player_name=bot_state.opponent_name,
-                                won=not bot_won,  # Opponent won if bot lost
-                                route_score=route_score
-                            )
-
-                            logger.info(f"📊 Stats recorded: {'Won' if bot_won else 'Lost'} vs {bot_state.opponent_name}")
-                        except Exception as e:
-                            logger.error(f"Error recording game stats: {e}")
+                    # Note: Stats are recorded by chat_manager.on_game_end() above
+                    # (record_game, record_game_result, deck stats, achievements)
 
                     # Notify table manager
                     if bot_state.table_manager:

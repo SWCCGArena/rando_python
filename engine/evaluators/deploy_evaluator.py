@@ -178,6 +178,7 @@ class DeployEvaluator(ActionEvaluator):
         - Starships should ONLY deploy to space locations (0 power at ground)
         - Vehicles are fine at ground locations
         - Weapons should prefer targets WITHOUT existing weapons
+        - PILOTS should prefer unpiloted vehicles/starships over ground locations!
         """
         actions = []
         bs = context.board_state
@@ -197,9 +198,10 @@ class DeployEvaluator(ActionEvaluator):
         is_vehicle = deploying_card and deploying_card.is_vehicle
         is_weapon = deploying_card and deploying_card.is_weapon
         is_device = deploying_card and deploying_card.is_device
+        is_pilot = deploying_card and deploying_card.is_pilot
 
         if deploying_card:
-            logger.debug(f"Deploying {deploying_card.title}: starship={is_starship}, vehicle={is_vehicle}, weapon={is_weapon}")
+            logger.debug(f"Deploying {deploying_card.title}: starship={is_starship}, vehicle={is_vehicle}, weapon={is_weapon}, pilot={is_pilot}")
 
         # Each card_id represents a target where we can deploy (location or card)
         for card_id in context.card_ids:
@@ -239,7 +241,51 @@ class DeployEvaluator(ActionEvaluator):
                     else:
                         action.add_reasoning("Target card not found", -5.0)
 
-                # For starships/vehicles/characters, target is a location
+                # For pilots, check if target is a vehicle/starship that needs a pilot
+                elif is_pilot:
+                    # First check if target is a vehicle/starship we can pilot
+                    target_card = bs.cards_in_play.get(card_id)
+                    if target_card and target_card.owner == bs.my_player_name:
+                        target_meta = get_card(target_card.blueprint_id)
+                        if target_meta and (target_meta.is_vehicle or target_meta.is_starship):
+                            target_name = target_card.card_title or target_card.blueprint_id
+                            action.display_text = f"Pilot aboard {target_name}"
+
+                            # Check if vehicle/starship already has a pilot
+                            has_pilot = self._card_has_pilot(target_card, target_meta)
+
+                            if not has_pilot:
+                                # UNPILOTED vehicle/starship - HIGH PRIORITY!
+                                # This gives the vehicle/starship power
+                                action.add_reasoning("PILOT UNPILOTED VEHICLE/STARSHIP!", +150.0)
+                                logger.info(f"🎯 {deploying_card.title} can pilot unpiloted {target_name}")
+                            else:
+                                # Already has a pilot - lower priority (adds ability but redundant)
+                                action.add_reasoning("Vehicle already has pilot", -20.0)
+                            actions.append(action)
+                            continue  # Skip location check for this target
+
+                    # Not a vehicle/starship, check if it's a location
+                    location = bs.get_location_by_card_id(card_id)
+                    if location:
+                        action.display_text = f"Deploy to {location.site_name or location.system_name or location.blueprint_id}"
+
+                        # Pilot deploying to ground - check if we have unpiloted vehicles there
+                        has_unpiloted = self._has_unpiloted_vehicle_at_location(bs, location)
+                        if has_unpiloted:
+                            # We have an unpiloted vehicle here - deploying pilot to ground wastes potential!
+                            action.add_reasoning("Have unpiloted vehicle here - pilot it instead!", -50.0)
+                        else:
+                            # No unpiloted vehicles - ground deploy is fine
+                            action.add_reasoning("Pilot to ground (no vehicles to pilot)", +5.0)
+
+                        # Score based on strategic value
+                        score = self._score_deployment_location(location, bs, game_strategy)
+                        action.score += score
+                    else:
+                        action.add_reasoning("Target not found", -5.0)
+
+                # For starships/vehicles/characters (non-pilot), target is a location
                 else:
                     location = bs.get_location_by_card_id(card_id)
                     if location:
@@ -424,6 +470,7 @@ class DeployEvaluator(ActionEvaluator):
             return score
 
         # C# Priority 4: Starships/Vehicles without permanent pilot
+        # CRITICAL: Without a pilot, these have 0 POWER - essentially useless!
         if card.is_starship or card.is_vehicle:
             if not card.has_permanent_pilot:
                 # Check if we have space locations (for starships)
@@ -433,11 +480,25 @@ class DeployEvaluator(ActionEvaluator):
                         score += -999.0  # veryBadActionDelta - no space to deploy
                         return score
 
-                # Unpiloted - check if we have pilot in hand
-                if board_state and self._have_pilot_in_hand(board_state, card.deploy_value):
-                    score += 10.0 * card.power_value  # goodActionDelta * power
-                else:
-                    score += -10.0  # badActionDelta - no pilot
+                # Unpiloted vehicle/starship has 0 POWER without a pilot!
+                # Only deploy if we have a pilot we can deploy this turn
+                if board_state:
+                    available_force = board_state.force_pile - card.deploy_value
+                    if self._have_pilot_in_hand(board_state, available_force):
+                        # We can afford to deploy both vehicle AND pilot this turn
+                        # Give moderate bonus based on the card's stats when piloted
+                        piloted_power = card.maneuver or card.armor or "3"  # Estimate power contribution
+                        try:
+                            power_estimate = int(piloted_power) if piloted_power.isdigit() else 3
+                        except:
+                            power_estimate = 3
+                        score += 10.0 + power_estimate * 2
+                        logger.debug(f"{card.title}: unpiloted but have pilot in hand (+{10 + power_estimate * 2})")
+                    else:
+                        # NO PILOT AVAILABLE - deploying this is a waste!
+                        # 0 power means it contributes nothing to battles
+                        score += -200.0  # Strong penalty - don't deploy 0 power cards!
+                        logger.debug(f"{card.title}: NO PILOT - would have 0 power! (-200)")
                 return score
 
         # C# Priority 5: Characters/Vehicles - the main deploy logic
@@ -562,23 +623,34 @@ class DeployEvaluator(ActionEvaluator):
             can_drain = icon_count > 0
 
         # =====================================================================
-        # FREE BATTLEGROUND: No enemy presence - HIGHEST PRIORITY!
-        # We can drain without risk of battle. This is the safest, best option.
+        # FREE BATTLEGROUND: No enemy presence
+        # Good for establishing presence and draining, but don't pile on!
         # =====================================================================
         if not opponent_has_presence:
-            if can_drain:
-                # FREE battleground with drain potential - EXCELLENT!
-                free_bonus = 80.0 + (icon_count * 10.0)
-                score += free_bonus
-                logger.debug(f"Location {loc_name}: +{free_bonus:.1f} (FREE battleground with {icon_count} drain)")
-            elif my_power == 0:
-                # Empty location, no drain - still worth establishing presence
-                score += 15.0
-                logger.debug(f"Location {loc_name}: +15.0 (establish presence)")
+            if my_power == 0:
+                # Empty location - worth establishing presence
+                if can_drain:
+                    # Can drain here - high priority to establish!
+                    score += 80.0 + (icon_count * 10.0)
+                    logger.debug(f"Location {loc_name}: +{80 + icon_count * 10:.1f} (establish presence, can drain {icon_count})")
+                else:
+                    # No drain but still worth having presence
+                    score += 15.0
+                    logger.debug(f"Location {loc_name}: +15.0 (establish presence)")
+            elif my_power < 4:
+                # Light presence - might want to reinforce slightly
+                if can_drain:
+                    score += 30.0
+                    logger.debug(f"Location {loc_name}: +30.0 (light presence {my_power}, can drain)")
+                else:
+                    score += 5.0
+                    logger.debug(f"Location {loc_name}: +5.0 (light presence, no drain)")
             else:
-                # We already have presence, no drain potential, no enemy
-                score += 5.0
-                logger.debug(f"Location {loc_name}: +5.0 (we control, no drain)")
+                # We already have solid presence (4+ power) with no enemy
+                # DON'T pile on - deploy elsewhere!
+                overkill_penalty = -30.0 - (my_power - 4) * 5
+                score += overkill_penalty
+                logger.debug(f"Location {loc_name}: {overkill_penalty:.1f} (OVERKILL - already {my_power} power, no enemy!)")
 
             # Use GameStrategy priority for free locations
             if game_strategy:
@@ -740,3 +812,49 @@ class DeployEvaluator(ActionEvaluator):
         if match:
             return match.group(1)
         return ""
+
+    def _card_has_pilot(self, card, card_meta) -> bool:
+        """
+        Check if a vehicle/starship already has a pilot.
+
+        A vehicle/starship is piloted if:
+        1. It has the permanent pilot icon, OR
+        2. It has a pilot character attached/aboard
+
+        Args:
+            card: The card in play (from board_state.cards_in_play)
+            card_meta: The card metadata (from card_loader)
+
+        Returns:
+            True if the card has a pilot
+        """
+        # Check for permanent pilot
+        if card_meta and card_meta.has_permanent_pilot:
+            return True
+
+        # Check for attached pilot characters
+        if hasattr(card, 'attached_cards'):
+            for attached in card.attached_cards:
+                attached_meta = get_card(attached.blueprint_id)
+                if attached_meta and attached_meta.is_pilot:
+                    return True
+
+        return False
+
+    def _has_unpiloted_vehicle_at_location(self, board_state, location) -> bool:
+        """
+        Check if we have any unpiloted vehicles/starships at a location.
+
+        Args:
+            board_state: Current board state
+            location: The location to check
+
+        Returns:
+            True if we have an unpiloted vehicle/starship there
+        """
+        for card in location.my_cards:
+            card_meta = get_card(card.blueprint_id)
+            if card_meta and (card_meta.is_vehicle or card_meta.is_starship):
+                if not self._card_has_pilot(card, card_meta):
+                    return True
+        return False

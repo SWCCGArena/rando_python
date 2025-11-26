@@ -147,8 +147,8 @@ class DecisionHandler:
         selectable = []
         min_value = 0
         max_value = 0
-
         default_value = 0
+        no_pass = True  # Default: must select an action (cannot pass)
 
         for param in parameters:
             name = param.get('name', '')
@@ -169,6 +169,8 @@ class DecisionHandler:
                 max_value = int(value)
             elif name == 'defaultValue':
                 default_value = int(value)
+            elif name == 'noPass':
+                no_pass = value.lower() == 'true'
 
         # Build DecisionOptions
         options = []
@@ -227,6 +229,7 @@ class DecisionHandler:
             min_value=min_value,
             max_value=max_value,
             default_value=default_value,
+            no_pass=no_pass,
         )
 
         # Build BrainBoardState (minimal - StaticBrain uses engine BoardState directly)

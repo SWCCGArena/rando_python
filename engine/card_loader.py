@@ -145,8 +145,16 @@ class Card:
 
     @property
     def has_permanent_pilot(self) -> bool:
-        """Check if starship has Permanent Pilot icon"""
-        return any('permanent' in str(icon).lower() and 'pilot' in str(icon).lower() for icon in self.icons)
+        """
+        Check if starship/vehicle has a permanent pilot.
+
+        On starships and vehicles, the "pilot" icon means the ship has a
+        permanent pilot built-in (e.g., "Boba Fett In Slave I" has pilot icon).
+        Ships without this icon (e.g., "Jabba's Sail Barge") need an external pilot.
+        """
+        if not (self.is_starship or self.is_vehicle):
+            return False
+        return any('pilot' in str(icon).lower() for icon in self.icons)
 
     @property
     def is_interior(self) -> bool:

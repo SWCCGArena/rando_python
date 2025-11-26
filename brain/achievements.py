@@ -684,8 +684,9 @@ class AchievementTracker:
             if msg:
                 messages.append(msg)
 
-        # Achievement count achievement
-        if player_stats.achievement_count >= 50:
+        # Achievement count achievement - use actual count from Achievement table
+        actual_achievement_count = self.stats_repo.get_achievement_count(opponent_name)
+        if actual_achievement_count >= 50:
             msg = self._award_achievement('achievement_perfectionist',
                                          ACHIEVEMENTS['achievement_perfectionist'],
                                          opponent_name)

@@ -245,7 +245,7 @@ class ChatManager:
         if damage <= 0:
             return
 
-        # Track highest damage this game
+        # Track highest damage this game (for game-end stats)
         if damage > self.highest_damage_this_game:
             self.highest_damage_this_game = damage
 
@@ -262,17 +262,15 @@ class ChatManager:
         previous_record = None
 
         if self.stats_repo and self.opponent_name:
-            # Check global record
+            # Check and update global record (saves immediately if new record)
             is_new_global, previous_holder = self.stats_repo.check_and_update_global_record(
                 'damage', damage, self.opponent_name
             )
 
-            # Check personal record
-            player_stats = self.stats_repo.get_player_stats(self.opponent_name)
-            if player_stats:
-                previous_record = player_stats.best_damage
-                if damage > previous_record:
-                    is_new_personal = True
+            # Check and update personal record (saves immediately if new record)
+            is_new_personal, previous_record = self.stats_repo.check_and_update_personal_damage(
+                self.opponent_name, damage
+            )
 
         # Get damage message
         if self.brain and not self.damage_this_battle_reported:
@@ -316,36 +314,17 @@ class ChatManager:
         new_total_score = 0
         is_new_top_astrogator = False
 
-        if self.stats_repo and self.opponent_name and won:
-            # Update deck stats (global high score for this deck)
-            if self.deck_name:
-                deck_stats, is_new_deck_record = self.stats_repo.update_deck_score(
-                    self.deck_name, self.opponent_name, route_score
-                )
-                if not is_new_deck_record and deck_stats:
-                    previous_holder = deck_stats.best_player
-                    previous_score = deck_stats.best_score
-
-                # Update player's score on this specific deck
-                self.stats_repo.update_player_deck_score(
-                    self.opponent_name, self.deck_name, route_score
-                )
-
-            # Update player stats
+        if self.stats_repo and self.opponent_name:
+            # Always update player stats and game history (regardless of who won)
             player = self.stats_repo.record_game_result(
                 player_name=self.opponent_name,
                 won=won,
-                route_score=route_score,
+                route_score=route_score if won else 0,  # Only count route score if opponent won
                 damage=self.highest_damage_this_game,
                 force_remaining=force_remaining,
                 time_seconds=duration_seconds
             )
             new_total_score = player.total_ast_score
-
-            # Check global astrogation record
-            is_new_top_astrogator, _ = self.stats_repo.check_and_update_global_record(
-                'ast_score', new_total_score, self.opponent_name
-            )
 
             # Record game to history
             self.stats_repo.record_game(
@@ -353,12 +332,33 @@ class ChatManager:
                 deck_name=self.deck_name or "Unknown",
                 my_side=self.my_side or "unknown",
                 won=won,
-                route_score=route_score,
+                route_score=route_score if won else 0,
                 damage=self.highest_damage_this_game,
                 force_remaining=force_remaining,
                 turns=self.current_turn,
                 duration_seconds=duration_seconds
             )
+
+            # Route score / deck records only apply when opponent won (beat the bot's deck)
+            if won:
+                # Update deck stats (global high score for this deck)
+                if self.deck_name:
+                    deck_stats, is_new_deck_record = self.stats_repo.update_deck_score(
+                        self.deck_name, self.opponent_name, route_score
+                    )
+                    if not is_new_deck_record and deck_stats:
+                        previous_holder = deck_stats.best_player
+                        previous_score = deck_stats.best_score
+
+                    # Update player's score on this specific deck
+                    self.stats_repo.update_player_deck_score(
+                        self.opponent_name, self.deck_name, route_score
+                    )
+
+                # Check global astrogation record
+                is_new_top_astrogator, _ = self.stats_repo.check_and_update_global_record(
+                    'ast_score', new_total_score, self.opponent_name
+                )
 
             # Check game end achievements
             if self.achievement_tracker:

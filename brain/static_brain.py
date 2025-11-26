@@ -175,7 +175,7 @@ class StaticBrain(Brain):
             is_my_turn=brain_context.board_state.current_player == "me" if hasattr(brain_context.board_state, 'current_player') else True,
             action_ids=action_ids,
             action_texts=action_texts,
-            no_pass=req.min_value > 0,  # Can pass if min=0, must choose if min>0
+            no_pass=req.no_pass,  # From XML noPass parameter (True = must select, False = can pass)
             card_ids=card_ids,
             blueprints=blueprints,
             selectable=selectable,

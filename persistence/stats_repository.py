@@ -162,6 +162,38 @@ class StatsRepository:
                 session.expunge(p)
             return players
 
+    def check_and_update_personal_damage(self, player_name: str, damage: int) -> Tuple[bool, int]:
+        """
+        Check if damage beats player's personal best and update immediately if so.
+
+        Args:
+            player_name: Player's name
+            damage: Damage dealt
+
+        Returns:
+            Tuple of (is_new_record, previous_best)
+        """
+        with session_scope() as session:
+            player = session.query(PlayerStats).filter_by(player_name=player_name).first()
+
+            if not player:
+                # Create player record with this damage as their best
+                player = PlayerStats(player_name=player_name, best_damage=damage)
+                session.add(player)
+                session.commit()
+                logger.info(f"Created player {player_name} with best_damage={damage}")
+                return True, 0
+
+            previous_best = player.best_damage
+
+            if damage > previous_best:
+                player.best_damage = damage
+                session.commit()
+                logger.info(f"New personal damage record for {player_name}: {damage} (was {previous_best})")
+                return True, previous_best
+
+            return False, previous_best
+
     # =========================================================================
     # Deck Stats (Astrogator Routes)
     # =========================================================================
@@ -210,8 +242,7 @@ class StatsRepository:
                     games_played=0,
                     total_score=0,
                     best_score=0,
-                    best_score_player=None,
-                    best_score_date=None
+                    best_player=None
                 )
                 session.add(deck)
 
@@ -395,9 +426,12 @@ class StatsRepository:
             achievement = Achievement(player_name=player_name, achievement_key=achievement_key)
             session.add(achievement)
 
-            # Update player's achievement count
+            # Update player's achievement count (create player if doesn't exist)
             player = session.query(PlayerStats).filter_by(player_name=player_name).first()
-            if player:
+            if not player:
+                player = PlayerStats(player_name=player_name, achievement_count=1)
+                session.add(player)
+            else:
                 player.achievement_count += 1
 
             session.commit()
@@ -511,3 +545,39 @@ class StatsRepository:
                 'unique_players': total_players,
                 'total_achievements_awarded': total_achievements,
             }
+
+    # =========================================================================
+    # Data Repair / Maintenance
+    # =========================================================================
+
+    def repair_achievement_counts(self) -> int:
+        """
+        Sync denormalized achievement_count with actual Achievement table counts.
+
+        Call this at startup or after data migration to fix any mismatches.
+
+        Returns:
+            Number of players whose counts were repaired
+        """
+        repaired = 0
+        with session_scope() as session:
+            # Get all players
+            players = session.query(PlayerStats).all()
+
+            for player in players:
+                # Get actual count from Achievement table
+                actual_count = session.query(Achievement).filter_by(
+                    player_name=player.player_name
+                ).count()
+
+                if player.achievement_count != actual_count:
+                    logger.info(f"Repairing achievement_count for {player.player_name}: "
+                               f"{player.achievement_count} -> {actual_count}")
+                    player.achievement_count = actual_count
+                    repaired += 1
+
+            if repaired > 0:
+                session.commit()
+                logger.info(f"Repaired achievement_count for {repaired} players")
+
+        return repaired

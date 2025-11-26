@@ -190,6 +190,9 @@ class DecisionRequest:
     max_value: int = 0
     default_value: int = 0  # Default value for INTEGER decisions
 
+    # For ACTION_CHOICE decisions - can we pass/decline?
+    no_pass: bool = True  # True = must select an action, False = can pass
+
 
 @dataclass
 class GameHistory:
