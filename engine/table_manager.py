@@ -14,14 +14,55 @@ Design Goal: Bot should maintain a table 24/7 without human intervention.
 """
 
 import hashlib
+import json
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, List, Callable
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+# File to persist current table info (survives restarts)
+TABLE_STATE_FILE = Path(__file__).parent.parent / 'data' / 'current_table.json'
+
+
+def _save_table_state(table_id: str, deck_name: str) -> None:
+    """Persist current table info to survive restarts."""
+    try:
+        TABLE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {'table_id': table_id, 'deck_name': deck_name}
+        with open(TABLE_STATE_FILE, 'w') as f:
+            json.dump(data, f)
+        logger.debug(f"Saved table state: {data}")
+    except Exception as e:
+        logger.warning(f"Failed to save table state: {e}")
+
+
+def _load_table_state() -> Optional[dict]:
+    """Load persisted table info (if any)."""
+    try:
+        if TABLE_STATE_FILE.exists():
+            with open(TABLE_STATE_FILE, 'r') as f:
+                data = json.load(f)
+            logger.debug(f"Loaded table state: {data}")
+            return data
+    except Exception as e:
+        logger.warning(f"Failed to load table state: {e}")
+    return None
+
+
+def _clear_table_state() -> None:
+    """Clear persisted table state (when game ends)."""
+    try:
+        if TABLE_STATE_FILE.exists():
+            TABLE_STATE_FILE.unlink()
+            logger.debug("Cleared table state file")
+    except Exception as e:
+        logger.warning(f"Failed to clear table state: {e}")
 
 
 def get_astrogation_chart_number(deck_name: str) -> str:
@@ -168,11 +209,19 @@ class TableManager:
             self.state.current_table_id = my_table.table_id
             self.state.consecutive_failures = 0  # Reset failures
 
+            # Try to recover deck name from persisted state (for restart recovery)
+            if not self.state.current_deck_name:
+                saved_state = _load_table_state()
+                if saved_state and saved_state.get('table_id') == my_table.table_id:
+                    self.state.current_deck_name = saved_state.get('deck_name')
+                    logger.info(f"Recovered deck name from persisted state: {self.state.current_deck_name}")
+
             # Check table status
             if my_table.status == 'finished':
                 logger.info("Table finished - need new table")
                 self.state.state = TableState.GAME_ENDED
                 self.state.current_table_id = None
+                _clear_table_state()  # Clean up persisted state
                 return 'create_table'
 
             # Check if game started
@@ -287,6 +336,9 @@ class TableManager:
                 self.state.state = TableState.WAITING
                 self.state.consecutive_failures = 0
 
+                # Persist state so we can recover deck name after restart
+                _save_table_state(table_id, deck_name)
+
                 if self._on_table_created:
                     self._on_table_created(table_id, deck_name)
 
@@ -347,6 +399,8 @@ class TableManager:
         self.state.state = TableState.GAME_ENDED
         self.state.games_played += 1
         self.state.current_table_id = None
+        self.state.current_deck_name = None  # Clear for next game
+        _clear_table_state()  # Clean up persisted state
         logger.info(f"Game ended. Total games played: {self.state.games_played}")
 
     def reset(self) -> None:
