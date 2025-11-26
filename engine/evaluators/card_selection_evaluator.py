@@ -85,6 +85,9 @@ class CardSelectionEvaluator(ActionEvaluator):
             actions = self._evaluate_hand_selection(context)
         elif "choose" in text_lower and "location" in text_lower and "deploy" in text_lower:
             actions = self._evaluate_location_deploy(context)
+        elif "choose target" in text_lower:
+            # Weapon/ability target selection - MUST select, don't cancel!
+            actions = self._evaluate_target_selection(context)
         else:
             # Unknown card selection - create neutral actions
             actions = self._evaluate_unknown(context)
@@ -534,7 +537,7 @@ class CardSelectionEvaluator(ActionEvaluator):
                     if card_meta.is_starship or card_meta.is_vehicle:
                         if not prefer_forfeit:
                             action.add_reasoning("Ship/vehicle - prefer force loss", -15.0)
-                    if card_meta.uniqueness and "*" in card_meta.uniqueness:
+                    if card_meta.is_unique:
                         action.add_reasoning("Unique card - valuable", -10.0)
 
             actions.append(action)
@@ -647,6 +650,74 @@ class CardSelectionEvaluator(ActionEvaluator):
                 display_text=f"Deploy to location {card_id}"
             )
             action.add_reasoning("Location deployment", GOOD_DELTA)
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_target_selection(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose a target for a weapon or ability.
+
+        IMPORTANT: Once we've decided to use an ability, we MUST select a target.
+        Canceling wastes the action and can cause game flow issues.
+
+        Prefer:
+        - Enemy cards (always target enemies!)
+        - High-value targets (more power/forfeit = more damage to opponent)
+        - Characters over droids/vehicles (usually more valuable)
+        """
+        actions = []
+        bs = context.board_state
+        my_name = bs.my_player_name if bs else "rando_cal"
+        from ..card_loader import get_card
+
+        logger.info(f"Target selection: {len(context.card_ids)} potential targets")
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=100.0,  # High base score - we WANT to select a target
+                display_text=f"Target {card_id}"
+            )
+
+            if bs:
+                card = bs.cards_in_play.get(card_id)
+                if card:
+                    action.display_text = f"Target {card.card_title or card_id}"
+
+                    # CRITICAL: Always prefer enemy targets
+                    if card.owner != my_name:
+                        action.add_reasoning("ENEMY target - good!", +50.0)
+
+                        # Prefer high-value enemy cards
+                        card_meta = get_card(card.blueprint_id) if card.blueprint_id else None
+                        if card_meta:
+                            # Target high power cards
+                            power = card_meta.power_value or 0
+                            if power >= 5:
+                                action.add_reasoning(f"High power ({power})", +20.0)
+                            elif power >= 3:
+                                action.add_reasoning(f"Medium power ({power})", +10.0)
+
+                            # Target unique characters (more valuable)
+                            if card_meta.is_unique:
+                                action.add_reasoning("Unique card - valuable target", +15.0)
+
+                            # Target characters over other card types
+                            if card_meta.is_character:
+                                action.add_reasoning("Character target", +5.0)
+                            elif card_meta.is_starship:
+                                action.add_reasoning("Starship target", +3.0)
+                    else:
+                        # Our own card - DON'T target if we have enemy options
+                        action.add_reasoning("OUR card - avoid targeting!", -200.0)
+                else:
+                    # Card not in our tracking - still give it a reasonable score
+                    action.add_reasoning("Unknown target - proceed", +10.0)
+            else:
+                action.add_reasoning("No board state - select anyway", +10.0)
+
             actions.append(action)
 
         return actions
