@@ -121,7 +121,7 @@ class BotState:
         """Initialize table manager after client is ready"""
         if self.client and not self.table_manager:
             table_config = TableManagerConfig(
-                table_name=config.TABLE_NAME,
+                table_name_prefix=config.TABLE_NAME,
                 create_delay_seconds=2.0,
                 retry_delay_seconds=5.0,
             )
