@@ -1007,20 +1007,6 @@ def health():
     }
 
 
-@app.route('/debug')
-def debug():
-    """Debug endpoint to verify nginx proxy is working"""
-    from flask import request
-    logger.info(f"Debug request received: {request.url}")
-    return {
-        'status': 'ok',
-        'url': request.url,
-        'path': request.path,
-        'headers': dict(request.headers),
-        'message': 'Flask is receiving requests properly'
-    }
-
-
 @app.route('/board_state')
 def board_state_view():
     """View current board state (for debugging)"""

@@ -1,9 +1,10 @@
 import os
 from dataclasses import dataclass
 
-# Try to load secrets from secrets.py (not committed to git)
+# Try to load credentials from credentials.py (not committed to git)
+# Note: Do NOT name this file "secrets.py" - it shadows Python's stdlib secrets module
 try:
-    from secrets import GEMP_PASSWORD as _SECRETS_PASSWORD
+    from credentials import GEMP_PASSWORD as _SECRETS_PASSWORD
 except ImportError:
     _SECRETS_PASSWORD = None
 
@@ -20,7 +21,7 @@ class Config:
     # GEMP server settings
     GEMP_SERVER_URL: str = os.environ.get('GEMP_SERVER_URL', 'http://localhost:8082/gemp-swccg-server/')
     GEMP_USERNAME: str = os.environ.get('GEMP_USERNAME', 'rando_cal')
-    # Password priority: env var > secrets.py > empty (will fail login)
+    # Password priority: env var > credentials.py > empty (will fail login)
     GEMP_PASSWORD: str = os.environ.get('GEMP_PASSWORD', _SECRETS_PASSWORD or '')
 
     # Bot settings

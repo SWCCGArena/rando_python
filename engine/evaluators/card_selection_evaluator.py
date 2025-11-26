@@ -138,14 +138,16 @@ class CardSelectionEvaluator(ActionEvaluator):
         """
         Choose where to deploy a card.
 
-        Consider:
-        - Power differential at location
-        - Force icons
-        - Whether we already have presence
-        - Whether enemy is present
+        Consider (in priority order):
+        1. Force icons - MORE ICONS = BETTER (for force generation)
+        2. Force drain potential (opponent icons = we can drain there)
+        3. Power differential at location
+        4. Whether we already have presence
+        5. Whether enemy is present
         """
         actions = []
         bs = context.board_state
+        from ..card_loader import get_card
 
         for card_id in context.card_ids:
             action = EvaluatedAction(
@@ -167,6 +169,50 @@ class CardSelectionEvaluator(ActionEvaluator):
 
                         action.display_text = f"Deploy to {loc.site_name or loc.system_name}"
 
+                        # =====================================================
+                        # FORCE ICONS - Most important factor for economy!
+                        # Controlling more icons = more force activation = better
+                        # =====================================================
+                        location_metadata = get_card(loc.blueprint_id) if loc.blueprint_id else None
+                        if location_metadata:
+                            # Determine which icons are "mine" based on side
+                            my_side = bs.my_side or "dark"
+                            if my_side == "dark":
+                                my_icons = location_metadata.dark_side_icons or 0
+                                their_icons = location_metadata.light_side_icons or 0
+                            else:
+                                my_icons = location_metadata.light_side_icons or 0
+                                their_icons = location_metadata.dark_side_icons or 0
+
+                            # BIG bonus for locations with more of my force icons
+                            # Each icon = 1 force per turn = very valuable!
+                            if my_icons > 0:
+                                icon_bonus = my_icons * GOOD_DELTA * 2  # +20 per icon
+                                action.add_reasoning(f"{my_icons} {my_side} icon(s) for activation", icon_bonus)
+
+                            # Bonus for opponent icons (force drain potential)
+                            if their_icons > 0:
+                                drain_bonus = their_icons * GOOD_DELTA  # +10 per icon
+                                action.add_reasoning(f"{their_icons} opponent icon(s) = drain potential", drain_bonus)
+
+                        # Also check runtime icon data from board state
+                        elif loc.my_icons or loc.their_icons:
+                            try:
+                                my_icon_count = int(loc.my_icons.replace("*", "").strip() or "0") if loc.my_icons else 0
+                                their_icon_count = int(loc.their_icons.replace("*", "").strip() or "0") if loc.their_icons else 0
+
+                                if my_icon_count > 0:
+                                    icon_bonus = my_icon_count * GOOD_DELTA * 2
+                                    action.add_reasoning(f"{my_icon_count} icon(s) for activation", icon_bonus)
+                                if their_icon_count > 0:
+                                    drain_bonus = their_icon_count * GOOD_DELTA
+                                    action.add_reasoning(f"{their_icon_count} opponent icon(s) = drain", drain_bonus)
+                            except ValueError:
+                                pass
+
+                        # =====================================================
+                        # Power differential - secondary consideration
+                        # =====================================================
                         if their_power > 0:
                             # Enemy present
                             power_diff = my_power - their_power
