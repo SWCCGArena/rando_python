@@ -160,15 +160,24 @@ class ActionTextEvaluator(ActionEvaluator):
             if action_text == "Activate Force":
                 action.action_type = ActionType.ACTIVATE
                 if bs:
-                    # Check if we still need to activate more
-                    how_much_we_want = bs.force_to_activate(bs.activation)
-                    if bs.force_pile < how_much_we_want:
-                        action.score = VERY_GOOD_DELTA
-                        action.add_reasoning("Need to activate more force", VERY_GOOD_DELTA)
+                    # ALMOST ALWAYS activate force - it costs nothing!
+                    # Only skip if reserve deck is critically low (< 5 cards)
+                    reserve_size = bs.reserve_deck if hasattr(bs, 'reserve_deck') else 20
+                    force_activated = getattr(bs, 'force_activated_this_turn', 0)
+
+                    if reserve_size < 5:
+                        # Very low reserve - save for destiny draws
+                        action.score = BAD_DELTA
+                        action.add_reasoning(f"Reserve critically low ({reserve_size}) - save for destiny", BAD_DELTA)
+                    elif force_activated >= bs.activation:
+                        # Already activated all available this turn
+                        action.score = 0.0
+                        action.add_reasoning("Already activated full generation this turn", 0.0)
                     else:
-                        # We have enough, rank low to reserve for destiny
-                        action.score = VERY_BAD_DELTA
-                        action.add_reasoning("Reserving force for destiny draws", VERY_BAD_DELTA)
+                        # We should activate! Force is free and useful.
+                        remaining_to_activate = bs.activation - force_activated
+                        action.score = VERY_GOOD_DELTA
+                        action.add_reasoning(f"Activate force ({remaining_to_activate} of {bs.activation} remaining)", VERY_GOOD_DELTA)
                 else:
                     action.score = GOOD_DELTA
                     action.add_reasoning("Default activate", GOOD_DELTA)
@@ -370,10 +379,13 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.add_reasoning("Known dangerous card", VERY_BAD_DELTA)
 
             # ========== Draw Into Hand ==========
+            # Note: DrawEvaluator handles detailed scoring for draw actions,
+            # including hand size caps and life force preservation.
+            # We just mark the action type here - don't add score to avoid overriding DrawEvaluator's logic.
             elif action_text == "Draw card into hand from Force Pile":
                 action.action_type = ActionType.DRAW
-                action.score = GOOD_DELTA
-                action.add_reasoning("Drawing cards is good", GOOD_DELTA)
+                # Let DrawEvaluator handle scoring - don't add score here
+                action.add_reasoning("Draw option (see DrawEvaluator)", 0.0)
 
             # ========== Movement Actions ==========
             # Note: MoveEvaluator handles detailed scoring for movement.

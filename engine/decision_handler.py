@@ -276,20 +276,25 @@ class DecisionHandler:
 
             if card_id and actual_blueprint and actual_blueprint != "inPlay":
                 from engine.card_loader import get_card
-                card_meta = get_card(actual_blueprint)
-                if card_meta:
-                    card_info = CardInfo(
-                        card_id=card_id,
-                        blueprint_id=actual_blueprint,
-                        title=card_meta.title,
-                        type=card_meta.card_type,
-                        power=card_meta.power_value,
-                        ability=card_meta.ability_value,
-                        deploy_cost=card_meta.deploy_value,
-                        icons=[str(icon) for icon in card_meta.icons],
-                    )
+                # Skip metadata lookup for special GEMP IDs:
+                # -1_2 is the "face-down/hidden card" marker (e.g., top of Force Pile)
+                if actual_blueprint.startswith("-1_"):
+                    logger.debug(f"Skipping metadata for hidden card marker {actual_blueprint}")
                 else:
-                    logger.warning(f"⚠️  Could not get metadata for blueprint {actual_blueprint} (cardId={card_id})")
+                    card_meta = get_card(actual_blueprint)
+                    if card_meta:
+                        card_info = CardInfo(
+                            card_id=card_id,
+                            blueprint_id=actual_blueprint,
+                            title=card_meta.title,
+                            type=card_meta.card_type,
+                            power=card_meta.power_value,
+                            ability=card_meta.ability_value,
+                            deploy_cost=card_meta.deploy_value,
+                            icons=[str(icon) for icon in card_meta.icons],
+                        )
+                    else:
+                        logger.warning(f"⚠️  Could not get metadata for blueprint {actual_blueprint} (cardId={card_id})")
 
             option = DecisionOption(
                 option_id=option_id,

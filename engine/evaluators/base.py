@@ -198,21 +198,27 @@ class PassEvaluator(ActionEvaluator):
         if context.board_state:
             bs = context.board_state
 
-            if bs.force_pile < 3:
+            # CRITICAL: Don't apply "save force" logic during ACTIVATE decisions!
+            # Activating force costs NOTHING - it just moves cards from reserve to force pile.
+            # We should almost always activate all available force.
+            is_activate_decision = "Activate" in (context.decision_text or "")
+
+            if bs.force_pile < 3 and not is_activate_decision:
                 action.add_reasoning("Low on Force - prefer to pass", +5.0)
 
             if bs.reserve_deck_low():
                 action.add_reasoning("Reserve deck low - conserve cards", +3.0)
 
             # Hand management: If hand is small, save force for drawing
-            # Standard hand should be 7+ cards; prioritize drawing if below
+            # BUT NOT DURING ACTIVATE - activating gives us MORE force to draw with!
             hand_size = bs.hand_size if bs.hand_size > 0 else len(bs.cards_in_hand)
-            if hand_size < 5:
-                # Small hand - strongly prefer passing to save force for draw phase
-                action.add_reasoning(f"Small hand ({hand_size}) - save force for drawing", +15.0)
-            elif hand_size < 7:
-                # Below target hand size - moderately prefer passing
-                action.add_reasoning(f"Hand below target ({hand_size}/7) - conserve force", +8.0)
+            if not is_activate_decision:
+                if hand_size < 5:
+                    # Small hand - strongly prefer passing to save force for draw phase
+                    action.add_reasoning(f"Small hand ({hand_size}) - save force for drawing", +15.0)
+                elif hand_size < 7:
+                    # Below target hand size - moderately prefer passing
+                    action.add_reasoning(f"Hand below target ({hand_size}/7) - conserve force", +8.0)
 
             # During Move phase, be more conservative to save force for drawing
             phase_lower = (context.phase or "").lower()
