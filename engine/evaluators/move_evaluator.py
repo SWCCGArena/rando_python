@@ -147,8 +147,56 @@ class MoveEvaluator(ActionEvaluator):
                 return
 
         # Flee logic: their power > our power + 2
+        # The worse the disadvantage, the more we want to flee!
+        # BUT: Check if fleeing is actually beneficial (destination analysis)
         if their_power - my_power > POWER_DIFF_FOR_FLEE and their_power > 0:
-            action.add_reasoning(f"Enemy stronger ({their_power} vs {my_power}) - flee", GOOD_DELTA)
+            disadvantage = their_power - my_power
+
+            # Analyze flee options to see if it's worth it
+            loc = board_state.locations[loc_idx] if loc_idx < len(board_state.locations) else None
+            is_space = loc.is_space if loc else False
+            flee_analysis = board_state.analyze_flee_options(loc_idx, is_space)
+
+            # Check movement cost - can we afford to move everyone?
+            if not flee_analysis['can_afford']:
+                movement_cost = flee_analysis['movement_cost']
+                action.add_reasoning(f"Want to flee but can't afford ({movement_cost} Force needed, have {board_state.force_pile})", BAD_DELTA)
+                logger.info(f"🚫 Can't afford to flee: need {movement_cost} Force, have {board_state.force_pile}")
+                return
+
+            # Check if destination is actually better
+            if flee_analysis['can_flee']:
+                best_dest = flee_analysis['best_destination']
+                if best_dest is not None:
+                    dest_their_power = board_state.their_power_at_location(best_dest)
+
+                    if dest_their_power >= their_power:
+                        # Destination is WORSE or same - don't flee into more trouble!
+                        action.add_reasoning(f"Destination has {dest_their_power} enemies (same or worse) - don't flee!", BAD_DELTA * 2)
+                        logger.info(f"🚫 Not fleeing: destination has {dest_their_power} enemies vs {their_power} here")
+                        return
+                    elif dest_their_power > 0:
+                        # Destination has some enemies but fewer
+                        if disadvantage >= 6:
+                            action.add_reasoning(f"FLEEING to location with fewer enemies ({dest_their_power} vs {their_power})", VERY_GOOD_DELTA)
+                            logger.info(f"🏃 Fleeing from {their_power} enemies to {dest_their_power}")
+                        else:
+                            action.add_reasoning(f"Fleeing to location with fewer enemies ({dest_their_power} vs {their_power})", GOOD_DELTA * 2)
+                        return
+                    else:
+                        # Destination is empty - great!
+                        if disadvantage >= 6:
+                            action.add_reasoning(f"FLEEING to EMPTY location (escaping {their_power} enemies!)", VERY_GOOD_DELTA)
+                            logger.info(f"🏃 Fleeing from {their_power} enemies to empty location!")
+                        elif disadvantage >= 4:
+                            action.add_reasoning(f"Fleeing to empty location (escaping {their_power})", GOOD_DELTA * 3)
+                        else:
+                            action.add_reasoning(f"Moving to empty location (enemy has {their_power})", GOOD_DELTA)
+                        return
+
+            # Can't find valid flee destination
+            reason = flee_analysis['reason']
+            action.add_reasoning(f"Want to flee but no good destination: {reason}", BAD_DELTA)
             return
 
         # Spread out logic: we have massive power advantage

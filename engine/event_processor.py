@@ -435,9 +435,14 @@ class EventProcessor:
         """
         import re
 
+        from .decision_handler import DecisionHandler
+
         phase = event.get('phase', '')
         old_phase = self.board_state.current_phase
         self.board_state.current_phase = phase
+
+        # Notify decision tracker of phase change (resets loop detection)
+        DecisionHandler.notify_phase_change(phase)
 
         # Parse turn number from phase string: "Deploy (turn #2)" -> 2
         turn_match = re.search(r'turn #(\d+)', phase)

@@ -649,3 +649,11 @@ footer {
     font-weight: bold;
     color: #4a9eff;
 }
+
+/* Card ID styling for tracking verification */
+.card-id {
+    color: #ff9800;
+    font-family: monospace;
+    font-size: 0.85em;
+    margin-left: 5px;
+}

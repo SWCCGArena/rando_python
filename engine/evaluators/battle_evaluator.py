@@ -95,15 +95,19 @@ class BattleEvaluator(ActionEvaluator):
                 if card_id:
                     # Find the location
                     card = bs.cards_in_play.get(card_id)
-                    if card:
+                    if card and card.location_index >= 0:
                         loc_idx = card.location_index
                         self._rank_battle_at_location(action, bs, loc_idx, game_strategy)
-                    else:
-                        # Use first location as fallback
-                        if bs.locations:
-                            self._rank_battle_at_location(action, bs, 0, game_strategy)
+                    elif bs.locations:
+                        # Use first valid location as fallback
+                        for idx, loc in enumerate(bs.locations):
+                            if loc:
+                                self._rank_battle_at_location(action, bs, idx, game_strategy)
+                                break
                         else:
-                            action.add_reasoning("No location info", 0.0)
+                            action.add_reasoning("No valid location for battle", 0.0)
+                    else:
+                        action.add_reasoning("No location info", 0.0)
                 else:
                     action.add_reasoning("No card ID for battle location", 0.0)
             else:
@@ -126,6 +130,7 @@ class BattleEvaluator(ActionEvaluator):
         their_power = board_state.their_power_at_location(loc_idx)
         my_ability = board_state.my_ability_at_location(loc_idx)
         my_card_count = board_state.my_card_count_at_location(loc_idx) if hasattr(board_state, 'my_card_count_at_location') else 0
+        their_card_count = board_state.their_card_count_at_location(loc_idx) if hasattr(board_state, 'their_card_count_at_location') else 0
 
         power_diff = my_power - their_power
         ability_test = (my_ability >= ABILITY_TEST_HIGH or my_card_count >= ABILITY_TEST_LOW)
@@ -135,6 +140,34 @@ class BattleEvaluator(ActionEvaluator):
 
         if reserve_count <= 0:
             action.add_reasoning("No reserve cards for destiny - avoid battle", VERY_BAD_DELTA)
+            return
+
+        # =================================================================
+        # SPECIAL CASE: 1-on-1 battle where we have less power
+        # This is ALWAYS bad - we'll lose our character and gain nothing
+        # Should flee instead if possible
+        # =================================================================
+        if my_card_count == 1 and their_card_count == 1 and power_diff < 0:
+            loc = board_state.locations[loc_idx] if loc_idx < len(board_state.locations) else None
+            is_space = loc.is_space if loc else False
+
+            # Check if we can flee
+            flee_analysis = board_state.analyze_flee_options(loc_idx, is_space)
+
+            if flee_analysis['can_flee'] and flee_analysis['can_afford']:
+                action.add_reasoning(
+                    f"1-on-1 LOSING BATTLE ({my_power} vs {their_power}) - FLEE INSTEAD!",
+                    VERY_BAD_DELTA
+                )
+                logger.info(f"🏃 1-on-1 losing battle: {my_power} vs {their_power} - should flee!")
+            else:
+                # Can't flee - this is a bad situation but battle might be forced
+                reason = flee_analysis.get('reason', 'unknown')
+                action.add_reasoning(
+                    f"1-on-1 losing ({my_power} vs {their_power}), can't flee ({reason}) - bad situation",
+                    BAD_DELTA * 3
+                )
+                logger.warning(f"⚔️ 1-on-1 losing battle, can't flee: {reason}")
             return
 
         # Use GameStrategy threat assessment if available
@@ -158,18 +191,48 @@ class BattleEvaluator(ActionEvaluator):
                 action.add_reasoning(f"Terrible odds ({power_diff}) - definitely avoid!", VERY_BAD_DELTA)
                 return
 
-        # Fallback: Original C# battle logic
-        # Battle logic from C# RankBattleAction
-        # Check conditions in order from C#
-        if power_diff >= -POWER_DIFF_FOR_BATTLE and ability_test:
-            # diff >= -4 with ability test passed
-            action.add_reasoning(f"Power diff {power_diff} with ability {my_ability} - good chance", GOOD_DELTA)
-        elif power_diff > POWER_DIFF_FOR_BATTLE or (ability_test and power_diff >= 0):
-            # diff > 4 OR (ability test and diff >= 0) -> can crush
-            action.add_reasoning(f"Power diff {power_diff} - can crush opponent", GOOD_DELTA)
-        elif power_diff > 2:
-            # diff > 2 but failed ability test - risky
-            action.add_reasoning(f"Power diff {power_diff} - risky without ability, trying anyway", GOOD_DELTA)
+        # Fallback: Battle logic when GameStrategy not available
+        # Be VERY conservative - losing battles costs cards from hand/table
+
+        if power_diff >= 6:
+            # Overwhelming advantage - definitely battle
+            action.add_reasoning(f"Crushing advantage (+{power_diff}) - battle!", VERY_GOOD_DELTA)
+        elif power_diff >= 2:
+            # Good odds - battle recommended
+            action.add_reasoning(f"Good odds (+{power_diff}) - battle", GOOD_DELTA * 2)
+        elif power_diff >= -2:
+            # Close fight - only battle if we have good ability for destiny
+            if ability_test:
+                action.add_reasoning(f"Close fight ({power_diff}) but good ability ({my_ability}) - risky battle", GOOD_DELTA)
+            else:
+                action.add_reasoning(f"Close fight ({power_diff}) without ability - avoid", BAD_DELTA)
+        elif power_diff >= -5:
+            # Disadvantage - avoid unless desperate
+            action.add_reasoning(f"Losing battle ({power_diff}) - AVOID!", BAD_DELTA * 3)
         else:
-            # No good conditions met - avoid battle
-            action.add_reasoning(f"Power diff {power_diff} - avoid battle", BAD_DELTA)
+            # Severe disadvantage (-6 or worse)
+            # BUT: Check if we can actually flee! If not, battling now is better
+            # than letting opponent build up even more power
+            loc = board_state.locations[loc_idx] if loc_idx < len(board_state.locations) else None
+            is_space = loc.is_space if loc else False
+
+            flee_analysis = board_state.analyze_flee_options(loc_idx, is_space)
+
+            if flee_analysis['can_flee'] and flee_analysis['can_afford']:
+                # We CAN flee - so avoid battle, we'll escape in move phase
+                best_dest = flee_analysis['best_destination']
+                dest_their_power = board_state.their_power_at_location(best_dest) if best_dest is not None else 0
+
+                if dest_their_power < their_power:
+                    # Destination is better - definitely avoid battle and flee
+                    action.add_reasoning(f"SEVERE DISADVANTAGE ({power_diff}) - will flee to safer location!", VERY_BAD_DELTA)
+                    logger.info(f"🏃 Will flee from {my_power} vs {their_power} to location with {dest_their_power} enemies")
+                else:
+                    # Destination is worse or same - might as well battle here
+                    action.add_reasoning(f"Disadvantage ({power_diff}) but no better escape - reluctant battle", BAD_DELTA * 2)
+                    logger.info(f"⚔️ No good escape (dest has {dest_their_power} enemies), battling here")
+            else:
+                # Can't flee - battling now is better than letting them build up
+                reason = flee_analysis['reason']
+                action.add_reasoning(f"Disadvantage ({power_diff}) but CAN'T FLEE ({reason}) - forced battle", BAD_DELTA)
+                logger.info(f"⚔️ Can't flee: {reason}. Battling at disadvantage is better than waiting.")

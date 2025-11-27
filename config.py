@@ -34,8 +34,14 @@ class Config:
     # AI configuration - Basic
     MAX_HAND_SIZE: int = 16          # Hard cap - strongly avoid drawing above this
     HAND_SOFT_CAP: int = 12          # Soft cap - start penalizing draws above this
-    DEPLOY_THRESHOLD: int = 3        # Minimum power to deploy
     CHAOS_PERCENT: int = 25          # Random action chance
+
+    # AI configuration - Deploy Strategy
+    # Minimum TOTAL power we need to be able to deploy this turn before committing
+    # characters to a location. Prevents deploying lone weak characters that get
+    # overwhelmed. From C# deployThresholdSlider (typical value 6-8).
+    # Controlled by admin UI slider.
+    DEPLOY_THRESHOLD: int = 6        # Don't deploy until we can deploy this much power
 
     # AI configuration - Force Economy
     FORCE_GEN_TARGET: int = 6        # Target force generation (icons)
@@ -44,6 +50,11 @@ class Config:
     # AI configuration - Battle Strategy
     BATTLE_FAVORABLE_THRESHOLD: int = 4   # Power advantage for "good odds" battle
     BATTLE_DANGER_THRESHOLD: int = -6     # Power disadvantage to avoid/retreat
+
+    # AI configuration - Deployment Strategy
+    DEPLOY_OVERKILL_THRESHOLD: int = 8    # Power advantage where we stop reinforcing
+    DEPLOY_COMFORTABLE_THRESHOLD: int = 4 # Power advantage where reinforcing is low priority
+    BATTLE_FORCE_RESERVE: int = 1         # Force to reserve for initiating battle after deploy
 
     # Paths
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))

@@ -29,15 +29,82 @@ import settings
 
 # Setup logging
 os.makedirs(config.LOG_DIR, exist_ok=True)
+LOG_FILE_PATH = os.path.join(config.LOG_DIR, 'rando.log')
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format=LOG_FORMAT,
     handlers=[
-        logging.FileHandler(os.path.join(config.LOG_DIR, 'rando.log')),
+        logging.FileHandler(LOG_FILE_PATH),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def rotate_game_log(opponent_name: str = None, won: bool = None):
+    """
+    Rotate the log file after a game ends.
+
+    Renames the current rando.log to a timestamped file preserving game info,
+    then starts a fresh rando.log for the next game.
+
+    Args:
+        opponent_name: Name of the opponent (for filename)
+        won: Whether the bot won (for filename)
+    """
+    from datetime import datetime
+    import shutil
+
+    try:
+        # Generate new filename with timestamp and game info
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        result_str = "win" if won else "loss" if won is not None else "unknown"
+        opponent_str = opponent_name.replace(' ', '_') if opponent_name else "unknown"
+
+        # New filename: rando_20231127_143052_vs_PlayerName_win.log
+        new_filename = f"rando_{timestamp}_vs_{opponent_str}_{result_str}.log"
+        new_path = os.path.join(config.LOG_DIR, new_filename)
+
+        # Get the root logger and find the file handler
+        root_logger = logging.getLogger()
+        file_handler = None
+        handler_index = -1
+
+        for i, handler in enumerate(root_logger.handlers):
+            if isinstance(handler, logging.FileHandler) and 'rando.log' in handler.baseFilename:
+                file_handler = handler
+                handler_index = i
+                break
+
+        if file_handler:
+            # Flush and close the current file handler
+            file_handler.flush()
+            file_handler.close()
+
+            # Remove from logger temporarily
+            root_logger.removeHandler(file_handler)
+
+            # Rename the log file (if it exists and has content)
+            if os.path.exists(LOG_FILE_PATH) and os.path.getsize(LOG_FILE_PATH) > 0:
+                shutil.move(LOG_FILE_PATH, new_path)
+                logger.info(f"📁 Rotated log to: {new_filename}")
+
+            # Create a new file handler for the fresh log
+            new_handler = logging.FileHandler(LOG_FILE_PATH)
+            new_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+            new_handler.setLevel(logging.INFO)
+
+            # Add the new handler
+            root_logger.addHandler(new_handler)
+
+            logger.info(f"📝 Started new log file for next game")
+        else:
+            logger.warning("Could not find file handler for log rotation")
+
+    except Exception as e:
+        logger.error(f"Error rotating log: {e}")
 
 # Initialize database
 db_path = os.path.join(config.LOG_DIR, 'rando_stats.db')
@@ -63,6 +130,7 @@ app = Flask(__name__,
             template_folder='admin/templates',
             static_folder='admin/static')
 app.config['SECRET_KEY'] = config.SECRET_KEY
+app.config['TEMPLATES_AUTO_RELOAD'] = True  # Force template reload on every request
 
 # Initialize SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
@@ -231,9 +299,10 @@ class BotState:
                 'power_advantage': bs.power_advantage(),
                 'force_advantage': bs.force_advantage(),
 
-                # Locations with cards
+                # Locations with cards (includes cardId for tracking verification)
                 'locations': [{
                     'index': i,
+                    'card_id': loc.card_id if hasattr(loc, 'card_id') else None,
                     'system_name': loc.system_name or '',
                     'site_name': loc.site_name or loc.system_name or loc.blueprint_id,
                     'is_site': loc.is_site,
@@ -242,12 +311,14 @@ class BotState:
                     'my_power': max(0, bs.my_power_at_location(i)),  # Show 0 instead of -1
                     'their_power': max(0, bs.their_power_at_location(i)),  # Show 0 instead of -1
                     'my_cards': [{
+                        'card_id': c.card_id,  # CRITICAL: cardId for tracking
                         'name': c.card_title or c.blueprint_id,
                         'blueprint': c.blueprint_id,
                         'power': c.power,
                         'ability': c.ability,
                     } for c in loc.my_cards],
                     'their_cards': [{
+                        'card_id': c.card_id,  # CRITICAL: cardId for tracking
                         'name': c.card_title or c.blueprint_id,
                         'blueprint': c.blueprint_id,
                         'power': c.power,
@@ -255,13 +326,17 @@ class BotState:
                     } for c in loc.their_cards],
                 } for i, loc in enumerate(bs.locations) if loc],
 
-                # Hand
+                # Hand (includes cardId for tracking verification)
                 'hand': [{
+                    'card_id': c.card_id,  # CRITICAL: cardId for tracking
                     'name': c.card_title or c.blueprint_id,
                     'blueprint': c.blueprint_id,
                     'type': c.card_type,
                     'deploy': c.deploy,
                 } for c in bs.cards_in_hand],
+
+                # Total cards tracked (for debugging)
+                'tracked_cards_count': len(bs.cards_in_play),
             }
 
         # Add overall bot stats
@@ -327,25 +402,63 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
                 decision_text = event.get('text', '')
                 decision_id = event.get('id', '')
 
-                # Track for loop detection (but don't abort - DecisionHandler handles this)
-                decision_key = (decision_id, decision_type, decision_text)
-                if decision_key == last_decision_key:
-                    repeat_count += 1
-                    # Use higher threshold (50) for expected patterns, lower (20) for unexpected
-                    is_expected = any(p in decision_text for p in ['Optional responses', 'Choose Deploy action', 'Choose Move action'])
-                    threshold = 50 if is_expected else 20
-                    if repeat_count >= threshold:
-                        logger.error(f"⚠️  SEVERE LOOP: Decision '{decision_text[:50]}' repeated {repeat_count} times!")
-                        logger.error(f"    Safety system should have handled this. Breaking as last resort.")
+                # === CONCEDE CHECK ===
+                # Before processing decision, check if we should concede
+                board_state_for_decision = event_processor.board_state if event_processor else None
+                if board_state_for_decision and hasattr(board_state_for_decision, 'should_concede'):
+                    should_concede, concede_reason = board_state_for_decision.should_concede()
+                    if should_concede:
+                        logger.info(f"🏳️ Concede triggered: {concede_reason}")
+
+                        # Send farewell message
+                        if bot_state.chat_manager:
+                            farewell = "Good game! I can no longer meaningfully act, so I'll concede. Until next time!"
+                            try:
+                                client.post_chat_message(game_id, farewell)
+                            except Exception as e:
+                                logger.warning(f"Failed to send concede message: {e}")
+
+                            # Record as a loss (player_won=True means opponent won)
+                            bot_state.chat_manager.on_game_end(won=True, board_state=board_state_for_decision)
+
+                        # Execute concede
+                        if client.concede_game(game_id):
+                            logger.info("✅ Game conceded successfully")
+                            return current_cn
+                        else:
+                            logger.warning("Failed to concede, continuing game")
+
+                # === CRITICAL LOOP CHECK ===
+                # DecisionHandler tracks multi-decision loops (e.g., A→B→A→B cycles)
+                # If we're in a critical loop (20+ repeats), concede to avoid hanging
+                if DecisionHandler.should_concede_due_to_loop():
+                    loop_severity, loop_count = DecisionHandler.get_loop_status()
+                    logger.error(f"🚨 CRITICAL DECISION LOOP ({loop_count} repeats) - conceding to avoid hang!")
+
+                    # Send farewell message
+                    if bot_state.chat_manager:
+                        farewell = "I appear to be stuck in a decision loop. Conceding to avoid hanging the game. GG!"
+                        try:
+                            client.post_chat_message(game_id, farewell)
+                        except Exception as e:
+                            logger.warning(f"Failed to send loop-concede message: {e}")
+
+                    # Execute concede
+                    if client.concede_game(game_id):
+                        logger.info("✅ Game conceded due to loop")
                         return current_cn
-                else:
-                    repeat_count = 0
-                    last_decision_key = decision_key
+                    else:
+                        logger.error("Failed to concede! Breaking event loop as last resort.")
+                        return current_cn
+
+                # Log loop status for debugging (DecisionHandler handles loop breaking)
+                loop_severity, loop_count = DecisionHandler.get_loop_status()
+                if loop_severity != 'none':
+                    logger.warning(f"🔄 Loop status: {loop_severity} ({loop_count} repeats)")
 
                 logger.info(f"  [Iter {iteration}] Event {i+1}: DECISION {decision_type} - '{decision_text[:80]}...'")
 
                 # Get decision response - GUARANTEED to return a value (never None)
-                board_state_for_decision = event_processor.board_state if event_processor else None
                 resp_id, resp_value = DecisionHandler.handle_decision(
                     event,
                     board_state=board_state_for_decision,
@@ -705,6 +818,12 @@ def bot_worker():
                                 if bot_state.table_manager and bot_state.table_manager.state:
                                     deck_name = bot_state.table_manager.state.current_deck_name or "Unknown"
 
+                                    # Backup: save table state at game start (in case table was created before persistence fix)
+                                    if deck_name != "Unknown" and bot_state.current_table_id:
+                                        from engine.table_manager import _save_table_state
+                                        _save_table_state(bot_state.current_table_id, deck_name)
+                                        logger.debug(f"📝 Saved table state at game start: {deck_name}")
+
                                 my_side = bot_state.board_state.my_side or "unknown"
                                 opponent_side = "Light" if my_side == "Dark" else "Dark"
 
@@ -716,7 +835,7 @@ def bot_worker():
                                     opponent_side=opponent_side
                                 )
                                 bot_state.chat_manager.on_game_start()
-                                logger.info(f"💬 Chat manager initialized for game vs {bot_state.opponent_name}")
+                                logger.info(f"💬 Chat manager initialized for game vs {bot_state.opponent_name} (deck: {deck_name})")
 
                             # Initialize command handler for this game
                             if bot_state.command_handler:
@@ -941,6 +1060,12 @@ def bot_worker():
                         bot_state.client.leave_chat(bot_state.game_id)
                         logger.info(f"💬 Left chat system for game {bot_state.game_id}")
 
+                    # Rotate log file (preserve game log with timestamp)
+                    rotate_game_log(
+                        opponent_name=bot_state.opponent_name,
+                        won=bot_won
+                    )
+
                     # Clear old game state
                     bot_state.current_table_id = None
                     bot_state.opponent_name = None
@@ -1023,18 +1148,22 @@ def board_state_view():
         # Locations
         'locations': [],
 
-        # Hand
-        'hand': [{
+        # Hand - DEBUG: log what we're sending
+        'hand': [],
+    }
+
+    # Build hand with debug logging
+    for c in bs.cards_in_hand:
+        logger.info(f"🃏 Hand card: {c.card_title} | card_id={c.card_id} | blueprint={c.blueprint_id}")
+        view_data['hand'].append({
             'blueprint_id': c.blueprint_id,
             'card_id': c.card_id,
             'name': c.card_title or c.blueprint_id,
             'type': c.card_type,
             'deploy': c.deploy
-        } for c in bs.cards_in_hand],
+        })
 
-        # Stats
-        'total_cards_in_play': len(bs.cards_in_play),
-    }
+    view_data['total_cards_in_play'] = len(bs.cards_in_play)
 
     # Add location details
     for i, loc in enumerate(bs.locations):
@@ -1278,8 +1407,18 @@ def handle_create_table(data):
     if table_id:
         bot_state.current_table_id = table_id
         bot_state.state = GameState.WAITING_FOR_OPPONENT
+
+        # IMPORTANT: Also update table_manager state so deck name is tracked
+        if bot_state.table_manager and bot_state.table_manager.state:
+            bot_state.table_manager.state.current_table_id = table_id
+            bot_state.table_manager.state.current_deck_name = deck_name
+            # Persist to file for restart recovery
+            from engine.table_manager import _save_table_state
+            _save_table_state(table_id, deck_name)
+            logger.info(f"📝 Table manager state updated: deck={deck_name}")
+
         emit('state_update', bot_state.to_dict())
-        emit('log_message', {'message': f'✅ Table created: {table_name}', 'level': 'success'})
+        emit('log_message', {'message': f'✅ Table created: {table_name} (deck: {deck_name})', 'level': 'success'})
     else:
         emit('log_message', {'message': '❌ Failed to create table', 'level': 'error'})
 

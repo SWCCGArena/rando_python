@@ -112,7 +112,7 @@
                                     {% if card.power or card.ability %}
                                     <span class="card-stats">[P:{{ card.power }}/A:{{ card.ability }}]</span>
                                     {% endif %}
-                                    <br><small><code>{{ card.blueprint }}</code> ({{ card.id }})</small>
+                                    <span class="card-id">#{{ card.id }}</span>
                                 </li>
                                 {% endfor %}
                             </ul>
@@ -130,7 +130,7 @@
                                     {% if card.power or card.ability %}
                                     <span class="card-stats">[P:{{ card.power }}/A:{{ card.ability }}]</span>
                                     {% endif %}
-                                    <br><small><code>{{ card.blueprint }}</code> ({{ card.id }})</small>
+                                    <span class="card-id">#{{ card.id }}</span>
                                 </li>
                                 {% endfor %}
                             </ul>
@@ -156,7 +156,7 @@
                     <strong>{{ card.name }}</strong>
                     {% if card.type %}<span class="card-type">({{ card.type }})</span>{% endif %}
                     {% if card.deploy %}<span class="card-deploy">Deploy: {{ card.deploy }}</span>{% endif %}
-                    <br><small><code>{{ card.blueprint_id }}</code></small>
+                    <span class="card-id">#{{ card.card_id }}</span>
                 </li>
                 {% endfor %}
             </ul>
@@ -168,7 +168,7 @@
         <!-- Debug Info -->
         <div class="debug-section">
             <h2>🐛 Debug Info</h2>
-            <p>Total cards tracked: <strong>{{ board_state.total_cards_in_play }}</strong></p>
+            <p>Total cards tracked: <strong>{{ board_state.tracked_cards_count }}</strong></p>
             <p><a href="/board_state" class="refresh-link">🔄 Refresh</a></p>
         </div>
     {% endif %}
@@ -342,6 +342,14 @@
 
     .alert-warning {
         border-color: #ff9800;
+    }
+
+    /* Card ID styling - shown inline with card name */
+    .card-id {
+        color: #ff9800;
+        font-family: monospace;
+        font-size: 11px;
+        margin-left: 8px;
     }
 </style>
 {% endblock %}

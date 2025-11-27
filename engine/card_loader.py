@@ -132,10 +132,40 @@ class Card:
     def is_device(self) -> bool:
         return self.card_type == "Device"
 
+    @property
+    def is_droid(self) -> bool:
+        """Check if card is a droid (Character with Droid subtype)"""
+        return self.is_character and self.sub_type and 'droid' in self.sub_type.lower()
+
+    @property
+    def provides_presence(self) -> bool:
+        """
+        Check if this card provides 'presence' at a location.
+
+        In SWCCG, presence requires a character with ability > 0.
+        Droids (ability = 0) do NOT provide presence on their own.
+        Without presence you cannot:
+        - Prevent opponent's force drains
+        - Initiate battles
+        - Control the location
+        """
+        if not self.is_character:
+            return False
+        # Characters with ability > 0 provide presence
+        # Droids typically have ability = 0
+        return self.ability_value > 0
+
     # Icon-based properties (from icons field)
     @property
     def is_pilot(self) -> bool:
-        """Check if card has Pilot icon"""
+        """
+        Check if card is a pilot CHARACTER (has Pilot icon and is a Character).
+
+        Note: Starships/vehicles with permanent pilots also have the pilot icon,
+        but they are NOT pilots themselves - use has_permanent_pilot for those.
+        """
+        if not self.is_character:
+            return False
         return any('pilot' in str(icon).lower() for icon in self.icons)
 
     @property
@@ -272,9 +302,10 @@ class CardDatabase:
             is_unique = title.startswith('•')
 
             # Parse icons for force generation
+            # Force icon counts are explicit fields in the JSON
             icons = front.get('icons', [])
-            light_icons = sum(1 for icon in icons if 'Light' in str(icon))
-            dark_icons = sum(1 for icon in icons if 'Dark' in str(icon))
+            light_icons = front.get('lightSideIcons', 0) or 0
+            dark_icons = front.get('darkSideIcons', 0) or 0
 
             # Check for defensive shield
             gametext = front.get('gametext', '')

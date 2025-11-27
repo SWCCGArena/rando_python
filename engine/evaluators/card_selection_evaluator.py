@@ -5,7 +5,7 @@ Handles CARD_SELECTION decisions - choosing cards from a list.
 Ported from C# AICSHandler.cs
 
 Decision types handled:
-- "choose card to set sabacc value" -> PASS (don't set value)
+- "choose card to set sabacc value" -> Random selection (cycles through cards)
 - "choose where to deploy" -> Pick best location
 - "choose force to lose" -> Pick best card to lose
 - "move/transport/transit" -> Pick best destination
@@ -16,6 +16,7 @@ Decision types handled:
 """
 
 import logging
+import random
 import re
 from typing import List, Optional
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
@@ -64,7 +65,9 @@ class CardSelectionEvaluator(ActionEvaluator):
         elif "choose" in text_lower and "clone" in text_lower:
             actions = self._evaluate_sabacc_clone(context)
         elif "choose where to deploy" in text_lower:
-            actions = self._evaluate_deploy_location(context)
+            # DeployEvaluator handles this more comprehensively
+            # Use the fixed version here that properly handles starships/docking bays
+            actions = self._evaluate_deploy_location_fixed(context)
         elif "force to lose or" in text_lower and "forfeit" in text_lower:
             # COMBINED decision: lose force OR forfeit card
             # Must come before individual force_loss/forfeit checks
@@ -96,24 +99,30 @@ class CardSelectionEvaluator(ActionEvaluator):
 
     def _evaluate_sabacc_set_value(self, context: DecisionContext) -> List[EvaluatedAction]:
         """
-        Sabacc value setting - we DON'T want to set a value.
+        Sabacc value setting - pick a RANDOM card each time.
 
-        If min=0, we can pass. If min=1, pick the first option but rank low.
-        Ported from C# AICSHandler: "choose card to set sabacc value" -> veryBadActionDelta
+        With min=1 we must select a card, can't pass. To avoid infinite loops
+        where we keep picking the same card, we randomize the scores so a
+        different card is picked each time. Eventually all wild cards will
+        have their values set and the server will move on.
         """
         actions = []
 
         for card_id in context.card_ids:
+            # Randomize scores so we pick different cards each time
+            # This breaks the loop by cycling through all cards
+            random_score = VERY_BAD_DELTA + random.uniform(0, 10)
+
             action = EvaluatedAction(
                 action_id=card_id,
                 action_type=ActionType.SABACC,
-                score=VERY_BAD_DELTA,
+                score=random_score,
                 display_text=f"Set sabacc value (card {card_id})"
             )
-            action.add_reasoning("Avoid setting sabacc value", VERY_BAD_DELTA)
+            action.add_reasoning("Sabacc value (randomized to break loops)", random_score)
             actions.append(action)
 
-        logger.info(f"Sabacc set value - marking all {len(actions)} options as very bad")
+        logger.info(f"Sabacc set value - randomizing selection among {len(actions)} cards")
         return actions
 
     def _evaluate_sabacc_clone(self, context: DecisionContext) -> List[EvaluatedAction]:
@@ -137,20 +146,135 @@ class CardSelectionEvaluator(ActionEvaluator):
         logger.info(f"Sabacc clone - marking all {len(actions)} options as very bad")
         return actions
 
+    def _evaluate_deploy_location_fixed(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose where to deploy a card - FIXED version.
+
+        Uses bs.get_location_by_card_id() to properly look up locations.
+
+        CRITICAL RULES:
+        1. Starships should NEVER deploy to docking bays (0 power!)
+        2. Starships without pilots (and no permanent pilot icon) are weak
+        3. Always prefer space systems over docking bays for starships
+        """
+        actions = []
+        bs = context.board_state
+        from ..card_loader import get_card
+
+        # Extract the card being deployed from decision text
+        deploying_card = None
+        deploying_card_blueprint = self._extract_blueprint_from_text(context.decision_text)
+        if deploying_card_blueprint:
+            deploying_card = get_card(deploying_card_blueprint)
+
+        is_starship = deploying_card and deploying_card.is_starship
+        is_droid = deploying_card and deploying_card.is_droid
+        provides_presence = deploying_card and deploying_card.provides_presence
+
+        # Check if starship has permanent pilot (can fly without a pilot aboard)
+        has_permanent_pilot = False
+        if deploying_card and is_starship:
+            icons = deploying_card.icons or []
+            has_permanent_pilot = any('pilot' in str(icon).lower() for icon in icons)
+            logger.debug(f"Starship {deploying_card.title}: permanent_pilot={has_permanent_pilot}, icons={icons}")
+
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=50.0,  # Base score
+                display_text=f"Deploy to {card_id}"
+            )
+
+            if bs:
+                # Use get_location_by_card_id for proper lookup
+                location = bs.get_location_by_card_id(card_id)
+
+                if location:
+                    loc_name = location.site_name or location.system_name or location.blueprint_id
+                    action.display_text = f"Deploy to {loc_name}"
+
+                    # Determine location type
+                    is_docking_bay = location.is_space and getattr(location, 'is_ground', False)
+                    is_pure_space = location.is_space and not getattr(location, 'is_ground', False)
+                    is_ground = not location.is_space
+
+                    # =====================================================
+                    # CRITICAL: Starships at docking bays have 0 power!
+                    # =====================================================
+                    if is_starship:
+                        if is_docking_bay:
+                            # NEVER deploy starships to docking bays
+                            action.add_reasoning("STARSHIP TO DOCKING BAY = 0 POWER!", VERY_BAD_DELTA)
+                            logger.warning(f"⚠️  {deploying_card.title} would have 0 power at docking bay {loc_name}!")
+                        elif is_pure_space:
+                            # Space system - starship has power here (if piloted)
+                            action.add_reasoning("Starship to space system - has power!", GOOD_DELTA * 3)
+                            # Warn if no permanent pilot - will need a pilot aboard
+                            if not has_permanent_pilot:
+                                logger.info(f"ℹ️  {deploying_card.title} needs pilot aboard for power in space")
+                        elif is_ground:
+                            # Ground location - starship can't deploy here
+                            action.add_reasoning("STARSHIP TO GROUND - invalid!", VERY_BAD_DELTA)
+
+                    # =====================================================
+                    # CRITICAL: Droids don't provide presence
+                    # =====================================================
+                    if is_droid and not provides_presence:
+                        we_have_presence = self._have_presence_at_location(bs, location)
+                        opponent_has_presence = len(location.their_cards) > 0
+
+                        if not we_have_presence:
+                            if opponent_has_presence:
+                                action.add_reasoning("DROID ALONE vs OPPONENT - can't counter!", VERY_BAD_DELTA)
+                            else:
+                                action.add_reasoning("Droid alone - no presence", BAD_DELTA * 3)
+
+                    # Add location strategic value
+                    location_metadata = get_card(location.blueprint_id) if location.blueprint_id else None
+                    if location_metadata:
+                        my_side = bs.my_side or "light"
+                        if my_side == "dark":
+                            my_icons = location_metadata.dark_side_icons or 0
+                        else:
+                            my_icons = location_metadata.light_side_icons or 0
+
+                        if my_icons > 0:
+                            action.add_reasoning(f"{my_icons} force icons", my_icons * GOOD_DELTA)
+                else:
+                    # Location not found - use neutral score
+                    action.add_reasoning("Location not found in board state", -5.0)
+
+            actions.append(action)
+
+        return actions
+
     def _evaluate_deploy_location(self, context: DecisionContext) -> List[EvaluatedAction]:
         """
         Choose where to deploy a card.
 
         Consider (in priority order):
-        1. Force icons - MORE ICONS = BETTER (for force generation)
-        2. Force drain potential (opponent icons = we can drain there)
-        3. Power differential at location
-        4. Whether we already have presence
-        5. Whether enemy is present
+        1. CRITICAL: Starships should NEVER deploy to docking bays (0 power!)
+        2. Force icons - MORE ICONS = BETTER (for force generation)
+        3. Force drain potential (opponent icons = we can drain there)
+        4. Power differential at location
+        5. Whether we already have presence
+        6. Whether enemy is present
         """
         actions = []
         bs = context.board_state
         from ..card_loader import get_card
+
+        # Extract the card being deployed from decision text
+        # Format: "Choose where to deploy <div class='cardHint' value='109_8'>•Boba Fett In Slave I</div>"
+        deploying_card = None
+        deploying_card_blueprint = self._extract_blueprint_from_text(context.decision_text)
+        if deploying_card_blueprint:
+            deploying_card = get_card(deploying_card_blueprint)
+
+        is_starship = deploying_card and deploying_card.is_starship
+        is_droid = deploying_card and deploying_card.is_droid
+        provides_presence = deploying_card and deploying_card.provides_presence
 
         for card_id in context.card_ids:
             action = EvaluatedAction(
@@ -171,6 +295,45 @@ class CardSelectionEvaluator(ActionEvaluator):
                         their_power = bs.their_power_at_location(loc_idx)
 
                         action.display_text = f"Deploy to {loc.site_name or loc.system_name}"
+
+                        # =====================================================
+                        # CRITICAL: Starships at docking bays have 0 power!
+                        # Docking bays are is_space=True AND is_ground=True
+                        # Pure space (systems/sectors) is is_space=True, is_ground=False
+                        # =====================================================
+                        if is_starship:
+                            is_docking_bay = loc.is_space and getattr(loc, 'is_ground', False)
+                            is_pure_space = loc.is_space and not getattr(loc, 'is_ground', False)
+
+                            if is_docking_bay:
+                                # NEVER deploy starships to docking bays - they have 0 power!
+                                action.add_reasoning("STARSHIP TO DOCKING BAY = 0 POWER!", VERY_BAD_DELTA)
+                                logger.warning(f"⚠️  {deploying_card.title} would have 0 power at docking bay!")
+                            elif is_pure_space:
+                                # Pure space location - starship has power here
+                                action.add_reasoning("Starship to space - has power", GOOD_DELTA * 2)
+                            elif not loc.is_space:
+                                # Ground-only location - starship usually can't deploy here
+                                action.add_reasoning("STARSHIP TO GROUND - invalid!", VERY_BAD_DELTA)
+
+                        # =====================================================
+                        # CRITICAL: Droids (ability=0) don't provide presence!
+                        # Without presence you can't prevent force drains or initiate battles.
+                        # Deploying a droid alone to "counter" an opponent is useless.
+                        # =====================================================
+                        if is_droid and not provides_presence:
+                            # Check if we have existing presence at this location
+                            we_have_presence = self._have_presence_at_location(bs, loc)
+                            opponent_has_presence = len(loc.their_cards) > 0
+
+                            if not we_have_presence:
+                                if opponent_has_presence:
+                                    # Opponent has presence, we don't - droid can't counter them!
+                                    action.add_reasoning("DROID ALONE vs OPPONENT - can't counter!", VERY_BAD_DELTA)
+                                    logger.warning(f"⚠️  {deploying_card.title} (droid) alone can't counter opponent!")
+                                else:
+                                    # Empty location - droid alone still can't control or prevent drains
+                                    action.add_reasoning("Droid alone - no presence to control", BAD_DELTA * 3)
 
                         # =====================================================
                         # FORCE ICONS - Most important factor for economy!
@@ -244,61 +407,106 @@ class CardSelectionEvaluator(ActionEvaluator):
 
     def _evaluate_force_loss(self, context: DecisionContext) -> List[EvaluatedAction]:
         """
-        Choose which card to lose.
+        Choose which card/pile to lose Force from.
 
-        Prefer:
-        - Cards from hand (if we have many)
-        - Low-value interrupts/effects
-        - Low forfeit value cards
-        Avoid:
-        - High-value characters
-        - Cards from force pile
-        - Cards when low on life
+        Priority order (BEST to WORST):
+        1. Hand (Effects/Interrupts) - BEST! Known cards the bot can't use well
+        2. Reserve pile - unknown cards, might lose something useful
+        3. Used pile - already spent
+        4. Force pile - reduces activation potential
+        5. Hand (Characters/Vehicles/Starships/Weapons/Locations) - AVOID, these are deployable
+
+        Key insight: Effects/Interrupts in hand are KNOWN useless cards for the bot,
+        while reserve pile cards are unknown and might contain characters/weapons we could use.
         """
         actions = []
         bs = context.board_state
+        from ..card_loader import get_card
 
         for card_id in context.card_ids:
             action = EvaluatedAction(
                 action_id=card_id,
                 action_type=ActionType.SELECT_CARD,
-                score=0.0,
+                score=50.0,  # Base score
                 display_text=f"Lose card {card_id}"
             )
 
             if bs:
                 card = bs.cards_in_play.get(card_id)
+
+                # Check if this is a placeholder for a pile (blueprint -1_X)
+                blueprint = card.blueprint_id if card else ""
+                if blueprint.startswith("-1_") or not card:
+                    # This represents losing from a pile, not a specific card
+                    # Acceptable but not as good as losing known useless cards
+                    action.display_text = "Lose Force"
+                    action.add_reasoning("Force from pile (unknown cards)", GOOD_DELTA * 3)
+                    actions.append(action)
+                    continue
+
                 if card:
-                    action.display_text = f"Lose {card.card_title or card_id}"
+                    card_title = card.card_title or card_id
+                    action.display_text = f"Lose {card_title}"
+
+                    # Get card metadata for type checking
+                    card_meta = get_card(card.blueprint_id) if card.blueprint_id else None
+                    card_type = card_meta.card_type if card_meta else (card.card_type or "")
 
                     # Check zone
-                    if card.zone == "HAND":
-                        if bs.hand_size >= 15:
-                            action.add_reasoning("Many cards in hand", GOOD_DELTA)
-                        elif bs.hand_size <= 5:
-                            action.add_reasoning("Few cards in hand", BAD_DELTA)
+                    zone = card.zone.upper() if card.zone else ""
 
-                        # Prefer losing interrupts/effects/weapons from hand
-                        if card.card_type in ["Interrupt", "Effect", "Weapon"]:
-                            action.add_reasoning("Low-value card type in hand", GOOD_DELTA)
+                    if zone == "HAND":
+                        # Hand cards - depends on card type
+                        # BEST to lose: Effects, Interrupts (bot can't use these well)
+                        # KEEP: Characters, Vehicles, Starships, Weapons, Locations (deployable)
 
-                    elif card.zone == "FORCE_PILE":
-                        action.add_reasoning("Avoid losing from force pile", BAD_DELTA)
+                        is_valuable = False
+                        if card_meta:
+                            is_valuable = (
+                                card_meta.is_character or
+                                card_meta.is_vehicle or
+                                card_meta.is_starship or
+                                card_meta.is_weapon or
+                                card_meta.is_location
+                            )
+                        else:
+                            # Fallback to card_type string
+                            valuable_types = ["Character", "Vehicle", "Starship", "Weapon", "Location"]
+                            is_valuable = any(vt.lower() in card_type.lower() for vt in valuable_types)
+
+                        if is_valuable:
+                            # AVOID losing valuable deployable cards from hand
+                            action.add_reasoning(f"Deployable card in hand ({card_type})", BAD_DELTA * 4)
+                            logger.debug(f"Force loss: {card_title} is deployable ({card_type}) - avoid")
+                        else:
+                            # Effects/Interrupts - BEST to lose! Bot can't use these well
+                            action.add_reasoning(f"Effect/Interrupt - bot can't use, lose this!", GOOD_DELTA * 5)
+                            logger.debug(f"Force loss: {card_title} ({card_type}) - BEST to lose")
+
+                    elif zone == "RESERVE_DECK" or zone == "RESERVE":
+                        # Reserve pile - unknown cards, might lose something useful
+                        action.add_reasoning("Reserve pile - unknown cards", GOOD_DELTA * 3)
+
+                    elif zone == "USED_PILE" or zone == "USED":
+                        # Used pile - already spent, acceptable
+                        action.add_reasoning("Used pile - already spent", GOOD_DELTA * 2)
+
+                    elif zone == "FORCE_PILE" or zone == "FORCE":
+                        # Force pile - reduces activation potential
+                        action.add_reasoning("Force pile - reduces activation", GOOD_DELTA)
 
                     else:
                         # Card in play - use forfeit value
                         forfeit = card.forfeit if hasattr(card, 'forfeit') else 0
-                        forfeit = forfeit if isinstance(forfeit, int) else 0
+                        forfeit = forfeit if isinstance(forfeit, (int, float)) else 0
                         # Prefer forfeiting low-value cards
-                        forfeit_bonus = (20 - forfeit)
-                        action.add_reasoning(f"Forfeit value {forfeit}", forfeit_bonus)
+                        forfeit_bonus = (10 - forfeit) * 2
+                        action.add_reasoning(f"In play (forfeit {forfeit})", forfeit_bonus)
 
-                # Check overall life
+                # Adjust based on overall life force
                 total_reserve = bs.total_reserve_force()
                 if total_reserve < 10:
-                    action.add_reasoning("Low on life - be careful", BAD_DELTA)
-                elif total_reserve >= 30:
-                    action.add_reasoning("Plenty of life left", GOOD_DELTA)
+                    action.add_reasoning("Low life - be careful", BAD_DELTA)
 
             actions.append(action)
 
@@ -741,3 +949,41 @@ class CardSelectionEvaluator(ActionEvaluator):
             actions.append(action)
 
         return actions
+
+    def _extract_blueprint_from_text(self, text: str) -> str:
+        """
+        Extract blueprint ID from decision text HTML.
+
+        Example: "Choose where to deploy <div class='cardHint' value='109_8'>•Boba Fett In Slave I</div>"
+        Returns: "109_8"
+        """
+        match = re.search(r"value='([^']+)'", text)
+        if match:
+            return match.group(1)
+        return ""
+
+    def _have_presence_at_location(self, board_state, location) -> bool:
+        """
+        Check if we have 'presence' at a location.
+
+        In SWCCG, presence requires a character with ability > 0.
+        Droids (ability = 0) do NOT provide presence on their own.
+        Without presence you cannot:
+        - Prevent opponent's force drains
+        - Initiate battles
+        - Control the location
+
+        Args:
+            board_state: Current board state
+            location: The location to check
+
+        Returns:
+            True if we have at least one character with ability > 0 there
+        """
+        from ..card_loader import get_card
+
+        for card in location.my_cards:
+            card_meta = get_card(card.blueprint_id)
+            if card_meta and card_meta.provides_presence:
+                return True
+        return False

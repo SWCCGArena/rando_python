@@ -345,6 +345,7 @@ function updateBoardVisualization() {
                     if (card.power || card.ability) {
                         html += ` [P:${card.power}/A:${card.ability}]`;
                     }
+                    if (card.card_id) html += ` <span class="card-id">#${card.card_id}</span>`;
                     html += `\n`;
                 });
                 html += `  </div>\n`;
@@ -358,6 +359,7 @@ function updateBoardVisualization() {
                     if (card.power || card.ability) {
                         html += ` [P:${card.power}/A:${card.ability}]`;
                     }
+                    if (card.card_id) html += ` <span class="card-id">#${card.card_id}</span>`;
                     html += `\n`;
                 });
                 html += `  </div>\n`;
@@ -378,6 +380,7 @@ function updateBoardVisualization() {
             html += `  • ${escapeHtml(card.name)}`;
             if (card.type) html += ` (${card.type})`;
             if (card.deploy !== undefined && card.deploy !== null) html += ` - Deploy: ${card.deploy}`;
+            if (card.card_id) html += ` <span class="card-id">#${card.card_id}</span>`;
             html += `\n`;
         });
     } else {

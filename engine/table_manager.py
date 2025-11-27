@@ -114,7 +114,7 @@ class TableManagerConfig:
     # Deck selection
     # Prefer user (personal) decks over library decks - these are optimized for the bot
     prefer_user_decks: bool = True             # Use user's personal decks by default
-    deck_rotation: bool = True                 # Rotate through decks
+    deck_rotation: bool = False                # False = random selection, True = rotate in order
 
 
 @dataclass
@@ -378,12 +378,16 @@ class TableManager:
             return None
 
         if self.config.deck_rotation:
-            # Rotate through decks
+            # Rotate through decks in order
             self.state.deck_index = (self.state.deck_index + 1) % len(decks)
-            return decks[self.state.deck_index]
+            selected = decks[self.state.deck_index]
+            logger.info(f"🎲 Deck rotation: selected '{selected.name}' (index {self.state.deck_index}/{len(decks)})")
+            return selected
         else:
-            # Random selection
-            return random.choice(decks)
+            # Truly random selection each time
+            selected = random.choice(decks)
+            logger.info(f"🎲 Random deck selected: '{selected.name}' (from {len(decks)} available)")
+            return selected
 
     def _record_failure(self, reason: str) -> None:
         """Record a table creation failure"""

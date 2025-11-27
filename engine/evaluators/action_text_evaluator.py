@@ -182,20 +182,44 @@ class ActionTextEvaluator(ActionEvaluator):
 
                 # Check actual drain amount from location check data
                 drain_amount = -1  # -1 = unknown
+                location = None
+                location_name = "unknown location"
                 if bs and location_card_id:
                     location = bs.get_location_by_card_id(location_card_id)
-                    if location and hasattr(location, 'my_drain_amount'):
-                        drain_str = location.my_drain_amount or ""
-                        try:
-                            drain_amount = int(drain_str) if drain_str else -1
-                        except ValueError:
-                            drain_amount = -1
-                        logger.debug(f"Force drain at {location.site_name}: drain_amount={drain_amount}")
+                    if location:
+                        location_name = location.site_name or location.system_name or location.blueprint_id
+                        if hasattr(location, 'my_drain_amount') and location.my_drain_amount:
+                            drain_str = location.my_drain_amount
+                            try:
+                                drain_amount = int(drain_str)
+                            except ValueError:
+                                drain_amount = -1
+                            logger.debug(f"Force drain at {location_name}: drain_amount={drain_amount} (from location check)")
+
+                # Fallback: Use static card database force icons if drain amount unknown
+                if drain_amount == -1 and location:
+                    card_meta = get_card(location.blueprint_id)
+                    if card_meta:
+                        # Get my force icons from static card data
+                        my_side = bs.my_side if bs else "dark"
+                        if my_side.lower() == "dark":
+                            static_icons = card_meta.dark_side_icons
+                        else:
+                            static_icons = card_meta.light_side_icons
+
+                        # If static card shows 0 icons for my side, drain will be 0
+                        if static_icons == 0:
+                            drain_amount = 0
+                            logger.info(f"⚠️  Force drain at {location_name}: 0 icons (from card database)")
+                        elif static_icons > 0:
+                            # Use static icons as estimate (actual may be higher with bonuses)
+                            drain_amount = static_icons
+                            logger.debug(f"Force drain at {location_name}: ~{drain_amount} icons (from card database)")
 
                 # If drain amount is 0, strongly avoid this drain
                 if drain_amount == 0:
-                    action.score = VERY_BAD_DELTA
-                    action.add_reasoning("Drain amount is 0 - pointless!", VERY_BAD_DELTA)
+                    action.score = VERY_BAD_DELTA * 2  # Extra penalty for pointless drains
+                    action.add_reasoning(f"Drain at {location_name} is 0 - pointless!", VERY_BAD_DELTA * 2)
                     # Still append action but with very bad score
                     actions.append(action)
                     continue  # Skip further evaluation for this action
@@ -223,9 +247,9 @@ class ActionTextEvaluator(ActionEvaluator):
                         action.score = VERY_GOOD_DELTA
                         action.add_reasoning(f"Force drain {drain_amount} is good", VERY_GOOD_DELTA)
                     elif drain_amount == -1:
-                        # Unknown amount - assume it's good
-                        action.score = GOOD_DELTA
-                        action.add_reasoning("Force drain (amount unknown)", GOOD_DELTA)
+                        # Unknown amount - be cautious, might be 0
+                        action.score = BAD_DELTA
+                        action.add_reasoning("Force drain (amount unknown - cautious)", BAD_DELTA)
                     # drain_amount == 0 already handled above
 
             # ========== Race Destiny ==========

@@ -12,7 +12,8 @@ The game will continue with a bad decision, but hang forever with no decision.
 """
 
 import logging
-from typing import Optional, Tuple, List
+import random
+from typing import Optional, Tuple, List, Set
 import xml.etree.ElementTree as ET
 
 from .decision_safety import DecisionSafety, DecisionTracker
@@ -58,23 +59,67 @@ class DecisionHandler:
 
         logger.info(f"🤔 Processing decision: type={decision_type}, text='{decision_text}'")
 
-        # Check for potential infinite loop (uses CONSECUTIVE count, not total)
+        # Check for potential infinite loop (now detects MULTI-DECISION loops!)
         is_loop, count = _decision_tracker.check_for_loop(decision_type, decision_text)
-        if is_loop:
-            # Use WARNING for severe loops (50+ consecutive), DEBUG for minor ones
-            if count >= 50:
-                logger.warning(f"⚠️  SEVERE loop detected: '{decision_text[:50]}' repeated {count} consecutive times")
-            else:
-                logger.debug(f"Loop detected: '{decision_text[:50]}' repeated {count} consecutive times")
-            # Don't abort - still try to respond, but maybe differently
+        loop_severity = _decision_tracker.get_loop_severity()
+        blocked_responses = _decision_tracker.get_blocked_responses(decision_type, decision_text)
+
+        # Get available options for forced choice
+        params = DecisionSafety.parse_decision_params(decision_element)
+        all_options = params.get('action_ids', []) or DecisionSafety.get_selectable_options(params) or params.get('card_ids', [])
+
+        # === CRITICAL LOOP HANDLING ===
+        if loop_severity == 'critical':
+            logger.error(f"🚨 CRITICAL LOOP ({count} repeats) - this is a dead end!")
+            # Try to find ANY different choice
+            if blocked_responses and all_options:
+                available = [opt for opt in all_options if opt not in blocked_responses]
+                if available:
+                    forced = available[0]
+                    logger.error(f"🚨 Forcing different choice: {forced} (blocked: {blocked_responses})")
+                    _decision_tracker.record_decision(decision_type, decision_text, decision_id, forced)
+                    return (decision_id, forced)
+                else:
+                    # ALL options are blocked - we're truly stuck
+                    logger.error(f"🚨 ALL OPTIONS BLOCKED - signaling need to concede")
+                    # Return special marker that app.py can detect
+                    # For now, just pick random and hope
+                    forced = random.choice(all_options) if all_options else ""
+                    _decision_tracker.record_decision(decision_type, decision_text, decision_id, forced)
+                    return (decision_id, forced)
+
+        # === SEVERE LOOP: Force different choice ===
+        if loop_severity == 'severe' and blocked_responses and all_options:
+            available = [opt for opt in all_options if opt not in blocked_responses]
+            if available:
+                forced = random.choice(available)
+                logger.warning(f"⚠️  SEVERE LOOP ({count}x) - forcing different: {forced}")
+                _decision_tracker.record_decision(decision_type, decision_text, decision_id, forced)
+                return (decision_id, forced)
+
+        # === MILD LOOP: Add randomness but still try brain ===
+        use_random_to_break_loop = loop_severity in ['mild', 'severe']
+        if use_random_to_break_loop:
+            logger.warning(f"🔄 Loop detected ({count}x) - will penalize blocked responses: {blocked_responses}")
 
         result = None
 
         try:
             # === LAYER 1: Brain (Smart AI) ===
+            # Pass blocked_responses so evaluators can penalize them
             if brain and board_state and decision_type in ['CARD_ACTION_CHOICE', 'CARD_SELECTION', 'ARBITRARY_CARDS', 'ACTION_CHOICE', 'INTEGER']:
-                result = DecisionHandler._use_brain(decision_element, board_state, phase_count, brain)
+                result = DecisionHandler._use_brain(
+                    decision_element, board_state, phase_count, brain,
+                    blocked_responses=blocked_responses if use_random_to_break_loop else None
+                )
                 if result:
+                    # Check if brain chose a blocked response - override it
+                    if use_random_to_break_loop and result[1] in blocked_responses and all_options:
+                        available = [opt for opt in all_options if opt not in blocked_responses]
+                        if available:
+                            override = random.choice(available)
+                            logger.warning(f"🔄 Brain chose blocked response '{result[1]}', overriding to '{override}'")
+                            result = (result[0], override)
                     logger.debug(f"Brain handled decision: {result[1]}")
 
             # === LAYER 2: Type-Specific Handlers ===
@@ -103,7 +148,18 @@ class DecisionHandler:
             result = (safety.decision_id, safety.value)
             logger.warning(f"🆘 Emergency response: {safety.reason}")
 
-        # Validate and log the response
+        # === LAYER 4: FINAL SAFETY CHECK (like C# line 766) ===
+        # This catches ALL bugs in previous logic by ensuring we never return
+        # an empty response when we're required to choose something.
+        # This is the "never hang" guarantee.
+        corrected_value, correction_reason = DecisionSafety.ensure_valid_response(
+            decision_element, result[1]
+        )
+        if correction_reason:
+            logger.error(f"🚨 SAFETY CORRECTION: {correction_reason}")
+            result = (result[0], corrected_value)
+
+        # Validate and log the response (informational only now, since we've already corrected)
         is_valid, warning = DecisionSafety.validate_response(decision_element, result[1])
         if not is_valid:
             logger.warning(f"⚠️  Response validation warning: {warning}")
@@ -119,7 +175,23 @@ class DecisionHandler:
         _decision_tracker.clear()
 
     @staticmethod
-    def _use_brain(decision_element: ET.Element, board_state, phase_count: int, brain) -> Optional[Tuple[str, str]]:
+    def notify_phase_change(new_phase: str):
+        """Notify tracker of phase change (resets loop detection)"""
+        _decision_tracker.on_phase_change(new_phase)
+
+    @staticmethod
+    def should_concede_due_to_loop() -> bool:
+        """Check if we're in a critical loop that requires conceding"""
+        return _decision_tracker.should_consider_concede()
+
+    @staticmethod
+    def get_loop_status() -> Tuple[str, int]:
+        """Get current loop status: (severity, repeat_count)"""
+        return _decision_tracker.get_loop_severity(), _decision_tracker.sequence_repeat_count
+
+    @staticmethod
+    def _use_brain(decision_element: ET.Element, board_state, phase_count: int, brain,
+                   blocked_responses: Set[str] = None) -> Optional[Tuple[str, str]]:
         """
         Use the brain to make a strategic decision.
 
@@ -128,6 +200,7 @@ class DecisionHandler:
             board_state: Current board state (engine BoardState)
             phase_count: Phase count for setup detection
             brain: Brain instance to query
+            blocked_responses: Optional set of response values to penalize (for loop breaking)
 
         Returns:
             Tuple of (decision_id, decision_value) or None if brain can't handle it
@@ -148,7 +221,7 @@ class DecisionHandler:
         min_value = 0
         max_value = 0
         default_value = 0
-        no_pass = True  # Default: must select an action (cannot pass)
+        no_pass = False  # Default: can pass (missing noPass element means passing allowed)
 
         for param in parameters:
             name = param.get('name', '')
@@ -183,14 +256,31 @@ class DecisionHandler:
             is_selectable = selectable[i] if i < len(selectable) else True
 
             # Create CardInfo if we have card data
+            # When blueprintId is "inPlay" or similar, look up the actual blueprint
+            # from board_state.cards_in_play using the cardId (like C# does)
             card_info = None
-            if card_id and blueprint:
+            actual_blueprint = blueprint
+            if card_id and board_state:
+                # Try to look up the card in cards_in_play to get real blueprint
+                # Cards are tracked when they enter play/hand via PCIP events
+                card_in_play = board_state.cards_in_play.get(card_id)
+                if card_in_play and card_in_play.blueprint_id:
+                    # Use the tracked blueprint_id instead of "inPlay"
+                    if not blueprint or blueprint == "inPlay" or blueprint.startswith("temp"):
+                        actual_blueprint = card_in_play.blueprint_id
+                        logger.debug(f"📍 Resolved cardId {card_id} -> blueprint {actual_blueprint} (from tracked card)")
+                elif blueprint == "inPlay" or not blueprint:
+                    # Card not found in tracking - this shouldn't happen normally
+                    logger.warning(f"⚠️  Card {card_id} not found in cards_in_play! Blueprint={blueprint}. "
+                                   f"Card may not have been tracked when it entered play/hand.")
+
+            if card_id and actual_blueprint and actual_blueprint != "inPlay":
                 from engine.card_loader import get_card
-                card_meta = get_card(blueprint)
+                card_meta = get_card(actual_blueprint)
                 if card_meta:
                     card_info = CardInfo(
                         card_id=card_id,
-                        blueprint_id=blueprint,
+                        blueprint_id=actual_blueprint,
                         title=card_meta.title,
                         type=card_meta.card_type,
                         power=card_meta.power_value,
@@ -198,6 +288,8 @@ class DecisionHandler:
                         deploy_cost=card_meta.deploy_value,
                         icons=[str(icon) for icon in card_meta.icons],
                     )
+                else:
+                    logger.warning(f"⚠️  Could not get metadata for blueprint {actual_blueprint} (cardId={card_id})")
 
             option = DecisionOption(
                 option_id=option_id,
@@ -309,7 +401,15 @@ class DecisionHandler:
     @staticmethod
     def _handle_arbitrary_cards(decision_id: str, text: str, decision_element: ET.Element, phase_count: int) -> Optional[Tuple[str, str]]:
         """
-        Handle ARBITRARY_CARDS decision type (e.g., choose starting location).
+        Handle ARBITRARY_CARDS decision type (e.g., choose starting location, take card into hand).
+
+        Ported from C# BotAIHelper.ParseArbritraryCardDecision()
+
+        Key logic:
+        1. Build realChoices = cards where selectable=true AND preselected=false
+        2. If min=0 AND max=0 → return "" (pass, nothing to select)
+        3. If min=0 → optional selection, pick one random card
+        4. If min>0 → must select min cards
 
         Args:
             decision_id: The decision ID
@@ -320,11 +420,17 @@ class DecisionHandler:
         Returns:
             Tuple of (decision_id, decision_value) or None if can't decide
         """
+        import random
+
         # Parse parameters
         parameters = decision_element.findall('.//parameter')
         blueprints = []
         card_ids = []
         selectable = []
+        preselected = []
+        min_val = 0
+        max_val = 0
+        return_any_change = False
 
         for param in parameters:
             name = param.get('name', '')
@@ -335,28 +441,78 @@ class DecisionHandler:
                 card_ids.append(value)
             elif name == 'selectable':
                 selectable.append(value.lower() == 'true')
+            elif name == 'preselected':
+                preselected.append(value.lower() == 'true')
+            elif name == 'min':
+                min_val = int(value)
+            elif name == 'max':
+                max_val = int(value)
+            elif name == 'returnAnyChange':
+                return_any_change = value.lower() == 'true'
 
         is_setup = "Choose starting location" in text or phase_count <= 1
 
-        # Build list of selectable cards
-        choices = []
-        for i in range(len(card_ids)):
-            if i < len(selectable) and selectable[i]:
-                choices.append(card_ids[i])
-                if i < len(blueprints):
-                    # Check for forced choices in starting location
-                    if is_setup and "13_32" in blueprints[i]:  # Main Power Generators
-                        logger.info(f"✅ Forcing Main Power Generators as starting location")
-                        return (decision_id, card_ids[i])
+        logger.info(f"ARBITRARY_CARDS: min={min_val}, max={max_val}, cardIds={len(card_ids)}, text='{text}'")
 
-        # Default: pick first selectable card
-        if choices:
-            logger.info(f"✅ Selecting first available option (card {choices[0]}) from {len(choices)} choices")
-            return (decision_id, choices[0])
+        # Build realChoices (selectable AND NOT preselected) and preChoices (preselected)
+        real_choices = []
+        pre_choices = []
+        forced_choice = None
+
+        for i in range(len(card_ids)):
+            can_choose = selectable[i] if i < len(selectable) else True
+            is_preselected = preselected[i] if i < len(preselected) else False
+            card_id = card_ids[i]
+            blueprint = blueprints[i] if i < len(blueprints) else None
+
+            if can_choose and not is_preselected:
+                real_choices.append(card_id)
+
+                # Check for forced choices during setup
+                if is_setup and blueprint:
+                    # Main Power Generators
+                    if "13_32" in blueprint or "Main Power Generators" in blueprint:
+                        forced_choice = card_id
+                        logger.info(f"✅ Forcing Main Power Generators as starting location")
+
+            if is_preselected:
+                pre_choices.append(card_id)
+
+        # If we have a forced choice, use it
+        if forced_choice:
+            return (decision_id, forced_choice)
+
+        # === CRITICAL: Handle min/max logic like C# ===
+        if len(real_choices) > 0:
+            # Case 1: min=0 AND max=0 → pass (nothing to select)
+            if min_val == 0 and max_val == 0:
+                logger.info(f"⏭️  ARBITRARY_CARDS: min=0, max=0 → passing (empty string)")
+                return (decision_id, "")
+
+            # Case 2: min=0 OR returnAnyChange → optional, pick one random card
+            elif min_val == 0 or return_any_change:
+                choice = random.choice(real_choices)
+                # Include preselected cards in result
+                result = choice
+                for pre in pre_choices:
+                    result += "," + pre
+                logger.info(f"✅ ARBITRARY_CARDS: optional selection, picked {choice}")
+                return (decision_id, result)
+
+            # Case 3: min>0 → must select min number of cards
+            else:
+                selected = []
+                available = real_choices.copy()
+                for _ in range(min(min_val, len(available))):
+                    choice = random.choice(available)
+                    selected.append(choice)
+                    available.remove(choice)
+                result = ",".join(selected)
+                logger.info(f"✅ ARBITRARY_CARDS: required selection of {min_val}, picked {selected}")
+                return (decision_id, result)
         else:
-            # No selectable cards - send empty string to cancel/pass
-            logger.warning(f"⚠️  No selectable cards found for '{text}' - sending empty string to cancel/pass")
-            logger.info(f"Total cardIds: {len(card_ids)}, Selectable: {selectable.count(True) if selectable else 0}")
+            # No real choices available - send empty string
+            logger.warning(f"⚠️  No selectable cards for '{text}' - sending empty string")
             return (decision_id, "")
 
     @staticmethod
@@ -407,7 +563,7 @@ class DecisionHandler:
         parameters = decision_element.findall('.//parameter')
         action_ids = []
         action_texts = []
-        no_pass = True  # Default: cannot pass (must select an action)
+        no_pass = False  # Default: can pass (missing noPass element means passing allowed)
 
         for param in parameters:
             name = param.get('name', '')

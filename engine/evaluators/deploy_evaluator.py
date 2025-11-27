@@ -7,6 +7,7 @@ Evaluates deployment decisions:
 - Whether to activate Force instead
 
 Includes strategic improvements:
+- Phase-level deployment planning (hold back vs deploy, target locations)
 - Location priority scoring from GameStrategy
 - Force generation deficit bonus for locations
 - Cross-turn focus bonus for matching card types
@@ -16,9 +17,15 @@ Ported from Unity C# AICACHandler.cs and AICSHandler.cs
 
 from typing import List, Optional
 import logging
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 from ..card_loader import get_card
 from ..game_strategy import GameStrategy, ThreatLevel
+from ..deploy_planner import DeployPhasePlanner, DeployStrategy
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +50,8 @@ class DeployEvaluator(ActionEvaluator):
         # Ported from C# BotAIHelper.pendingDeployCards
         self.pending_deploy_card_ids: set = set()
         self._last_turn_number = -1
+        # Phase-level planner for strategic deployment decisions
+        self.planner = DeployPhasePlanner(deploy_threshold=config.DEPLOY_THRESHOLD)
 
     def reset_pending_deploys(self):
         """Reset pending deploy tracking (call at turn start)"""
@@ -57,6 +66,163 @@ class DeployEvaluator(ActionEvaluator):
         if context.board_state and context.board_state.strategy_controller:
             return context.board_state.strategy_controller.game_strategy
         return None
+
+    def _find_pilots_in_hand(self, bs) -> List[tuple]:
+        """
+        Find all pilot characters in hand.
+
+        Returns list of (card_in_hand, card_metadata) tuples for pilots.
+        """
+        pilots = []
+        if not bs or not bs.cards_in_hand:
+            return pilots
+
+        for card in bs.cards_in_hand:
+            if card.blueprint_id:
+                metadata = get_card(card.blueprint_id)
+                if metadata and metadata.is_character and metadata.is_pilot:
+                    pilots.append((card, metadata))
+
+        return pilots
+
+    def _can_pilot_ship(self, pilot_metadata, ship_metadata) -> bool:
+        """
+        Check if a pilot can pilot a specific ship/vehicle.
+
+        In SWCCG:
+        - Any character with Pilot icon can pilot any compatible ship
+        - Matching pilots (Luke + Red 5) can deploy for free aboard matching ship
+        - For simplicity, we assume any pilot can pilot any ship for now
+        """
+        if not pilot_metadata or not ship_metadata:
+            return False
+
+        # Must be a pilot character
+        if not pilot_metadata.is_pilot:
+            return False
+
+        # Ship must be a starship or vehicle
+        if not (ship_metadata.is_starship or ship_metadata.is_vehicle):
+            return False
+
+        # TODO: Add matching pilot logic for reduced deploy costs
+        return True
+
+    def _check_can_deploy_with_pilot(self, ship_metadata, bs) -> tuple:
+        """
+        Check if we can deploy a starship/vehicle AND a pilot for it.
+
+        Returns:
+            (can_deploy_with_pilot, pilot_metadata, total_cost, reason)
+        """
+        if not bs:
+            return (False, None, 0, "No board state")
+
+        # Check if ship needs a pilot
+        if ship_metadata.has_permanent_pilot:
+            return (True, None, ship_metadata.deploy_value, "Ship has permanent pilot")
+
+        # Find available pilots in hand
+        pilots_in_hand = self._find_pilots_in_hand(bs)
+        if not pilots_in_hand:
+            return (False, None, ship_metadata.deploy_value, "No pilots in hand!")
+
+        # Find the cheapest compatible pilot
+        cheapest_pilot = None
+        cheapest_cost = float('inf')
+
+        for card, pilot_meta in pilots_in_hand:
+            if self._can_pilot_ship(pilot_meta, ship_metadata):
+                pilot_cost = pilot_meta.deploy_value or 0
+                if pilot_cost < cheapest_cost:
+                    cheapest_cost = pilot_cost
+                    cheapest_pilot = pilot_meta
+
+        if not cheapest_pilot:
+            return (False, None, ship_metadata.deploy_value, "No compatible pilots in hand!")
+
+        # Calculate total cost
+        ship_cost = ship_metadata.deploy_value or 0
+        total_cost = ship_cost + cheapest_cost
+
+        # Check if we can afford both
+        if bs.force_pile >= total_cost:
+            return (True, cheapest_pilot, total_cost,
+                    f"Can afford ship ({ship_cost}) + pilot {cheapest_pilot.title} ({cheapest_cost})")
+        else:
+            return (False, cheapest_pilot, total_cost,
+                    f"Can't afford ship ({ship_cost}) + pilot ({cheapest_cost}) = {total_cost}, have {bs.force_pile}")
+
+    def _find_unpiloted_ship_on_board(self, bs) -> Optional[tuple]:
+        """
+        Find any unpiloted starship/vehicle on the board.
+
+        Used to prioritize pilot deployment.
+
+        Returns:
+            (card_id, card_title, card_type) if found, None otherwise
+            card_type is "starship" or "vehicle"
+        """
+        if not bs:
+            return None
+
+        logger.debug(f"Checking for unpiloted ships/vehicles. My player: {bs.my_player_name}, cards_in_play: {len(bs.cards_in_play)}")
+
+        for card_id, card in bs.cards_in_play.items():
+            # Log all our cards for debugging
+            if card.owner == bs.my_player_name:
+                logger.debug(f"  Our card #{card_id}: {card.card_title or 'no title'} (blueprint={card.blueprint_id})")
+
+            if card.owner != bs.my_player_name:
+                continue
+
+            # Skip placeholder blueprints (hidden cards we can't see)
+            # Server sends -1_1, -1_2 etc. for face-down/hidden opponent cards
+            if card.blueprint_id and card.blueprint_id.startswith('-1_'):
+                continue
+
+            metadata = get_card(card.blueprint_id) if card.blueprint_id else None
+            if not metadata:
+                # Log cards with missing metadata - could be tracking issue
+                # (but not for hidden cards which we already filtered above)
+                logger.warning(f"  ⚠️  Card #{card_id} has no metadata! blueprint={card.blueprint_id}, title={card.card_title}")
+                continue
+
+            if metadata.is_starship or metadata.is_vehicle:
+                card_type = "starship" if metadata.is_starship else "vehicle"
+
+                # Check if it has permanent pilot
+                if metadata.has_permanent_pilot:
+                    logger.debug(f"  ✓ {card_type.title()} {metadata.title} (#{card_id}): has permanent pilot - piloted")
+                    continue
+
+                # Check if it has a pilot aboard (attached)
+                has_pilot_aboard = False
+                pilot_name = None
+                for attached in card.attached_cards:
+                    attached_meta = get_card(attached.blueprint_id) if attached.blueprint_id else None
+                    if attached_meta and attached_meta.is_pilot:
+                        has_pilot_aboard = True
+                        pilot_name = attached_meta.title
+                        break
+
+                if has_pilot_aboard:
+                    logger.debug(f"  ✓ {card_type.title()} {metadata.title} (#{card_id}): has pilot aboard ({pilot_name}) - piloted")
+                    continue
+
+                # This ship/vehicle is unpiloted!
+                logger.warning(f"⚠️  Found UNPILOTED {card_type}: {metadata.title} (#{card_id}, blueprint={card.blueprint_id})")
+                logger.warning(f"    type={metadata.card_type}, is_starship={metadata.is_starship}, is_vehicle={metadata.is_vehicle}")
+                logger.warning(f"    has_permanent_pilot={metadata.has_permanent_pilot}, icons={metadata.icons}")
+                logger.warning(f"    attached_cards={len(card.attached_cards)}")
+                return (card_id, metadata.title, card_type)
+
+        logger.debug("  No unpiloted ships/vehicles found")
+        return None
+
+    def _has_unpiloted_ship_on_board(self, bs) -> bool:
+        """Check if we have any unpiloted starship/vehicle on the board."""
+        return self._find_unpiloted_ship_on_board(bs) is not None
 
     def can_evaluate(self, context: DecisionContext) -> bool:
         """Applies to Deploy phase decisions"""
@@ -95,6 +261,11 @@ class DeployEvaluator(ActionEvaluator):
 
         Example: "Choose Deploy action or Pass" with multiple deploy options
         Only evaluates actions that contain "Deploy" - leaves other actions for other evaluators.
+
+        Uses DeployPhasePlanner to make phase-level strategic decisions:
+        - Creates a deployment plan at the start of each deploy phase
+        - If plan is HOLD_BACK, all deploy actions get strong penalty
+        - Target locations get bonuses based on the plan
         """
         actions = []
         bs = context.board_state
@@ -103,6 +274,14 @@ class DeployEvaluator(ActionEvaluator):
         if context.turn_number != self._last_turn_number:
             self.reset_pending_deploys()
             self._last_turn_number = context.turn_number
+
+        # === PHASE-LEVEL PLANNING ===
+        # Create or retrieve the deployment plan for this phase
+        # This makes one strategic decision for the whole phase instead of per-card
+        deploy_plan = None
+        if bs:
+            deploy_plan = self.planner.create_plan(bs)
+            logger.info(f"📋 Deploy plan: {deploy_plan.strategy.value} - {deploy_plan.reason}")
 
         for i, action_id in enumerate(context.action_ids):
             action_text = context.action_texts[i] if i < len(context.action_texts) else "Unknown"
@@ -117,6 +296,14 @@ class DeployEvaluator(ActionEvaluator):
                 score=50.0,  # Base score
                 display_text=action_text
             )
+
+            # === APPLY PHASE-LEVEL PLAN ===
+            # If the planner decided to HOLD BACK, penalize ALL deploy actions
+            # This ensures we don't deploy piecemeal when we should save up
+            if deploy_plan and deploy_plan.strategy == DeployStrategy.HOLD_BACK:
+                action.add_reasoning(f"HOLD BACK: {deploy_plan.reason}", -500.0)
+                actions.append(action)
+                continue  # Skip individual card evaluation - plan says don't deploy
 
             # Check if we already tried deploying this card (avoid loops)
             card_id = context.card_ids[i] if i < len(context.card_ids) else None
@@ -133,35 +320,53 @@ class DeployEvaluator(ActionEvaluator):
 
             # Check if this is a deploy action
             if "Deploy" in action_text:
-                # Try to extract blueprint ID from action text
-                # Format: "Deploy <div class='cardHint' value='7_305'>•OS-72-1</div>"
+                # Try to get card metadata - multiple fallback strategies:
+                # 1. Extract blueprint from action text HTML (e.g., cardHint div)
+                # 2. Look up cardId in cards_in_play to get tracked blueprint
                 blueprint_id = self._extract_blueprint_from_action(action_text)
+                card_metadata = None
 
                 if blueprint_id:
                     card_metadata = get_card(blueprint_id)
-                    if card_metadata:
-                        action.card_name = card_metadata.title
-                        action.deploy_cost = card_metadata.deploy_value
 
-                        # LOCATIONS ALWAYS DEPLOY FIRST
-                        # This is critical because deploying a location creates new options
-                        # for characters/ships that we can't evaluate until location exists
-                        if card_metadata.is_location:
-                            action.add_reasoning("LOCATION - always deploy first!", +2000.0)
+                # Fallback: Use cardId to look up card in cards_in_play
+                # This is critical because server often sends blueprintId="inPlay"
+                # but we tracked the real blueprint when card entered hand
+                if not card_metadata and card_id and bs:
+                    tracked_card = bs.cards_in_play.get(card_id)
+                    if tracked_card and tracked_card.blueprint_id:
+                        blueprint_id = tracked_card.blueprint_id
+                        card_metadata = get_card(blueprint_id)
+                        if card_metadata:
+                            logger.debug(f"📍 Found card via cardId lookup: {card_id} -> {card_metadata.title}")
 
-                        # Score based on card value (with strategic bonuses)
-                        game_strategy = self._get_game_strategy(context)
-                        score = self._score_card_deployment(card_metadata, bs, game_strategy)
-                        action.score += score
-                        action.add_reasoning(f"Card: {card_metadata.title}")
+                if card_metadata:
+                    action.card_name = card_metadata.title
+                    action.deploy_cost = card_metadata.deploy_value
 
-                        # Check if we can afford it
-                        if bs and bs.force_pile < card_metadata.deploy_value:
-                            action.add_reasoning(f"Can't afford! Need {card_metadata.deploy_value}, have {bs.force_pile}", -100.0)
-                    else:
-                        action.add_reasoning("Card metadata not found", -10.0)
+                    # LOCATIONS ALWAYS DEPLOY FIRST
+                    # This is critical because deploying a location creates new options
+                    # for characters/ships that we can't evaluate until location exists
+                    if card_metadata.is_location:
+                        action.add_reasoning("LOCATION - always deploy first!", +2000.0)
+
+                    # Score based on card value (with strategic bonuses)
+                    # All the detailed logic (unpiloted ships, threshold checks, etc.)
+                    # is handled in _score_card_deployment() to avoid duplicate rules
+                    game_strategy = self._get_game_strategy(context)
+                    score = self._score_card_deployment(card_metadata, bs, game_strategy, card_id)
+                    action.score += score
+                    action.add_reasoning(f"Card: {card_metadata.title}")
+
+                    # Check if we can afford it
+                    if bs and bs.force_pile < card_metadata.deploy_value:
+                        action.add_reasoning(f"Can't afford! Need {card_metadata.deploy_value}, have {bs.force_pile}", -100.0)
                 else:
-                    action.add_reasoning("Deploy action (card unknown)")
+                    # Still couldn't find card - log details for debugging
+                    logger.warning(f"⚠️  Deploy action with unknown card: cardId={card_id}, blueprintId={blueprint_id}")
+                    if bs:
+                        logger.warning(f"   cards_in_play has {len(bs.cards_in_play)} cards tracked")
+                    action.add_reasoning(f"Deploy action (card unknown, cardId={card_id})")
 
             actions.append(action)
 
@@ -199,9 +404,11 @@ class DeployEvaluator(ActionEvaluator):
         is_weapon = deploying_card and deploying_card.is_weapon
         is_device = deploying_card and deploying_card.is_device
         is_pilot = deploying_card and deploying_card.is_pilot
+        is_droid = deploying_card and deploying_card.is_droid
+        provides_presence = deploying_card and deploying_card.provides_presence
 
         if deploying_card:
-            logger.debug(f"Deploying {deploying_card.title}: starship={is_starship}, vehicle={is_vehicle}, weapon={is_weapon}, pilot={is_pilot}")
+            logger.debug(f"Deploying {deploying_card.title}: starship={is_starship}, vehicle={is_vehicle}, weapon={is_weapon}, pilot={is_pilot}, droid={is_droid}")
 
         # Each card_id represents a target where we can deploy (location or card)
         for card_id in context.card_ids:
@@ -318,6 +525,23 @@ class DeployEvaluator(ActionEvaluator):
                             else:
                                 action.add_reasoning("Vehicle to space - check if valid", 0.0)
 
+                        # CRITICAL: Droids (ability=0) don't provide presence!
+                        # Without presence you can't prevent force drains or initiate battles.
+                        # Deploying a droid alone to "counter" an opponent is useless.
+                        if is_droid and not provides_presence:
+                            # Check if we have existing presence at this location
+                            we_have_presence = self._have_presence_at_location(bs, location)
+                            opponent_has_presence = len(location.their_cards) > 0
+
+                            if not we_have_presence:
+                                if opponent_has_presence:
+                                    # Opponent has presence, we don't - droid can't counter them!
+                                    action.add_reasoning("DROID ALONE vs OPPONENT - can't counter drains/battles!", -100.0)
+                                    logger.warning(f"⚠️  {deploying_card.title} (droid) alone can't counter opponent at {location.site_name}")
+                                else:
+                                    # Empty location - droid alone still can't control or prevent drains
+                                    action.add_reasoning("Droid alone - no presence to control location", -30.0)
+
                         # Score based on strategic value (with GameStrategy)
                         score = self._score_deployment_location(location, bs, game_strategy)
                         action.score += score
@@ -402,7 +626,7 @@ class DeployEvaluator(ActionEvaluator):
                             action.add_reasoning(f"{card_metadata.dark_side_icons} dark icons", +50.0)
 
                         # Prefer sites that aren't Imperial Square or Palace for SSA decks
-                        if (card_metadata.subtype and "site" in card_metadata.subtype.lower() and
+                        if (card_metadata.sub_type and "site" in card_metadata.sub_type.lower() and
                             card_metadata.dark_side_icons == 2):
                             if "imperial square" not in title_lower and "palace" not in title_lower:
                                 action.add_reasoning("Good 2-icon site for deck", +30.0)
@@ -434,115 +658,169 @@ class DeployEvaluator(ActionEvaluator):
 
         return actions
 
-    def _score_card_deployment(self, card, board_state, game_strategy: Optional[GameStrategy] = None) -> float:
+    def _score_card_deployment(self, card, board_state, game_strategy: Optional[GameStrategy] = None,
+                                card_id: str = "") -> float:
         """
         Score a card for deployment based on strategic value.
 
-        Ported from C# AICACHandler.cs RankDeployAction logic
-        Enhanced with strategic bonuses from GameStrategy.
+        Ported from C# AICACHandler.cs RankDeployAction logic.
+
+        The scoring follows a clear priority order:
+        1. Locations - always deploy first (creates options)
+        2. Creatures - always deploy (special rules)
+        3. Weapons/Devices - only if we have targets
+        4. Pilots for unpiloted ships - high priority
+        5. Ships/Vehicles - only with pilot available
+        6. Characters - only if we meet power threshold
+
+        Args:
+            card: Card metadata from card_loader
+            board_state: Current board state
+            game_strategy: Optional game strategy for bonuses
+            card_id: The card's game instance ID
+
+        Returns a score where:
+        - Positive = good to deploy
+        - Negative = avoid deploying
+        - Very negative (-999) = definitely don't deploy
+
+        NOTE: Threshold check is done by DeployPhasePlanner at phase start.
+        This method assumes the planner already approved deploying.
         """
         score = 0.0
 
-        # C# Priority 1: Locations are always high priority
-        if card.is_location:
-            score += 999.0  # veryGoodActionDelta
+        # =================================================================
+        # TIER 1: ALWAYS DEPLOY (no threshold check needed)
+        # =================================================================
 
-            # Strategic bonus: Add force generation deficit bonus
+        # Locations are always highest priority - they create new options
+        if card.is_location:
+            score = 999.0
             if game_strategy:
                 location_bonus = game_strategy.get_location_deploy_bonus()
                 if location_bonus > 0:
                     score += location_bonus
                     logger.debug(f"Location {card.title}: +{location_bonus:.1f} (force gen deficit)")
-
             return score
 
-        # C# Priority 2: Creatures are always high priority
+        # Creatures have special rules, always deploy
         if card.card_type == "Creature":
-            score += 999.0  # veryGoodActionDelta
-            return score
+            return 999.0
 
-        # C# Priority 3: Weapons/Devices - only if we have warriors
+        # =================================================================
+        # TIER 2: EQUIPMENT (deploy if we have valid targets)
+        # =================================================================
+
         if card.is_weapon or card.is_device:
             if board_state and self._have_empty_warriors(board_state):
-                score += 10.0  # goodActionDelta
+                return 10.0  # Have targets without weapons
             else:
-                score += -10.0  # badActionDelta - no warriors to equip
-            return score
+                return -10.0  # No valid targets
 
-        # C# Priority 4: Starships/Vehicles without permanent pilot
-        # CRITICAL: Without a pilot, these have 0 POWER - essentially useless!
+        # =================================================================
+        # TIER 3: PILOTS - Check for unpiloted ships to prioritize
+        # =================================================================
+
+        if card.is_pilot and card.is_character and board_state:
+            unpiloted = self._find_unpiloted_ship_on_board(board_state)
+            if unpiloted:
+                unpiloted_id, unpiloted_name, unpiloted_type = unpiloted
+                # NOTE: Threshold check is done by DeployPhasePlanner at phase start.
+                # If we're here, the planner approved deploying, so prioritize pilots for unpiloted ships.
+                logger.info(f"🎯 Prioritizing pilot {card.title} for {unpiloted_name}")
+                return 200.0 + card.power_value * 5  # High priority
+
+        # =================================================================
+        # TIER 4: STARSHIPS/VEHICLES - Must have pilot available
+        # NOTE: Threshold check is done by DeployPhasePlanner at phase start.
+        # Here we only check for practical requirements (pilot, space location).
+        # =================================================================
+
         if card.is_starship or card.is_vehicle:
-            if not card.has_permanent_pilot:
-                # Check if we have space locations (for starships)
-                if card.is_starship and board_state:
-                    has_space = any(loc.is_space for loc in board_state.locations)
-                    if not has_space:
-                        score += -999.0  # veryBadActionDelta - no space to deploy
-                        return score
+            if not board_state:
+                return 0.0
 
-                # Unpiloted vehicle/starship has 0 POWER without a pilot!
-                # Only deploy if we have a pilot we can deploy this turn
-                if board_state:
-                    available_force = board_state.force_pile - card.deploy_value
-                    if self._have_pilot_in_hand(board_state, available_force):
-                        # We can afford to deploy both vehicle AND pilot this turn
-                        # Give moderate bonus based on the card's stats when piloted
-                        piloted_power = card.maneuver or card.armor or "3"  # Estimate power contribution
-                        try:
-                            power_estimate = int(piloted_power) if piloted_power.isdigit() else 3
-                        except:
-                            power_estimate = 3
-                        score += 10.0 + power_estimate * 2
-                        logger.debug(f"{card.title}: unpiloted but have pilot in hand (+{10 + power_estimate * 2})")
-                    else:
-                        # NO PILOT AVAILABLE - deploying this is a waste!
-                        # 0 power means it contributes nothing to battles
-                        score += -200.0  # Strong penalty - don't deploy 0 power cards!
-                        logger.debug(f"{card.title}: NO PILOT - would have 0 power! (-200)")
+            # Ships with permanent pilot skip the pilot check
+            if card.has_permanent_pilot:
+                score = 10.0 + card.power_value * 3
+                logger.debug(f"{card.title}: piloted ship - power={card.power_value}")
                 return score
 
-        # C# Priority 5: Characters/Vehicles - the main deploy logic
-        # Check if this is a "pure pilot" (low power pilot we should avoid)
-        is_pure_pilot = False
-        is_land_deploy = card.is_vehicle or card.is_character
+            # Unpiloted ship - need pilot to have any power
+            # First: Do we have a space location for starships?
+            if card.is_starship:
+                has_pure_space = any(
+                    loc.is_space and not getattr(loc, 'is_ground', False)
+                    for loc in board_state.locations if loc
+                )
+                if not has_pure_space:
+                    logger.debug(f"{card.title}: NO SPACE LOCATION available")
+                    return -999.0
 
-        if card.is_pilot and not card.is_warrior and is_land_deploy and card.power_value <= 4:
-            is_pure_pilot = True
-        if card.is_warrior and card.is_pilot and card.power_value <= 3:
-            is_pure_pilot = True
-        if card.is_vehicle or card.is_starship:
+            # Check if we have a pilot we can afford
+            available_force = board_state.force_pile - card.deploy_value
+            if not self._have_pilot_in_hand(board_state, available_force):
+                logger.debug(f"{card.title}: NO PILOT available (need cost <= {available_force})")
+                return -200.0  # No pilot = 0 power = bad
+
+            # Have pilot - good to deploy
+            score = 10.0 + (card.power_value or 3) * 2
+            logger.debug(f"{card.title}: unpiloted but have pilot available")
+            return score
+
+        # =================================================================
+        # TIER 5: CHARACTERS - Score based on power value
+        # NOTE: Threshold check is done ONCE by DeployPhasePlanner at phase start.
+        # Individual cards are scored assuming planner already approved deploying.
+        # =================================================================
+
+        if card.is_character and board_state:
+            # Identify "pure pilots" - low power pilots we should save for ships
             is_pure_pilot = False
+            if card.is_pilot and not card.is_warrior and card.power_value <= 4:
+                is_pure_pilot = True
+            if card.is_warrior and card.is_pilot and card.power_value <= 3:
+                is_pure_pilot = True
 
-        # Check if we can afford and have force left over
-        if board_state:
+            # Check if we have enough force (reserve 1)
             force_after = board_state.force_pile - card.deploy_value
-            if force_after >= 1 and not is_pure_pilot:
-                # Good to deploy
-                score += 10.0 * card.power_value  # goodActionDelta * power
-            elif force_after < 1 and not is_pure_pilot:
-                score += -10.0  # badActionDelta - reserve force
-            elif is_pure_pilot:
-                score += -10.0  # badActionDelta - avoid pure pilots
+            if force_after < 1:
+                logger.debug(f"{card.title}: would leave < 1 force")
+                return -10.0
 
-        # Base value bonuses
-        if card.power_value >= 5:
-            score += 10.0
-        elif card.power_value >= 3:
-            score += 5.0
+            # Score based on power - higher power = higher score
+            score = 10.0 * card.power_value
+            logger.debug(f"{card.title}: ground deploy - power={card.power_value}")
 
-        if card.ability_value >= 4:
-            score += 8.0
-        elif card.ability_value >= 2:
-            score += 4.0
+            # Penalize pure pilots - save them for ships when possible
+            # Only penalize, don't block - if threshold is met, they can still deploy
+            if is_pure_pilot:
+                score -= 30.0
+                logger.debug(f"{card.title}: pure pilot penalty -30 (saving for ships)")
 
-        # Strategic focus bonus: Prefer cards that match our current strategy
-        if game_strategy and card.card_type:
-            focus_bonus = game_strategy.get_focus_deploy_bonus(card.card_type)
-            if focus_bonus > 0:
-                score += focus_bonus
-                logger.debug(f"{card.title}: +{focus_bonus:.1f} (matches {game_strategy.current_focus.value} focus)")
+            # Bonus for high stats
+            if card.power_value >= 5:
+                score += 10.0
+            elif card.power_value >= 3:
+                score += 5.0
+            if card.ability_value >= 4:
+                score += 8.0
+            elif card.ability_value >= 2:
+                score += 4.0
 
-        return score
+            # Strategic focus bonus
+            if game_strategy and card.card_type:
+                focus_bonus = game_strategy.get_focus_deploy_bonus(card.card_type)
+                if focus_bonus > 0:
+                    score += focus_bonus
+
+            return score
+
+        # =================================================================
+        # FALLBACK: Unknown card type
+        # =================================================================
+        logger.debug(f"{card.title}: unknown card type, neutral score")
+        return 0.0
 
     def _have_empty_warriors(self, board_state) -> bool:
         """
@@ -585,20 +863,23 @@ class DeployEvaluator(ActionEvaluator):
         """
         Score a location for deploying a card.
 
-        Key principle: Don't throw characters into lost battles!
-        - FREE BATTLEGROUND (no enemy) = safe drain, high priority
-        - CONTESTABLE (can win/tie) = worth fighting for
-        - LOSING BADLY (can't catch up) = avoid, deploy elsewhere
+        Priority order:
+        1. BATTLE OPPORTUNITY: Enemy has weak presence (2-6 power), we can overpower
+           and have Force to battle - go there and fight!
+        2. CONTROLLABLE DRAIN: Empty location with opponent icons - we can control
+           and drain. Prioritize by icon count.
+        3. SUPPORT: We're losing at a location but can catch up with this deploy
+        4. AVOID: Overkill locations, lost causes, no strategic value
 
-        Factors:
-        - Force drain potential (opponent force icons = we can drain there)
-        - GameStrategy location priority (if available)
-        - Power differential and whether we can realistically contest
-        - Free battleground bonus (no enemy presence)
-        - Threat level (avoid dangerous locations)
+        Key insight: Only deploy where we can CONTROL after deployment.
         """
         score = 0.0
         loc_name = location.site_name or location.system_name or str(location.location_index)
+
+        # Get config thresholds
+        overkill_threshold = config.DEPLOY_OVERKILL_THRESHOLD
+        comfortable_threshold = config.DEPLOY_COMFORTABLE_THRESHOLD
+        battle_force_reserve = config.BATTLE_FORCE_RESERVE
 
         # Calculate power differential
         my_power = board_state.my_power_at_location(location.location_index)
@@ -608,148 +889,140 @@ class DeployEvaluator(ActionEvaluator):
         # Check if opponent has presence
         opponent_has_presence = len(location.their_cards) > 0 or their_power > 0
 
-        # IMPORTANT: Force drain potential - locations where opponent has force icons
-        # In SWCCG, you can only drain at locations where YOU have presence AND
-        # there are OPPONENT force icons. Prioritize these locations!
+        # Parse opponent force icons (for drain potential)
         their_icons = location.their_icons or ""
-        can_drain = False
         icon_count = 0
         if their_icons and their_icons != "0":
-            # Parse icon count (could be "2" or "*2" format)
             try:
                 icon_count = int(their_icons.replace("*", "").strip() or "0")
             except ValueError:
                 icon_count = 1 if their_icons else 0
-            can_drain = icon_count > 0
+
+        # Calculate deployable power to THIS location type
+        deployable_power = self._calculate_deployable_power(board_state, location)
 
         # =====================================================================
-        # FREE BATTLEGROUND: No enemy presence
-        # Good for establishing presence and draining, but don't pile on!
+        # SCENARIO 1: BATTLE OPPORTUNITY
+        # Enemy has weak presence, we can overpower AND have Force to battle
+        # This is HIGH PRIORITY - we can remove their presence!
+        # =====================================================================
+        if opponent_has_presence and their_power > 0:
+            # Calculate what power we'd have after deploying everything we can
+            potential_power = my_power + deployable_power
+            potential_diff = potential_power - their_power
+
+            # Check if we have Force to battle after deploying
+            # (battle initiation costs 1 Force)
+            force_available = board_state.force_pile
+            deploy_cost = self._estimate_deploy_cost(board_state, location)
+            force_after_deploy = force_available - deploy_cost
+            can_battle = force_after_deploy >= battle_force_reserve
+
+            # BATTLE OPPORTUNITY: Weak enemy (2-6 power), we can decisively overpower
+            if their_power <= 6 and potential_diff >= 2 and can_battle:
+                # Great opportunity! Deploy here, then battle to remove them
+                battle_bonus = 60.0 + (potential_diff * 5) + (icon_count * 15)
+                score += battle_bonus
+                logger.info(f"⚔️ BATTLE OPPORTUNITY at {loc_name}: they have {their_power}, "
+                           f"we can deploy to {potential_power} (+{potential_diff}), icons={icon_count}")
+
+                # Extra bonus if this location has drain potential after we win
+                if icon_count > 0:
+                    score += 20.0 * icon_count
+                    logger.debug(f"  +{20 * icon_count} for drain potential after battle")
+
+                return score
+
+            # We can overpower but maybe not battle (low Force)
+            elif potential_diff >= 2 and not can_battle:
+                score += 30.0 + potential_diff * 3
+                logger.debug(f"Location {loc_name}: can overpower (+{potential_diff}) but no Force for battle")
+
+            # Close contest - might be worth fighting for
+            elif potential_diff >= -2:
+                score += 20.0 + (2 + potential_diff) * 5
+                logger.debug(f"Location {loc_name}: close contest (potential +{potential_diff})")
+
+            # We CAN'T catch up - lost cause, deploy elsewhere
+            else:
+                lost_cause_penalty = -50.0 - abs(potential_diff) * 3
+                score += lost_cause_penalty
+                logger.debug(f"Location {loc_name}: {lost_cause_penalty:.1f} (LOST CAUSE - can only reach {potential_power} vs {their_power})")
+                return score
+
+        # =====================================================================
+        # SCENARIO 2: CONTROLLABLE DRAIN (Empty location with opponent icons)
+        # No enemy = we can control and drain safely
+        # Prioritize by icon count (more icons = more drain damage)
         # =====================================================================
         if not opponent_has_presence:
             if my_power == 0:
-                # Empty location - worth establishing presence
-                if can_drain:
-                    # Can drain here - high priority to establish!
-                    score += 80.0 + (icon_count * 10.0)
-                    logger.debug(f"Location {loc_name}: +{80 + icon_count * 10:.1f} (establish presence, can drain {icon_count})")
+                # Empty location - establish presence
+                if icon_count > 0:
+                    # DRAIN OPPORTUNITY - prioritize by icon count!
+                    drain_bonus = 50.0 + (icon_count * 25.0)
+                    score += drain_bonus
+                    logger.info(f"🎯 DRAIN TARGET at {loc_name}: {icon_count} opponent icons, empty!")
                 else:
-                    # No drain but still worth having presence
-                    score += 15.0
-                    logger.debug(f"Location {loc_name}: +15.0 (establish presence)")
-            elif my_power < 4:
-                # Light presence - might want to reinforce slightly
-                if can_drain:
-                    score += 30.0
-                    logger.debug(f"Location {loc_name}: +30.0 (light presence {my_power}, can drain)")
+                    # No drain potential but still worth presence
+                    score += 10.0
+                    logger.debug(f"Location {loc_name}: +10.0 (establish presence, no drain)")
+
+            elif my_power < comfortable_threshold:
+                # Light presence - reinforce if it has drain value
+                if icon_count > 0:
+                    score += 20.0 + (icon_count * 10.0)
+                    logger.debug(f"Location {loc_name}: reinforce drain location ({icon_count} icons)")
                 else:
                     score += 5.0
-                    logger.debug(f"Location {loc_name}: +5.0 (light presence, no drain)")
-            else:
-                # We already have solid presence (4+ power) with no enemy
-                # DON'T pile on - deploy elsewhere!
-                overkill_penalty = -30.0 - (my_power - 4) * 5
-                score += overkill_penalty
-                logger.debug(f"Location {loc_name}: {overkill_penalty:.1f} (OVERKILL - already {my_power} power, no enemy!)")
 
-            # Use GameStrategy priority for free locations
-            if game_strategy:
-                priority = game_strategy.get_location_priority(location.location_index)
-                if priority:
-                    score += priority.score * 0.3
+            else:
+                # Already have solid presence with no enemy - OVERKILL
+                overkill_penalty = -30.0 - (my_power - comfortable_threshold) * 5
+                score += overkill_penalty
+                logger.debug(f"Location {loc_name}: {overkill_penalty:.1f} (OVERKILL - {my_power} power, no enemy)")
+
             return score
 
         # =====================================================================
-        # CONTESTED LOCATION: Enemy has presence
-        # Only deploy here if we can reasonably win or tie the battle!
+        # SCENARIO 3: ALREADY WINNING - Check for overkill
         # =====================================================================
-
-        # Force drain bonus (if we have presence and can drain)
-        if can_drain and my_power > 0:
-            drain_bonus = 10.0 + (icon_count * 3.0)
-            score += drain_bonus
-            logger.debug(f"Location {loc_name}: +{drain_bonus:.1f} (can drain {icon_count})")
-
-        # Use GameStrategy location priority if available
-        if game_strategy:
-            priority = game_strategy.get_location_priority(location.location_index)
-            if priority:
-                score += priority.score * 0.3
-                logger.debug(f"Location {loc_name}: priority {priority.score:.1f}")
-
-                # Extra penalty for dangerous/retreat locations
-                if priority.threat_level == ThreatLevel.DANGEROUS:
-                    score -= 20.0
-                    logger.debug(f"Location {loc_name}: -20 (dangerous)")
-                elif priority.threat_level == ThreatLevel.RETREAT:
-                    score -= 40.0
-                    logger.debug(f"Location {loc_name}: -40 (retreat)")
-
-        # =====================================================================
-        # POWER DIFFERENTIAL SCORING
-        # Key insight: Don't reinforce lost causes! If we can't win, deploy elsewhere.
-        # =====================================================================
-
-        if power_diff >= 8:
-            # OVERKILL: We have overwhelming control, deploy elsewhere
-            overkill_penalty = -50.0 - (power_diff - 8) * 3
+        if power_diff >= overkill_threshold:
+            overkill_penalty = -50.0 - (power_diff - overkill_threshold) * 3
             score += overkill_penalty
             logger.debug(f"Location {loc_name}: {overkill_penalty:.1f} (overkill +{power_diff})")
 
-        elif power_diff >= 4:
-            # Comfortable lead - less need to reinforce
+        elif power_diff >= comfortable_threshold:
             score -= 25.0
             logger.debug(f"Location {loc_name}: -25.0 (comfortable lead +{power_diff})")
 
         elif power_diff >= 0:
-            # WINNING or TIE - good to maintain/extend lead
-            score += 20.0 + power_diff * 2
-            logger.debug(f"Location {loc_name}: +{20 + power_diff * 2:.1f} (winning/tie by {power_diff})")
+            # Winning or tie - might want to secure it
+            score += 15.0 + power_diff * 2
+            if icon_count > 0:
+                score += icon_count * 5  # Bonus for drain potential
+            logger.debug(f"Location {loc_name}: winning by {power_diff}, icons={icon_count}")
 
-        elif power_diff >= -4:
-            # CLOSE CONTEST (-1 to -4): We might catch up with deployment
-            # This is worth fighting for!
-            score += 25.0 + (4 + power_diff) * 3  # +25 at -4, +37 at -1
-            logger.debug(f"Location {loc_name}: +{25 + (4 + power_diff) * 3:.1f} (close contest, losing by {abs(power_diff)})")
-
-        else:
-            # LOSING BADLY (-5 or worse): Check if we can actually catch up this turn!
-            # Calculate: we'd need to deploy (their_power - my_power + 1) power to win
-            power_needed_to_win = their_power - my_power + 1
-
-            # Calculate total deployable power from hand this turn
-            deployable_power = self._calculate_deployable_power(board_state, location)
-            logger.debug(f"Location {loc_name}: need {power_needed_to_win} power to win, have {deployable_power} deployable")
-
-            if deployable_power >= power_needed_to_win:
-                # We CAN catch up this turn! This is actually a GOOD play.
-                catch_up_bonus = 30.0 + (deployable_power - power_needed_to_win) * 3
-                score += catch_up_bonus
-                logger.debug(f"Location {loc_name}: +{catch_up_bonus:.1f} (CAN WIN - {deployable_power} power deployable vs {power_needed_to_win} needed)")
-            elif deployable_power >= power_needed_to_win - 2:
-                # Close - might be worth trying if we draw well or get destiny
-                score += 10.0
-                logger.debug(f"Location {loc_name}: +10.0 (close to catching up)")
-            elif power_needed_to_win <= 6:
-                # Might be able to catch up with a strong character
-                catch_up_bonus = 15.0 - (power_needed_to_win * 2)  # +3 at need 6, +13 at need 1
-                score += catch_up_bonus
-                logger.debug(f"Location {loc_name}: +{catch_up_bonus:.1f} (might catch up, need {power_needed_to_win} power)")
-            else:
-                # Need too much power - this is a lost cause
-                lost_cause_penalty = -40.0 - (power_needed_to_win - 6) * 5
-                score += lost_cause_penalty
-                logger.debug(f"Location {loc_name}: {lost_cause_penalty:.1f} (LOST CAUSE - need {power_needed_to_win} power, only {deployable_power} available)")
+        # Use GameStrategy priority if available
+        if game_strategy:
+            priority = game_strategy.get_location_priority(location.location_index)
+            if priority:
+                score += priority.score * 0.2
+                if priority.threat_level == ThreatLevel.DANGEROUS:
+                    score -= 15.0
+                elif priority.threat_level == ThreatLevel.RETREAT:
+                    score -= 30.0
 
         return score
 
-    def _calculate_deployable_power(self, board_state, location) -> int:
+    def _calculate_deployable_power(self, board_state, location, reserve_for_battle: bool = True) -> int:
         """
         Calculate total power we could deploy to this location this turn.
 
         Considers:
         - Cards in hand that can deploy to this location type
         - Available Force to pay deploy costs
+        - Reserve Force for battle initiation if needed
         - Whether cards are characters/vehicles (ground) or starships (space)
 
         Returns estimated total deployable power.
@@ -757,10 +1030,15 @@ class DeployEvaluator(ActionEvaluator):
         if not board_state or not board_state.cards_in_hand:
             return 0
 
-        available_force = board_state.force_pile
+        # Reserve Force for battle if requested
+        battle_reserve = config.BATTLE_FORCE_RESERVE if reserve_for_battle else 0
+        available_force = board_state.force_pile - battle_reserve
+        if available_force <= 0:
+            return 0
+
         total_power = 0
 
-        # Sort hand by power-to-cost ratio (best value first)
+        # Collect deployable cards
         deployable_cards = []
         for card in board_state.cards_in_hand:
             metadata = get_card(card.blueprint_id)
@@ -769,18 +1047,18 @@ class DeployEvaluator(ActionEvaluator):
 
             # Check if card can deploy to this location type
             can_deploy_here = False
-            if location.is_space and not location.is_ground:
+            if location.is_space and not getattr(location, 'is_ground', False):
                 # Pure space - only starships
                 can_deploy_here = metadata.is_starship
-            elif location.is_ground:
-                # Ground or docking bay - characters, vehicles, (starships at 0 power)
+            elif getattr(location, 'is_ground', True):
+                # Ground or docking bay - characters, vehicles
                 can_deploy_here = metadata.is_character or metadata.is_vehicle
                 # Don't count starships at docking bays - they have 0 power there
             else:
                 # Default - assume characters/vehicles can deploy
                 can_deploy_here = metadata.is_character or metadata.is_vehicle
 
-            if can_deploy_here and metadata.deploy_value > 0:
+            if can_deploy_here and metadata.deploy_value and metadata.deploy_value > 0:
                 deployable_cards.append({
                     'power': metadata.power_value or 0,
                     'cost': metadata.deploy_value,
@@ -796,9 +1074,40 @@ class DeployEvaluator(ActionEvaluator):
             if card['cost'] <= remaining_force:
                 total_power += card['power']
                 remaining_force -= card['cost']
-                logger.debug(f"  Could deploy {card['name']} (power {card['power']}, cost {card['cost']})")
 
         return total_power
+
+    def _estimate_deploy_cost(self, board_state, location) -> int:
+        """
+        Estimate total Force cost to deploy everything we can to this location.
+
+        Used to calculate how much Force we'd have left for battle.
+        """
+        if not board_state or not board_state.cards_in_hand:
+            return 0
+
+        available_force = board_state.force_pile
+        total_cost = 0
+
+        for card in board_state.cards_in_hand:
+            metadata = get_card(card.blueprint_id)
+            if not metadata:
+                continue
+
+            # Check if card can deploy to this location type
+            can_deploy_here = False
+            if location.is_space and not getattr(location, 'is_ground', False):
+                can_deploy_here = metadata.is_starship
+            elif getattr(location, 'is_ground', True):
+                can_deploy_here = metadata.is_character or metadata.is_vehicle
+            else:
+                can_deploy_here = metadata.is_character or metadata.is_vehicle
+
+            if can_deploy_here and metadata.deploy_value and metadata.deploy_value > 0:
+                if total_cost + metadata.deploy_value <= available_force:
+                    total_cost += metadata.deploy_value
+
+        return total_cost
 
     def _extract_blueprint_from_action(self, action_text: str) -> str:
         """
@@ -857,4 +1166,28 @@ class DeployEvaluator(ActionEvaluator):
             if card_meta and (card_meta.is_vehicle or card_meta.is_starship):
                 if not self._card_has_pilot(card, card_meta):
                     return True
+        return False
+
+    def _have_presence_at_location(self, board_state, location) -> bool:
+        """
+        Check if we have 'presence' at a location.
+
+        In SWCCG, presence requires a character with ability > 0.
+        Droids (ability = 0) do NOT provide presence on their own.
+        Without presence you cannot:
+        - Prevent opponent's force drains
+        - Initiate battles
+        - Control the location
+
+        Args:
+            board_state: Current board state
+            location: The location to check
+
+        Returns:
+            True if we have at least one character with ability > 0 there
+        """
+        for card in location.my_cards:
+            card_meta = get_card(card.blueprint_id)
+            if card_meta and card_meta.provides_presence:
+                return True
         return False

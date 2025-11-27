@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from enum import Enum
 import logging
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -175,8 +176,12 @@ class PassEvaluator(ActionEvaluator):
         super().__init__("Pass")
 
     def can_evaluate(self, context: DecisionContext) -> bool:
-        # Can only pass if noPass=false
-        return not context.no_pass
+        # Can only pass if:
+        # 1. noPass=false (passing is allowed)
+        # 2. AND min=0 (no minimum selection required)
+        # This matches C# logic in ParseArbritraryCardDecision
+        min_required = context.extra.get('min', 0)
+        return not context.no_pass and min_required == 0
 
     def evaluate(self, context: DecisionContext) -> List[EvaluatedAction]:
         """Create a PASS action with low default score"""
@@ -284,6 +289,38 @@ class CombinedEvaluator:
 
         # Pick the best action
         best_action = max(all_actions, key=lambda a: a.score)
+
+        # =====================================================
+        # If ALL actions are terrible (score < -100), consider passing
+        # This prevents the bot from always taking bad actions.
+        # 50% of the time we'll pass, 50% we'll take the least-bad action.
+        #
+        # BUT: We can only pass if:
+        # - no_pass is False (passing is allowed)
+        # - min is 0 or not set (no minimum selection required)
+        # =====================================================
+        BAD_ACTION_THRESHOLD = -100.0
+        if best_action.score < BAD_ACTION_THRESHOLD:
+            # Check if we're allowed to pass
+            min_required = context.extra.get('min', 0)
+            can_pass = not context.no_pass and min_required == 0
+
+            if can_pass and random.random() < 0.5:
+                self.logger.info(f"🛑 All actions bad (best: {best_action.score:.1f}), choosing to PASS")
+                # Return a Pass action instead of the bad action
+                pass_action = EvaluatedAction(
+                    action_id="",  # Empty = pass
+                    action_type=ActionType.PASS,
+                    score=0.0,
+                    display_text="Pass (all actions were bad)"
+                )
+                pass_action.add_reasoning(f"Best action was {best_action.score:.1f}, deciding to pass instead")
+                return pass_action
+            elif can_pass:
+                self.logger.info(f"⚠️  All actions bad (best: {best_action.score:.1f}), but taking least-bad action anyway")
+            else:
+                # Must take an action (noPass=true or min >= 1)
+                self.logger.info(f"⚠️  All actions bad (best: {best_action.score:.1f}), but MUST choose (noPass={context.no_pass}, min={min_required})")
 
         self.logger.info(f"✅ Best action: {best_action.display_text} (score: {best_action.score:.1f})")
         self.logger.info(f"   Reasoning: {' | '.join(best_action.reasoning)}")

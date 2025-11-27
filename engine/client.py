@@ -648,6 +648,47 @@ class GEMPClient:
             logger.error(f"Post chat request failed: {e}")
             return False
 
+    def concede_game(self, game_id: str) -> bool:
+        """
+        Concede the current game.
+
+        Posts to the GEMP concede endpoint to forfeit the game.
+        Used when we detect we can't meaningfully act anymore.
+
+        Based on C# GameCommsHelper.PostConcede()
+
+        Args:
+            game_id: The game ID to concede
+
+        Returns:
+            True if concede was successful
+        """
+        if not self.logged_in:
+            return False
+
+        try:
+            logger.info(f"🏳️ Conceding game {game_id}")
+
+            response = self.session.post(
+                f"{self.server_url}/game/{game_id}/concede",
+                data={
+                    'participantId': 'null'
+                },
+                timeout=self.timeout
+            )
+
+            if response.status_code == 200:
+                logger.info(f"✅ Game conceded successfully")
+                return True
+            else:
+                logger.error(f"Failed to concede: HTTP {response.status_code}")
+                logger.error(f"Response: {response.text[:200]}")
+                return False
+
+        except requests.RequestException as e:
+            logger.error(f"Concede request failed: {e}")
+            return False
+
     def __del__(self):
         """Cleanup on deletion"""
         if hasattr(self, 'session'):

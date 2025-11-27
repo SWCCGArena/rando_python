@@ -6,6 +6,8 @@ Determines the optimal amount of force to activate based on:
 - Current force pile
 - Reserve deck size
 - Turn number and strategy
+- Future turn planning (save for expensive cards)
+- Late-game life force preservation
 
 Ported from C# BotAIHelper.ForceToActivate() and RankActivateForceAction()
 """
@@ -15,6 +17,10 @@ from typing import List, Optional
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 
 logger = logging.getLogger(__name__)
+
+# Late-game thresholds
+LATE_GAME_LIFE_FORCE = 12  # Below this, be more strategic
+CRITICAL_LIFE_FORCE = 6  # Below this, minimize activation
 
 
 class ForceActivationEvaluator(ActionEvaluator):
@@ -127,12 +133,55 @@ class ForceActivationEvaluator(ActionEvaluator):
         Ported from C# BotAIHelper.ForceToActivate():
         - If we already have lots of force (>12), only activate a few more
         - If reserve is running low, leave some for destiny draws
+
+        Enhanced with:
+        - Late-game life force preservation
+        - Consider hand size and deployable cards
         """
+        from ..card_loader import get_card
+
         amount = max_available
         current_force = bs.force_pile
-        reserve_size = bs.total_reserve_force() if hasattr(bs, 'total_reserve_force') else (
-            bs.reserve_deck + bs.used_pile + bs.force_pile
-        )
+        reserve_deck = getattr(bs, 'reserve_deck', 20)
+        used_pile = getattr(bs, 'used_pile', 0)
+        force_pile = getattr(bs, 'force_pile', 0)
+        hand_size = getattr(bs, 'hand_size', 7)
+
+        # Total life force (reserve + used + force pile)
+        life_force = reserve_deck + used_pile + force_pile
+
+        # === LATE GAME PRESERVATION ===
+        # When life force is critically low, minimize activation to preserve destiny draws
+        if life_force < CRITICAL_LIFE_FORCE:
+            # Only activate enough to do ONE action, preserve rest for destiny
+            amount = min(amount, max(1, 6 - current_force))
+            logger.debug(f"CRITICAL life force ({life_force}), limiting activation to {amount}")
+            return amount
+
+        # Late game - be more conservative
+        if life_force < LATE_GAME_LIFE_FORCE:
+            # Leave more for destiny draws
+            min_reserve = max(3, life_force // 3)
+            available_after_reserve = max(0, reserve_deck - min_reserve)
+            amount = min(amount, available_after_reserve)
+            logger.debug(f"Late game ({life_force} life), leaving {min_reserve} reserve, activating {amount}")
+
+        # === CONSIDER HAND CONTENTS ===
+        # Check if we have expensive cards that need saving for
+        max_deploy_cost = 0
+        if hasattr(bs, 'cards_in_hand'):
+            for card in bs.cards_in_hand:
+                if card.blueprint_id:
+                    metadata = get_card(card.blueprint_id)
+                    if metadata and metadata.deploy_value:
+                        max_deploy_cost = max(max_deploy_cost, metadata.deploy_value)
+
+        # If we have expensive cards and need more force, activate more
+        if max_deploy_cost > current_force and max_deploy_cost <= life_force:
+            force_needed = max_deploy_cost - current_force
+            # Activate enough to get closer to deploying expensive card
+            amount = min(amount, max(amount, force_needed))
+            logger.debug(f"Expensive card (cost {max_deploy_cost}), need {force_needed} more, activating {amount}")
 
         # If we already have plenty of force, only activate a little more
         if current_force > 12:
@@ -141,8 +190,16 @@ class ForceActivationEvaluator(ActionEvaluator):
             logger.debug(f"Force > 12 ({current_force}), limiting to {amount} more")
 
         # If reserve is running low, leave some for destiny draws
+        reserve_size = bs.total_reserve_force() if hasattr(bs, 'total_reserve_force') else life_force
         if reserve_size <= amount:
             amount = max(0, reserve_size - 3)
             logger.debug(f"Reserve low ({reserve_size}), limiting to {amount}")
+
+        # === HAND SIZE CONSIDERATION ===
+        # If hand is small and we have plenty of force, don't over-activate
+        # (save cards in reserve deck for drawing later)
+        if hand_size <= 4 and current_force >= 8:
+            amount = min(amount, 2)
+            logger.debug(f"Small hand ({hand_size}), enough force ({current_force}), limiting to {amount}")
 
         return amount

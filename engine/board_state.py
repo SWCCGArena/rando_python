@@ -612,9 +612,21 @@ class BoardState:
         TODO: Implement full ability calculation from card stats.
         For now, count cards as rough estimate.
         """
-        if location_index >= len(self.locations) or not self.locations[location_index]:
+        if location_index < 0 or location_index >= len(self.locations) or not self.locations[location_index]:
             return 0
         return len(self.locations[location_index].my_cards)
+
+    def my_card_count_at_location(self, location_index: int) -> int:
+        """Count my cards at a location (characters, vehicles, starships)"""
+        if location_index < 0 or location_index >= len(self.locations) or not self.locations[location_index]:
+            return 0
+        return len(self.locations[location_index].my_cards)
+
+    def their_card_count_at_location(self, location_index: int) -> int:
+        """Count opponent's cards at a location (characters, vehicles, starships)"""
+        if location_index < 0 or location_index >= len(self.locations) or not self.locations[location_index]:
+            return 0
+        return len(self.locations[location_index].their_cards)
 
     # ========== Resource Queries ==========
 
@@ -652,6 +664,79 @@ class BoardState:
         """
         return self.reserve_deck + self.used_pile + self.force_pile
 
+    def their_total_life_force(self) -> int:
+        """
+        Opponent's total life force (reserve deck + used pile + force pile).
+        """
+        return self.their_reserve_deck + self.their_used_pile + self.their_force_pile
+
+    def should_concede(self) -> tuple[bool, str]:
+        """
+        Determine if we should concede the game.
+
+        Concede conditions:
+        1. Very low life force (< 5 cards in reserve/used/force piles)
+        2. Can't afford to deploy any cards in hand
+        3. Game isn't close (opponent has significantly more life force)
+
+        Returns:
+            Tuple of (should_concede, reason)
+        """
+        from .card_loader import get_card
+
+        my_life = self.total_reserve_force()
+        their_life = self.their_total_life_force()
+
+        # Don't concede if game is close (within 8 cards of life force)
+        life_difference = their_life - my_life
+        if life_difference < 8:
+            return False, ""
+
+        # Don't concede if we still have significant life force
+        if my_life >= 8:
+            return False, ""
+
+        # Check if we can afford ANY deployable card in hand
+        can_afford_something = False
+        cheapest_deploy_cost = float('inf')
+
+        for card in self.cards_in_hand:
+            if card.blueprint_id:
+                metadata = get_card(card.blueprint_id)
+                if metadata and metadata.deploy_value and metadata.deploy_value > 0:
+                    deploy_cost = metadata.deploy_value
+                    cheapest_deploy_cost = min(cheapest_deploy_cost, deploy_cost)
+
+                    # Can we ever afford this?
+                    # We need force_pile >= deploy_cost
+                    # Next turn we'll activate more, but if my_life < deploy_cost
+                    # we can never accumulate enough
+                    if my_life >= deploy_cost:
+                        can_afford_something = True
+                        break
+
+        # Also check if we can afford something with our current force pile
+        if self.force_pile >= cheapest_deploy_cost:
+            can_afford_something = True
+
+        # Concede if:
+        # - Low life force (< 5)
+        # - Can't afford anything deployable
+        # - Opponent has significant advantage (8+ more life)
+        if my_life < 5 and not can_afford_something and life_difference >= 8:
+            reason = (f"Life force critical ({my_life}), can't afford any deployments "
+                      f"(cheapest costs {cheapest_deploy_cost}), opponent ahead by {life_difference}")
+            logger.info(f"🏳️ Concede check: {reason}")
+            return True, reason
+
+        # Also concede if life force is extremely low (< 3) and opponent has advantage
+        if my_life < 3 and life_difference >= 5:
+            reason = f"Life force nearly depleted ({my_life}), opponent ahead by {life_difference}"
+            logger.info(f"🏳️ Concede check: {reason}")
+            return True, reason
+
+        return False, ""
+
     def force_to_activate(self, max_available: int) -> int:
         """
         Calculate how much force to activate this turn.
@@ -681,6 +766,402 @@ class BoardState:
             logger.debug(f"Reserve low ({reserve_size}), limiting to {amount}")
 
         return amount
+
+    # ========== Deployable Power Calculation ==========
+
+    def total_hand_deployable_ground_power(self, card_id_to_ignore: str = "") -> int:
+        """
+        Calculate total power we can deploy to GROUND locations this turn.
+
+        Uses a power-maximizing approach: prioritize high-power cards to maximize
+        the total power we can deploy within our force budget.
+
+        Considers:
+        - Characters and vehicles (not starships)
+        - Force available to pay deploy costs
+        - Ignores "pure pilots" (low power pilots we should save for ships)
+
+        Args:
+            card_id_to_ignore: Card ID to exclude (e.g., the card we're evaluating)
+
+        Returns:
+            Total deployable ground power given our force budget
+        """
+        from .card_loader import get_card
+
+        deployable = []
+        for card in self.cards_in_hand:
+            if card.card_id == card_id_to_ignore:
+                continue
+            metadata = get_card(card.blueprint_id) if card.blueprint_id else None
+            if not metadata:
+                continue
+
+            # Skip starships - they don't deploy to ground
+            if metadata.is_starship:
+                continue
+
+            # Skip "pure pilots" - low power pilots we should save for piloting ships
+            # C# logic: isPilot && !isWarrior && power <= 4, OR isWarrior && isPilot && power <= 3
+            if metadata.is_pilot and not metadata.is_warrior and metadata.power_value <= 4:
+                continue
+            if metadata.is_warrior and metadata.is_pilot and metadata.power_value <= 3:
+                continue
+
+            deployable.append({
+                'power': metadata.power_value or 0,
+                'cost': metadata.deploy_value or 0,
+                'name': metadata.title
+            })
+
+        # Reserve 1 force for other actions
+        available_force = self.force_pile - 1
+        if available_force <= 0:
+            return 0
+
+        # Use power-maximizing approach: Sort by power (highest first)
+        # This ensures we prioritize deploying our best cards
+        deployable.sort(key=lambda x: x['power'], reverse=True)
+
+        # Greedy selection: pick highest power cards that fit
+        total_power = 0
+        cost_so_far = 0
+
+        for card in deployable:
+            if cost_so_far + card['cost'] <= available_force:
+                total_power += card['power']
+                cost_so_far += card['cost']
+
+        # If the greedy approach didn't get us to threshold, try a smarter approach
+        # Use 0/1 knapsack dynamic programming for small sets
+        if total_power < 6 and len(deployable) <= 10:
+            # Try to maximize power within budget using DP
+            dp_power = self._knapsack_max_power(deployable, available_force)
+            if dp_power > total_power:
+                total_power = dp_power
+
+        return total_power
+
+    def _knapsack_max_power(self, cards: list, budget: int) -> int:
+        """
+        Use dynamic programming to find maximum deployable power within budget.
+        This is the 0/1 knapsack problem: maximize power subject to cost <= budget.
+        """
+        if not cards or budget <= 0:
+            return 0
+
+        # DP table: dp[i] = max power achievable with exactly i force spent
+        # Use budget + 1 to handle 0 to budget inclusive
+        max_budget = min(budget + 1, 50)  # Cap to avoid huge arrays
+        dp = [0] * max_budget
+
+        for card in cards:
+            cost = card['cost']
+            power = card['power']
+            if cost > budget:
+                continue
+            # Process in reverse to avoid using same card twice
+            for i in range(max_budget - 1, cost - 1, -1):
+                if dp[i - cost] + power > dp[i]:
+                    dp[i] = dp[i - cost] + power
+
+        return max(dp)
+
+    def total_hand_deployable_space_power(self, card_id_to_ignore: str = "") -> int:
+        """
+        Calculate total power we can deploy to SPACE locations this turn.
+
+        Uses power-maximizing approach to prioritize high-power starships.
+
+        Considers:
+        - Starships only (with permanent pilot or that we can pilot)
+        - Force available to pay deploy costs
+
+        Args:
+            card_id_to_ignore: Card ID to exclude (e.g., the card we're evaluating)
+
+        Returns:
+            Total deployable space power given our force budget
+        """
+        from .card_loader import get_card
+
+        deployable = []
+        for card in self.cards_in_hand:
+            if card.card_id == card_id_to_ignore:
+                continue
+            metadata = get_card(card.blueprint_id) if card.blueprint_id else None
+            if not metadata:
+                continue
+
+            # Only starships deploy to space
+            if not metadata.is_starship:
+                continue
+
+            # Skip unpiloted starships (they have 0 power)
+            if not metadata.has_permanent_pilot:
+                # TODO: Check if we have a pilot that could pilot this
+                continue
+
+            deployable.append({
+                'power': metadata.power_value or 0,
+                'cost': metadata.deploy_value or 0,
+                'name': metadata.title
+            })
+
+        # Reserve 1 force
+        available_force = self.force_pile - 1
+        if available_force <= 0:
+            return 0
+
+        # Power-maximizing: sort by power (highest first)
+        deployable.sort(key=lambda x: x['power'], reverse=True)
+
+        # Greedy selection: pick highest power cards that fit
+        total_power = 0
+        cost_so_far = 0
+
+        for card in deployable:
+            if cost_so_far + card['cost'] <= available_force:
+                total_power += card['power']
+                cost_so_far += card['cost']
+
+        # Use knapsack for small sets if needed
+        if total_power < 6 and len(deployable) <= 10:
+            dp_power = self._knapsack_max_power(deployable, available_force)
+            if dp_power > total_power:
+                total_power = dp_power
+
+        return total_power
+
+    def total_hand_deployable_power(self, include_activation: bool = False) -> int:
+        """
+        Calculate total power we can deploy this turn (ground + space).
+
+        Args:
+            include_activation: If True, include force we can still activate
+
+        Returns:
+            Total deployable power
+        """
+        return (self.total_hand_deployable_ground_power() +
+                self.total_hand_deployable_space_power())
+
+    # ========== Flee/Movement Analysis ==========
+
+    def get_system_name(self, loc_idx: int) -> str:
+        """
+        Extract the system name from a location.
+
+        Examples:
+        - "Naboo: Swamp" -> "Naboo"
+        - "Tatooine: Mos Eisley" -> "Tatooine"
+        - "Coruscant" (system card) -> "Coruscant"
+        """
+        if loc_idx < 0 or loc_idx >= len(self.locations):
+            return ""
+
+        loc = self.locations[loc_idx]
+        if not loc:
+            return ""
+
+        # Try site_name first (e.g., "Naboo: Swamp")
+        name = loc.site_name or loc.system_name or ""
+
+        # Extract system prefix (before the colon)
+        if ":" in name:
+            return name.split(":")[0].strip()
+
+        # No colon - might be a system card itself
+        return name.strip()
+
+    def find_same_system_locations(self, loc_idx: int) -> List[int]:
+        """
+        Find other locations in the same system.
+
+        For ground movement, you can only move between locations in the same
+        system (e.g., "Naboo: Swamp" -> "Naboo: Theed Palace Throne Room").
+
+        Returns list of location indices in the same system (excluding current).
+        """
+        system_name = self.get_system_name(loc_idx)
+        if not system_name:
+            return []
+
+        same_system = []
+        for i, loc in enumerate(self.locations):
+            if i == loc_idx:
+                continue
+            if loc and self.get_system_name(i) == system_name:
+                same_system.append(i)
+
+        return same_system
+
+    def find_adjacent_locations(self, loc_idx: int) -> List[int]:
+        """
+        Find locations adjacent to this one (index +/- 1).
+
+        Ground movement is typically limited to adjacent locations.
+        Returns list of valid adjacent location indices.
+        """
+        adjacent = []
+
+        # Check left
+        if loc_idx > 0 and loc_idx - 1 < len(self.locations):
+            if self.locations[loc_idx - 1]:
+                adjacent.append(loc_idx - 1)
+
+        # Check right
+        if loc_idx + 1 < len(self.locations):
+            if self.locations[loc_idx + 1]:
+                adjacent.append(loc_idx + 1)
+
+        return adjacent
+
+    def my_character_count_at_location(self, loc_idx: int) -> int:
+        """
+        Count my characters at a location (for movement cost calculation).
+
+        Movement costs 1 Force per character moved.
+        """
+        if loc_idx < 0 or loc_idx >= len(self.locations):
+            return 0
+
+        loc = self.locations[loc_idx]
+        if not loc:
+            return 0
+
+        count = 0
+        for card in loc.my_cards:
+            metadata = _get_card_metadata(card.blueprint_id) if card.blueprint_id else None
+            if metadata and metadata.is_character:
+                count += 1
+
+        return count
+
+    def my_starship_count_at_location(self, loc_idx: int) -> int:
+        """
+        Count my starships at a location (for space movement cost).
+
+        Movement costs 1 Force per starship moved.
+        """
+        if loc_idx < 0 or loc_idx >= len(self.locations):
+            return 0
+
+        loc = self.locations[loc_idx]
+        if not loc:
+            return 0
+
+        count = 0
+        for card in loc.my_cards:
+            metadata = _get_card_metadata(card.blueprint_id) if card.blueprint_id else None
+            if metadata and metadata.is_starship:
+                count += 1
+
+        return count
+
+    def analyze_flee_options(self, loc_idx: int, is_space: bool = False) -> dict:
+        """
+        Analyze flee viability from a location.
+
+        Returns a dict with:
+        - can_flee: bool - Whether fleeing is possible
+        - flee_destinations: List of (loc_idx, their_power, our_power) tuples
+        - best_destination: loc_idx of best place to flee to (or None)
+        - movement_cost: Force required to move all our units
+        - can_afford: bool - Whether we have enough Force
+        - reason: str - Explanation
+
+        Args:
+            loc_idx: Location index we're considering fleeing from
+            is_space: True if this is a space location (use hyperspeed rules)
+        """
+        result = {
+            'can_flee': False,
+            'flee_destinations': [],
+            'best_destination': None,
+            'movement_cost': 0,
+            'can_afford': False,
+            'reason': "Unknown"
+        }
+
+        if loc_idx < 0 or loc_idx >= len(self.locations):
+            result['reason'] = "Invalid location"
+            return result
+
+        loc = self.locations[loc_idx]
+        if not loc:
+            result['reason'] = "Location not found"
+            return result
+
+        # Calculate movement cost
+        if is_space:
+            unit_count = self.my_starship_count_at_location(loc_idx)
+        else:
+            unit_count = self.my_character_count_at_location(loc_idx)
+
+        result['movement_cost'] = unit_count
+        result['can_afford'] = self.force_pile >= unit_count
+
+        if unit_count == 0:
+            result['reason'] = "No units to move"
+            return result
+
+        if not result['can_afford']:
+            result['reason'] = f"Can't afford to move {unit_count} units (have {self.force_pile} Force)"
+            return result
+
+        # Find flee destinations
+        if is_space:
+            # Space movement - would need hyperspeed check, simplified for now
+            # Just check adjacent for now (TODO: proper hyperspeed/parsec logic)
+            destinations = self.find_adjacent_locations(loc_idx)
+        else:
+            # Ground movement - same system, adjacent locations
+            same_system = self.find_same_system_locations(loc_idx)
+            adjacent = self.find_adjacent_locations(loc_idx)
+            # Must be both in same system AND adjacent
+            destinations = [d for d in adjacent if d in same_system]
+
+        if not destinations:
+            result['reason'] = "No valid flee destinations (no same-system adjacent locations)"
+            return result
+
+        # Analyze each destination
+        current_their_power = self.their_power_at_location(loc_idx)
+        current_my_power = self.my_power_at_location(loc_idx)
+
+        for dest_idx in destinations:
+            dest_their_power = self.their_power_at_location(dest_idx)
+            dest_our_power = self.my_power_at_location(dest_idx)
+            result['flee_destinations'].append((dest_idx, dest_their_power, dest_our_power))
+
+        # Find best destination (where opponent is weakest)
+        best_dest = None
+        best_advantage = float('-inf')
+
+        for dest_idx, dest_their_power, dest_our_power in result['flee_destinations']:
+            # After moving, we'd add our power there
+            # For simplicity, assume we move all power
+            potential_our_power = dest_our_power + current_my_power
+            advantage = potential_our_power - dest_their_power
+
+            if advantage > best_advantage:
+                best_advantage = advantage
+                best_dest = dest_idx
+
+        result['best_destination'] = best_dest
+        result['can_flee'] = best_dest is not None
+
+        if best_dest is not None:
+            dest_their = self.their_power_at_location(best_dest)
+            if dest_their > current_their_power:
+                result['reason'] = f"Can flee but destination has more enemies ({dest_their} vs {current_their_power})"
+            elif dest_their == 0:
+                result['reason'] = f"Can flee to empty location (idx {best_dest})"
+            else:
+                result['reason'] = f"Can flee to location with fewer enemies ({dest_their} vs {current_their_power})"
+
+        return result
 
     def __repr__(self):
         return (f"BoardState(locations={len(self.locations)}, "
