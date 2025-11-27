@@ -299,6 +299,9 @@ class BotState:
                 'power_advantage': bs.power_advantage(),
                 'force_advantage': bs.force_advantage(),
 
+                # Current deployment plan (from holistic planner)
+                'deploy_plan': bs.deploy_plan_summary if hasattr(bs, 'deploy_plan_summary') and bs.deploy_plan_summary else None,
+
                 # Locations with cards (includes cardId for tracking verification)
                 'locations': [{
                     'index': i,

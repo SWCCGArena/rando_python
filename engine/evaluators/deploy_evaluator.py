@@ -283,6 +283,9 @@ class DeployEvaluator(ActionEvaluator):
             deploy_plan = self.planner.create_plan(bs)
             logger.info(f"📋 Deploy plan: {deploy_plan.strategy.value} - {deploy_plan.reason}")
 
+            # Store plan summary on board_state for admin UI display
+            bs.deploy_plan_summary = self.planner.get_plan_summary()
+
         for i, action_id in enumerate(context.action_ids):
             action_text = context.action_texts[i] if i < len(context.action_texts) else "Unknown"
 
@@ -320,53 +323,51 @@ class DeployEvaluator(ActionEvaluator):
 
             # Check if this is a deploy action
             if "Deploy" in action_text:
-                # Try to get card metadata - multiple fallback strategies:
-                # 1. Extract blueprint from action text HTML (e.g., cardHint div)
-                # 2. Look up cardId in cards_in_play to get tracked blueprint
+                # Try to get card metadata
                 blueprint_id = self._extract_blueprint_from_action(action_text)
                 card_metadata = None
 
                 if blueprint_id:
                     card_metadata = get_card(blueprint_id)
 
-                # Fallback: Use cardId to look up card in cards_in_play
-                # This is critical because server often sends blueprintId="inPlay"
-                # but we tracked the real blueprint when card entered hand
+                # Fallback: Use cardId to look up card
                 if not card_metadata and card_id and bs:
                     tracked_card = bs.cards_in_play.get(card_id)
                     if tracked_card and tracked_card.blueprint_id:
                         blueprint_id = tracked_card.blueprint_id
                         card_metadata = get_card(blueprint_id)
-                        if card_metadata:
-                            logger.debug(f"📍 Found card via cardId lookup: {card_id} -> {card_metadata.title}")
 
                 if card_metadata:
                     action.card_name = card_metadata.title
                     action.deploy_cost = card_metadata.deploy_value
 
-                    # LOCATIONS ALWAYS DEPLOY FIRST
-                    # This is critical because deploying a location creates new options
-                    # for characters/ships that we can't evaluate until location exists
-                    if card_metadata.is_location:
-                        action.add_reasoning("LOCATION - always deploy first!", +2000.0)
+                    # =======================================================
+                    # USE THE PLANNER'S DECISION - NO SECOND GUESSING!
+                    # The planner already figured out the optimal deployment
+                    # We just check if this card is in the plan
+                    # =======================================================
+                    if deploy_plan and blueprint_id:
+                        plan_score, plan_reason = self.planner.get_card_score(blueprint_id)
+                        action.add_reasoning(plan_reason, plan_score)
 
-                    # Score based on card value (with strategic bonuses)
-                    # All the detailed logic (unpiloted ships, threshold checks, etc.)
-                    # is handled in _score_card_deployment() to avoid duplicate rules
-                    game_strategy = self._get_game_strategy(context)
-                    score = self._score_card_deployment(card_metadata, bs, game_strategy, card_id)
-                    action.score += score
-                    action.add_reasoning(f"Card: {card_metadata.title}")
+                        # If card is in plan, that's all we need
+                        if plan_score > 0:
+                            logger.info(f"✅ {card_metadata.title} IN PLAN: {plan_reason}")
+                        else:
+                            logger.info(f"❌ {card_metadata.title} NOT in plan: {plan_reason}")
+                    else:
+                        # No plan or no blueprint - use basic scoring
+                        if card_metadata.is_location:
+                            action.add_reasoning("LOCATION - deploy first!", +200.0)
+                        else:
+                            action.add_reasoning(f"Card: {card_metadata.title}", 0.0)
 
-                    # Check if we can afford it
+                    # Always check affordability
                     if bs and bs.force_pile < card_metadata.deploy_value:
-                        action.add_reasoning(f"Can't afford! Need {card_metadata.deploy_value}, have {bs.force_pile}", -100.0)
+                        action.add_reasoning(f"Can't afford! Need {card_metadata.deploy_value}, have {bs.force_pile}", -1000.0)
                 else:
-                    # Still couldn't find card - log details for debugging
-                    logger.warning(f"⚠️  Deploy action with unknown card: cardId={card_id}, blueprintId={blueprint_id}")
-                    if bs:
-                        logger.warning(f"   cards_in_play has {len(bs.cards_in_play)} cards tracked")
-                    action.add_reasoning(f"Deploy action (card unknown, cardId={card_id})")
+                    logger.warning(f"⚠️  Deploy action with unknown card: cardId={card_id}")
+                    action.add_reasoning(f"Deploy action (card unknown)", -50.0)
 
             actions.append(action)
 

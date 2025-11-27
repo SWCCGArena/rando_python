@@ -120,6 +120,10 @@ class BoardState:
         # Strategy controller reference (set by app.py)
         self.strategy_controller = None
 
+        # Deploy planner reference (set by brain when creating plan)
+        # Used to display the current plan in admin UI
+        self.deploy_plan_summary = None
+
         # Core tracking structures
         self.cards_in_play: Dict[str, CardInPlay] = {}  # All cards keyed by card_id
         self.locations: List[LocationInPlay] = []        # Board locations by index

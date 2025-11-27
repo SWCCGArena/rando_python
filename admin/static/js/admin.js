@@ -318,6 +318,33 @@ function updateBoardVisualization() {
     html += `<span class="advantage">(${powerSymbol} ${Math.abs(powerDiff)})</span>`;
     html += `</div>\n\n`;
 
+    // Deployment Plan (if available)
+    if (bs.deploy_plan) {
+        const plan = bs.deploy_plan;
+        html += `<div class="board-plan">`;
+        html += `<strong>📋 Deployment Plan:</strong> `;
+        html += `<span class="plan-badge">${escapeHtml(plan.strategy)}</span> `;
+        html += `<span class="plan-info">${escapeHtml(plan.reason)}</span>\n`;
+
+        if (plan.instructions && plan.instructions.length > 0) {
+            html += `<div class="plan-stats-inline">`;
+            html += `Force: ${plan.force_available} | Cost: ${plan.total_cost} | Power: +${plan.total_power} | Left: ${plan.force_remaining}`;
+            html += `</div>\n`;
+
+            plan.instructions.forEach(inst => {
+                html += `  <div class="plan-instruction">`;
+                html += `<span class="plan-card-name">${escapeHtml(inst.card)}</span> `;
+                html += `<span class="plan-arrow">→</span> `;
+                html += `<span class="plan-target">${escapeHtml(inst.target)}</span> `;
+                html += `<span class="plan-details">[+${inst.power} pwr, ${inst.cost} cost]</span>`;
+                html += `</div>\n`;
+            });
+        } else {
+            html += `  <em class="empty">No deployments planned</em>\n`;
+        }
+        html += `</div>\n\n`;
+    }
+
     // Locations
     html += `<div class="board-locations">`;
     html += `<strong>🏛️  Locations (${bs.locations.length}):</strong>\n\n`;
