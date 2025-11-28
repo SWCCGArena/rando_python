@@ -152,6 +152,8 @@ class CardSelectionEvaluator(ActionEvaluator):
 
         Uses bs.get_location_by_card_id() to properly look up locations.
 
+        CRITICAL: First checks deploy_planner for planned target location!
+
         CRITICAL RULES:
         1. Starships should NEVER deploy to docking bays (0 power!)
         2. Starships without pilots (and no permanent pilot icon) are weak
@@ -167,7 +169,23 @@ class CardSelectionEvaluator(ActionEvaluator):
         if deploying_card_blueprint:
             deploying_card = get_card(deploying_card_blueprint)
 
+        # =====================================================
+        # CHECK DEPLOY PLANNER FOR TARGET LOCATION
+        # If the plan specifies where this card should go, follow it!
+        # =====================================================
+        planned_target_id = None
+        planned_target_name = None
+        if bs and bs.strategy_controller and hasattr(bs.strategy_controller, 'deploy_planner'):
+            planner = bs.strategy_controller.deploy_planner
+            if planner and planner.current_plan and deploying_card_blueprint:
+                instruction = planner.current_plan.get_instruction_for_card(deploying_card_blueprint)
+                if instruction and instruction.target_location_id:
+                    planned_target_id = instruction.target_location_id
+                    planned_target_name = instruction.target_location_name
+                    logger.info(f"📋 Deploy plan says: {deploying_card.title if deploying_card else deploying_card_blueprint} -> {planned_target_name}")
+
         is_starship = deploying_card and deploying_card.is_starship
+        is_vehicle = deploying_card and deploying_card.is_vehicle and not deploying_card.is_starship
         is_droid = deploying_card and deploying_card.is_droid
         provides_presence = deploying_card and deploying_card.provides_presence
 
@@ -194,6 +212,18 @@ class CardSelectionEvaluator(ActionEvaluator):
                     loc_name = location.site_name or location.system_name or location.blueprint_id
                     action.display_text = f"Deploy to {loc_name}"
 
+                    # =====================================================
+                    # FOLLOW THE DEPLOY PLAN!
+                    # If planner specified a target, give big bonus to it
+                    # =====================================================
+                    if planned_target_id:
+                        if card_id == planned_target_id:
+                            action.add_reasoning(f"PLANNED TARGET: {planned_target_name}", +200.0)
+                            logger.info(f"✅ {loc_name} is the PLANNED target (+200)")
+                        else:
+                            action.add_reasoning(f"Not planned target (want {planned_target_name})", -100.0)
+                            logger.debug(f"❌ {loc_name} is NOT the planned target (-100)")
+
                     # Determine location type
                     is_docking_bay = location.is_space and getattr(location, 'is_ground', False)
                     is_pure_space = location.is_space and not getattr(location, 'is_ground', False)
@@ -216,6 +246,25 @@ class CardSelectionEvaluator(ActionEvaluator):
                         elif is_ground:
                             # Ground location - starship can't deploy here
                             action.add_reasoning("STARSHIP TO GROUND - invalid!", VERY_BAD_DELTA)
+
+                    # =====================================================
+                    # CRITICAL: Vehicles need EXTERIOR ground locations
+                    # =====================================================
+                    if is_vehicle:
+                        if is_pure_space:
+                            # Space location - vehicles can't deploy here
+                            action.add_reasoning("VEHICLE TO SPACE - invalid!", VERY_BAD_DELTA)
+                        elif is_ground or is_docking_bay:
+                            # Check if location has exterior icon
+                            loc_metadata = get_card(location.blueprint_id) if location.blueprint_id else None
+                            has_exterior = loc_metadata.is_exterior if loc_metadata else True
+                            has_interior_only = loc_metadata.is_interior and not has_exterior if loc_metadata else False
+
+                            if has_interior_only:
+                                action.add_reasoning("VEHICLE TO INTERIOR-ONLY - can't deploy!", VERY_BAD_DELTA)
+                                logger.warning(f"⚠️  Vehicle {deploying_card.title} cannot deploy to interior site {loc_name}")
+                            elif has_exterior:
+                                action.add_reasoning("Vehicle to exterior ground - good", GOOD_DELTA)
 
                     # =====================================================
                     # CRITICAL: Droids don't provide presence
@@ -273,6 +322,7 @@ class CardSelectionEvaluator(ActionEvaluator):
             deploying_card = get_card(deploying_card_blueprint)
 
         is_starship = deploying_card and deploying_card.is_starship
+        is_vehicle = deploying_card and deploying_card.is_vehicle and not deploying_card.is_starship
         is_droid = deploying_card and deploying_card.is_droid
         provides_presence = deploying_card and deploying_card.provides_presence
 
@@ -301,10 +351,11 @@ class CardSelectionEvaluator(ActionEvaluator):
                         # Docking bays are is_space=True AND is_ground=True
                         # Pure space (systems/sectors) is is_space=True, is_ground=False
                         # =====================================================
-                        if is_starship:
-                            is_docking_bay = loc.is_space and getattr(loc, 'is_ground', False)
-                            is_pure_space = loc.is_space and not getattr(loc, 'is_ground', False)
+                        is_docking_bay = loc.is_space and getattr(loc, 'is_ground', False)
+                        is_pure_space = loc.is_space and not getattr(loc, 'is_ground', False)
+                        is_ground = not loc.is_space
 
+                        if is_starship:
                             if is_docking_bay:
                                 # NEVER deploy starships to docking bays - they have 0 power!
                                 action.add_reasoning("STARSHIP TO DOCKING BAY = 0 POWER!", VERY_BAD_DELTA)
@@ -312,9 +363,26 @@ class CardSelectionEvaluator(ActionEvaluator):
                             elif is_pure_space:
                                 # Pure space location - starship has power here
                                 action.add_reasoning("Starship to space - has power", GOOD_DELTA * 2)
-                            elif not loc.is_space:
+                            elif is_ground:
                                 # Ground-only location - starship usually can't deploy here
                                 action.add_reasoning("STARSHIP TO GROUND - invalid!", VERY_BAD_DELTA)
+
+                        # =====================================================
+                        # CRITICAL: Vehicles need EXTERIOR ground locations
+                        # =====================================================
+                        if is_vehicle:
+                            if is_pure_space:
+                                action.add_reasoning("VEHICLE TO SPACE - invalid!", VERY_BAD_DELTA)
+                            elif is_ground or is_docking_bay:
+                                loc_metadata = get_card(loc.blueprint_id) if loc.blueprint_id else None
+                                has_exterior = loc_metadata.is_exterior if loc_metadata else True
+                                has_interior_only = loc_metadata.is_interior and not has_exterior if loc_metadata else False
+
+                                if has_interior_only:
+                                    action.add_reasoning("VEHICLE TO INTERIOR-ONLY - can't deploy!", VERY_BAD_DELTA)
+                                    logger.warning(f"⚠️  Vehicle {deploying_card.title} cannot deploy to interior site {loc.site_name}")
+                                elif has_exterior:
+                                    action.add_reasoning("Vehicle to exterior ground - good", GOOD_DELTA)
 
                         # =====================================================
                         # CRITICAL: Droids (ability=0) don't provide presence!

@@ -740,13 +740,13 @@ def bot_worker():
                             bot_state.game_id = my_table.game_id
 
                             # Initialize board state tracking
+                            # NOTE: my_side starts as None and will be detected from HAND cards
+                            # (see event_processor.py SIDE DETECTION section)
                             bot_state.board_state = BoardState(my_player_name=config.GEMP_USERNAME)
                             bot_state.board_state.strategy_controller = bot_state.strategy_controller
-                            # Sync my_side from strategy controller (default "dark")
-                            bot_state.board_state.my_side = bot_state.strategy_controller.my_side
                             bot_state.event_processor = EventProcessor(bot_state.board_state)
                             bot_state.strategy_controller.setup()  # Reset for new game
-                            logger.info(f"🎮 Board state tracking initialized (side: {bot_state.board_state.my_side})")
+                            logger.info(f"🎮 Board state tracking initialized (side will be detected from cards)")
 
                             # Register callback for card placements (achievements)
                             if bot_state.chat_manager:

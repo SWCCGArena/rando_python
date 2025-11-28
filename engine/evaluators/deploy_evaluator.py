@@ -519,12 +519,24 @@ class DeployEvaluator(ActionEvaluator):
                                 action.add_reasoning("STARSHIP TO GROUND - invalid!", -500.0)
                                 logger.warning(f"⚠️  Starship {deploying_card.title} cannot deploy to ground site {location.site_name}")
 
-                        # Vehicles are fine at ground locations but not space
+                        # Vehicles are fine at EXTERIOR ground locations but not space or interior
                         if is_vehicle and not is_starship:
                             if not location.is_space:
-                                action.add_reasoning("Vehicle to ground location - good", +10.0)
+                                # Check if location has exterior icon - vehicles need exterior
+                                loc_metadata = get_card(location.blueprint_id) if location.blueprint_id else None
+                                has_exterior = loc_metadata.is_exterior if loc_metadata else True  # Default to True if unknown
+                                has_interior_only = loc_metadata.is_interior and not has_exterior if loc_metadata else False
+
+                                if has_interior_only:
+                                    action.add_reasoning("VEHICLE TO INTERIOR-ONLY - can't deploy!", -500.0)
+                                    logger.warning(f"⚠️  Vehicle {deploying_card.title} cannot deploy to interior site {location.site_name}")
+                                elif has_exterior:
+                                    action.add_reasoning("Vehicle to exterior ground - good", +10.0)
+                                else:
+                                    action.add_reasoning("Vehicle to ground location", +5.0)
                             else:
-                                action.add_reasoning("Vehicle to space - check if valid", 0.0)
+                                action.add_reasoning("VEHICLE TO SPACE - invalid!", -500.0)
+                                logger.warning(f"⚠️  Vehicle {deploying_card.title} cannot deploy to space location {location.site_name or location.system_name}")
 
                         # CRITICAL: Droids (ability=0) don't provide presence!
                         # Without presence you can't prevent force drains or initiate battles.
@@ -1052,12 +1064,18 @@ class DeployEvaluator(ActionEvaluator):
                 # Pure space - only starships
                 can_deploy_here = metadata.is_starship
             elif getattr(location, 'is_ground', True):
-                # Ground or docking bay - characters, vehicles
-                can_deploy_here = metadata.is_character or metadata.is_vehicle
+                # Ground or docking bay - characters can go anywhere, vehicles need exterior
+                if metadata.is_character:
+                    can_deploy_here = True
+                elif metadata.is_vehicle:
+                    # Check if location has exterior icon
+                    loc_meta = get_card(location.blueprint_id) if location.blueprint_id else None
+                    has_exterior = loc_meta.is_exterior if loc_meta else True
+                    can_deploy_here = has_exterior
                 # Don't count starships at docking bays - they have 0 power there
             else:
-                # Default - assume characters/vehicles can deploy
-                can_deploy_here = metadata.is_character or metadata.is_vehicle
+                # Default - assume characters can deploy
+                can_deploy_here = metadata.is_character
 
             if can_deploy_here and metadata.deploy_value and metadata.deploy_value > 0:
                 deployable_cards.append({
@@ -1100,9 +1118,15 @@ class DeployEvaluator(ActionEvaluator):
             if location.is_space and not getattr(location, 'is_ground', False):
                 can_deploy_here = metadata.is_starship
             elif getattr(location, 'is_ground', True):
-                can_deploy_here = metadata.is_character or metadata.is_vehicle
+                # Characters can go anywhere, vehicles need exterior
+                if metadata.is_character:
+                    can_deploy_here = True
+                elif metadata.is_vehicle:
+                    loc_meta = get_card(location.blueprint_id) if location.blueprint_id else None
+                    has_exterior = loc_meta.is_exterior if loc_meta else True
+                    can_deploy_here = has_exterior
             else:
-                can_deploy_here = metadata.is_character or metadata.is_vehicle
+                can_deploy_here = metadata.is_character
 
             if can_deploy_here and metadata.deploy_value and metadata.deploy_value > 0:
                 if total_cost + metadata.deploy_value <= available_force:

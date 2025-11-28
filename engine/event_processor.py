@@ -160,8 +160,10 @@ class EventProcessor:
         # Handle LOCATIONS zone specially (creates LocationInPlay, not CardInPlay)
         if zone == "LOCATIONS":
             self._handle_location_placement(card_id, blueprint_id, owner, location_index, system_name)
-        else:
-            # All other zones use update_cards_in_play which handles metadata loading
+            return  # Exit early for locations
+
+        # === All other zones (HAND, TABLE, ATTACHED, etc.) ===
+        try:
             self.board_state.update_cards_in_play(
                 card_id=card_id,
                 target_card_id=target_card_id if target_card_id else None,
@@ -170,13 +172,39 @@ class EventProcessor:
                 owner=owner,
                 location_index=location_index
             )
-            # Get card title for logging
-            card = self.board_state.cards_in_play.get(card_id)
-            card_title = card.card_title if card else blueprint_id
-            logger.debug(f"🃏 Card added: {card_title} ({blueprint_id}) to {zone}")
+        except Exception as e:
+            logger.error(f"❌ Error in update_cards_in_play: {e}")
 
-            # Notify callbacks (for achievements, etc.)
-            self._notify_card_placed(card_title, blueprint_id, zone, owner)
+        # Get card title for logging
+        card = self.board_state.cards_in_play.get(card_id)
+        card_title = card.card_title if card else blueprint_id
+        logger.debug(f"🃏 Card added: {card_title} ({blueprint_id}) to {zone}")
+
+        # === SIDE DETECTION ===
+        # Log zone for ALL cards to diagnose the issue
+        logger.info(f"🎭 PCIP zone check: zone='{zone}' blueprint='{blueprint_id}' owner='{owner}'")
+
+        # If we haven't detected our side yet, check from cards in our HAND
+        # HAND cards are reliable - other zones can have cards swapped by game effects
+        # Skip hidden cards (-1_X) which don't have side info
+        if zone == "HAND" and not blueprint_id.startswith('-1_'):
+            logger.info(f"🎭 HAND card found! blueprint={blueprint_id}, owner={owner}, my_player={self.board_state.my_player_name}, current_side={self.board_state.my_side}")
+            if not self.board_state.my_side and owner == self.board_state.my_player_name:
+                card_metadata = get_card(blueprint_id)
+                if card_metadata and card_metadata.side:
+                    self.board_state.my_side = card_metadata.side.lower()
+                    logger.info(f"🎭 Detected my side: {self.board_state.my_side} (from {card_title})")
+                    # Update strategy controller and game strategy if they exist
+                    if self.board_state.strategy_controller:
+                        self.board_state.strategy_controller.my_side = self.board_state.my_side
+                        if self.board_state.strategy_controller.game_strategy:
+                            self.board_state.strategy_controller.game_strategy.my_side = self.board_state.my_side
+                        logger.info(f"🎭 Updated strategy controller to {self.board_state.my_side}")
+                else:
+                    logger.info(f"🎭 Card {blueprint_id} has no side info: {card_metadata.side if card_metadata else 'no metadata'}")
+
+        # Notify callbacks (for achievements, etc.)
+        self._notify_card_placed(card_title, blueprint_id, zone, owner)
 
     def _handle_location_placement(self, card_id: str, blueprint_id: str, owner: str,
                                     location_index: int, system_name: str):
