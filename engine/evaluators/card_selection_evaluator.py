@@ -175,14 +175,12 @@ class CardSelectionEvaluator(ActionEvaluator):
         # =====================================================
         planned_target_id = None
         planned_target_name = None
-        if bs and bs.strategy_controller and hasattr(bs.strategy_controller, 'deploy_planner'):
-            planner = bs.strategy_controller.deploy_planner
-            if planner and planner.current_plan and deploying_card_blueprint:
-                instruction = planner.current_plan.get_instruction_for_card(deploying_card_blueprint)
-                if instruction and instruction.target_location_id:
-                    planned_target_id = instruction.target_location_id
-                    planned_target_name = instruction.target_location_name
-                    logger.info(f"📋 Deploy plan says: {deploying_card.title if deploying_card else deploying_card_blueprint} -> {planned_target_name}")
+        if bs and hasattr(bs, 'current_deploy_plan') and bs.current_deploy_plan and deploying_card_blueprint:
+            instruction = bs.current_deploy_plan.get_instruction_for_card(deploying_card_blueprint)
+            if instruction and instruction.target_location_id:
+                planned_target_id = instruction.target_location_id
+                planned_target_name = instruction.target_location_name
+                logger.info(f"📋 Deploy plan says: {deploying_card.title if deploying_card else deploying_card_blueprint} -> {planned_target_name}")
 
         is_starship = deploying_card and deploying_card.is_starship
         is_vehicle = deploying_card and deploying_card.is_vehicle and not deploying_card.is_starship
@@ -280,16 +278,17 @@ class CardSelectionEvaluator(ActionEvaluator):
                                 action.add_reasoning("Droid alone - no presence", BAD_DELTA * 3)
 
                     # Add location strategic value
+                    # THEIR icons matter more - controlling denies opponent force!
                     location_metadata = get_card(location.blueprint_id) if location.blueprint_id else None
                     if location_metadata:
                         my_side = bs.my_side or "light"
                         if my_side == "dark":
-                            my_icons = location_metadata.dark_side_icons or 0
+                            their_icons = location_metadata.light_side_icons or 0
                         else:
-                            my_icons = location_metadata.light_side_icons or 0
+                            their_icons = location_metadata.dark_side_icons or 0
 
-                        if my_icons > 0:
-                            action.add_reasoning(f"{my_icons} force icons", my_icons * GOOD_DELTA)
+                        if their_icons > 0:
+                            action.add_reasoning(f"Deny {their_icons} opponent icons", their_icons * GOOD_DELTA * 2)
                 else:
                     # Location not found - use neutral score
                     action.add_reasoning("Location not found in board state", -5.0)

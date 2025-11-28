@@ -283,6 +283,10 @@ class DeployEvaluator(ActionEvaluator):
             deploy_plan = self.planner.create_plan(bs)
             logger.info(f"📋 Deploy plan: {deploy_plan.strategy.value} - {deploy_plan.reason}")
 
+            # Store plan on board_state so other evaluators can access it
+            # (e.g., card_selection_evaluator needs to know target locations)
+            bs.current_deploy_plan = deploy_plan
+
             # Store plan summary on board_state for admin UI display
             bs.deploy_plan_summary = self.planner.get_plan_summary()
 
@@ -385,6 +389,7 @@ class DeployEvaluator(ActionEvaluator):
         - Vehicles are fine at ground locations
         - Weapons should prefer targets WITHOUT existing weapons
         - PILOTS should prefer unpiloted vehicles/starships over ground locations!
+        - FOLLOW THE DEPLOY PLAN if one exists!
         """
         actions = []
         bs = context.board_state
@@ -398,6 +403,19 @@ class DeployEvaluator(ActionEvaluator):
         # Format: "Choose where to deploy <div class='cardHint' value='109_8'>•Boba Fett In Slave I</div>"
         deploying_card_blueprint = self._extract_blueprint_from_action(context.decision_text)
         deploying_card = get_card(deploying_card_blueprint) if deploying_card_blueprint else None
+
+        # =====================================================
+        # CHECK DEPLOY PLANNER FOR TARGET LOCATION
+        # If the plan specifies where this card should go, follow it!
+        # =====================================================
+        planned_target_id = None
+        planned_target_name = None
+        if bs and hasattr(bs, 'current_deploy_plan') and bs.current_deploy_plan and deploying_card_blueprint:
+            instruction = bs.current_deploy_plan.get_instruction_for_card(deploying_card_blueprint)
+            if instruction and instruction.target_location_id:
+                planned_target_id = instruction.target_location_id
+                planned_target_name = instruction.target_location_name
+                logger.info(f"📋 Deploy plan says: {deploying_card.title if deploying_card else deploying_card_blueprint} -> {planned_target_name}")
 
         # Check card type being deployed
         is_starship = deploying_card and deploying_card.is_starship
@@ -419,6 +437,17 @@ class DeployEvaluator(ActionEvaluator):
                 score=50.0,  # Base score
                 display_text=f"Deploy to (card {card_id})"
             )
+
+            # =====================================================
+            # FOLLOW THE DEPLOY PLAN!
+            # If planner specified a target, give big bonus to it
+            # =====================================================
+            if planned_target_id:
+                if card_id == planned_target_id:
+                    action.add_reasoning(f"PLANNED TARGET: {planned_target_name}", +200.0)
+                    logger.info(f"✅ Card {card_id} is the PLANNED target (+200)")
+                else:
+                    action.add_reasoning(f"Not planned target (want {planned_target_name})", -100.0)
 
             if bs:
                 # For weapons/devices, target is a card (character, starship, vehicle)

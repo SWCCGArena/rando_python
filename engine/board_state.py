@@ -1021,6 +1021,77 @@ class BoardState:
 
         return adjacent
 
+    def find_hyperspeed_destinations(self, loc_idx: int) -> List[int]:
+        """
+        Find space locations reachable by hyperspeed from current location.
+
+        Starships can move to systems where parsec difference <= hyperspeed.
+        Returns list of valid destination location indices (space systems only).
+        """
+        if loc_idx < 0 or loc_idx >= len(self.locations):
+            return []
+
+        current_loc = self.locations[loc_idx]
+        if not current_loc or not current_loc.is_space:
+            return []
+
+        # Get parsec of current system from card metadata
+        current_metadata = _get_card_metadata(current_loc.blueprint_id) if current_loc.blueprint_id else None
+        if not current_metadata:
+            return []
+
+        current_parsec = current_metadata.parsec
+        if current_parsec is None:
+            return []
+
+        # Try to parse parsec as int
+        try:
+            current_parsec = int(current_parsec)
+        except (ValueError, TypeError):
+            return []
+
+        # Get our starships' hyperspeed at this location
+        max_hyperspeed = 0
+        for card in current_loc.my_cards:
+            card_meta = _get_card_metadata(card.blueprint_id) if card.blueprint_id else None
+            if card_meta and card_meta.is_starship:
+                try:
+                    hs = int(card_meta.hyperspeed) if card_meta.hyperspeed else 0
+                    max_hyperspeed = max(max_hyperspeed, hs)
+                except (ValueError, TypeError):
+                    pass
+
+        if max_hyperspeed == 0:
+            return []
+
+        # Find all space systems within hyperspeed range
+        destinations = []
+        for idx, loc in enumerate(self.locations):
+            if idx == loc_idx:
+                continue
+            if not loc or not loc.is_space:
+                continue
+
+            dest_metadata = _get_card_metadata(loc.blueprint_id) if loc.blueprint_id else None
+            if not dest_metadata:
+                continue
+
+            dest_parsec = dest_metadata.parsec
+            if dest_parsec is None:
+                continue
+
+            try:
+                dest_parsec = int(dest_parsec)
+            except (ValueError, TypeError):
+                continue
+
+            # Check if within hyperspeed range
+            parsec_diff = abs(dest_parsec - current_parsec)
+            if parsec_diff <= max_hyperspeed:
+                destinations.append(idx)
+
+        return destinations
+
     def my_character_count_at_location(self, loc_idx: int) -> int:
         """
         Count my characters at a location (for movement cost calculation).
@@ -1116,9 +1187,8 @@ class BoardState:
 
         # Find flee destinations
         if is_space:
-            # Space movement - would need hyperspeed check, simplified for now
-            # Just check adjacent for now (TODO: proper hyperspeed/parsec logic)
-            destinations = self.find_adjacent_locations(loc_idx)
+            # Space movement uses hyperspeed/parsec rules
+            destinations = self.find_hyperspeed_destinations(loc_idx)
         else:
             # Ground movement - same system, adjacent locations
             same_system = self.find_same_system_locations(loc_idx)
@@ -1127,7 +1197,10 @@ class BoardState:
             destinations = [d for d in adjacent if d in same_system]
 
         if not destinations:
-            result['reason'] = "No valid flee destinations (no same-system adjacent locations)"
+            if is_space:
+                result['reason'] = "No valid flee destinations (no systems within hyperspeed range)"
+            else:
+                result['reason'] = "No valid flee destinations (no same-system adjacent locations)"
             return result
 
         # Analyze each destination

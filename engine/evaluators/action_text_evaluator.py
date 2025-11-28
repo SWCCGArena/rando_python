@@ -270,9 +270,10 @@ class ActionTextEvaluator(ActionEvaluator):
             # ========== Battle ==========
             elif action_text == "Initiate battle":
                 action.action_type = ActionType.BATTLE
-                # Let BattleEvaluator handle detailed logic
-                action.score = GOOD_DELTA
-                action.add_reasoning("Battle option available", GOOD_DELTA)
+                # BattleEvaluator handles detailed logic - give minimal score here
+                # so BattleEvaluator's analysis (power diff, flee option) takes precedence
+                action.score = 0.0
+                action.add_reasoning("Battle - see BattleEvaluator for detailed analysis", 0.0)
 
             # ========== Fire Weapons ==========
             elif "Fire" in action_text:

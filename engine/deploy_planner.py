@@ -386,11 +386,17 @@ class DeployPhasePlanner:
 
     def _generate_space_plan(self, starships: List[Dict],
                               space_targets: List[LocationAnalysis],
-                              force_budget: int) -> Tuple[List[DeploymentInstruction], int]:
-        """Generate a space-focused deployment plan using full budget."""
+                              force_budget: int,
+                              pure_pilots: List[Dict] = None) -> Tuple[List[DeploymentInstruction], int]:
+        """
+        Generate a space-focused deployment plan using full budget.
+
+        If pure_pilots are provided, will try to include them boarding starships.
+        """
         instructions = []
         force_remaining = force_budget
         available_ships = starships.copy()
+        available_pure_pilots = (pure_pilots or []).copy()
 
         MIN_ESTABLISH_POWER = self.deploy_threshold
 
@@ -427,6 +433,29 @@ class DeployPhasePlanner:
                     power_contribution=ship['power'],
                     deploy_cost=ship['cost'],
                 ))
+
+                # After deploying a starship, consider deploying a pure pilot aboard it
+                # Pure pilots add their ability to the ship and are better there than on ground
+                if available_pure_pilots:
+                    # Find affordable pure pilot
+                    affordable_pilots = [p for p in available_pure_pilots if p['cost'] <= force_remaining]
+                    if affordable_pilots:
+                        # Pick best pilot (highest power/ability)
+                        best_pilot = max(affordable_pilots, key=lambda p: p['power'])
+                        force_remaining -= best_pilot['cost']
+                        available_pure_pilots.remove(best_pilot)
+
+                        instructions.append(DeploymentInstruction(
+                            card_blueprint_id=best_pilot['blueprint_id'],
+                            card_name=best_pilot['name'],
+                            target_location_id=loc.card_id,  # Same location as ship
+                            target_location_name=loc.name,
+                            priority=3,  # After the ship
+                            reason=f"Pure pilot aboard {ship['name']}",
+                            power_contribution=best_pilot['power'],
+                            deploy_cost=best_pilot['cost'],
+                        ))
+                        logger.info(f"   👨‍✈️ Plan: Deploy pure pilot {best_pilot['name']} aboard {ship['name']}")
 
         return instructions, force_remaining
 
@@ -692,6 +721,11 @@ class DeployPhasePlanner:
         if uncontested_space:
             logger.info(f"   🚀 Space targets: {[(loc.name, loc.their_icons, loc.their_power) for loc in uncontested_space]}")
 
+        # Identify pure pilots (pilot but not warrior) - they're best aboard ships
+        pure_pilots = [c for c in available_chars if c.get('is_pure_pilot')]
+        if pure_pilots:
+            logger.info(f"   👨‍✈️ Pure pilots available: {[p['name'] for p in pure_pilots]}")
+
         # Generate GROUND plan (characters to ground) with full remaining budget
         ground_instructions, ground_force_left = self._generate_ground_plan(
             available_chars.copy(), vehicles.copy(), char_ground_targets, force_remaining
@@ -700,8 +734,9 @@ class DeployPhasePlanner:
         ground_cost = force_remaining - ground_force_left
 
         # Generate SPACE plan (starships to space) with full remaining budget
+        # Pass pure pilots so they can be added aboard starships
         space_instructions, space_force_left = self._generate_space_plan(
-            starships.copy(), uncontested_space, force_remaining
+            starships.copy(), uncontested_space, force_remaining, pure_pilots
         )
         space_score = self._score_plan(space_instructions, locations)
         space_cost = force_remaining - space_force_left
@@ -1044,6 +1079,10 @@ class DeployPhasePlanner:
             is_unpiloted_craft = (metadata.is_starship or metadata.is_vehicle) and not has_permanent_pilot
             effective_power = 0 if is_unpiloted_craft else base_power
 
+            # Pure pilots (pilot but not warrior) are best deployed aboard ships
+            is_warrior = metadata.is_warrior if hasattr(metadata, 'is_warrior') else False
+            is_pure_pilot = metadata.is_pilot and not is_warrior
+
             deployable.append({
                 'card_id': card.card_id,
                 'blueprint_id': card.blueprint_id,
@@ -1057,6 +1096,8 @@ class DeployPhasePlanner:
                 'is_starship': metadata.is_starship,
                 'is_vehicle': metadata.is_vehicle,
                 'is_pilot': metadata.is_pilot,
+                'is_warrior': is_warrior,
+                'is_pure_pilot': is_pure_pilot,
                 'is_weapon': metadata.is_weapon,
                 'is_device': metadata.is_device,
                 'has_permanent_pilot': has_permanent_pilot,
