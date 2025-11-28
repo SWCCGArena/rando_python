@@ -363,12 +363,18 @@ class EventProcessor:
 
         # Parse player zones
         player_zones = event.findall('.//playerZones')
+        matched_my_zones = False
         for zone_element in player_zones:
             player_name = zone_element.get('name', '')
 
             if player_name == self.board_state.my_player_name:
                 # My zones
-                self.board_state.force_pile = int(zone_element.get('FORCE_PILE', '0'))
+                matched_my_zones = True
+                new_force = int(zone_element.get('FORCE_PILE', '0'))
+                # Log if force changes significantly (for debugging)
+                if new_force != self.board_state.force_pile and new_force > 0:
+                    logger.debug(f"💰 Force pile updated: {self.board_state.force_pile} -> {new_force}")
+                self.board_state.force_pile = new_force
                 self.board_state.used_pile = int(zone_element.get('USED_PILE', '0'))
                 self.board_state.reserve_deck = int(zone_element.get('RESERVE_DECK', '0'))
                 self.board_state.lost_pile = int(zone_element.get('LOST_PILE', '0'))
@@ -384,6 +390,12 @@ class EventProcessor:
                 self.board_state.their_out_of_play = int(zone_element.get('OUT_OF_PLAY', '0'))
                 self.board_state.their_hand_size = int(zone_element.get('HAND', '0'))
                 self.board_state.their_sabacc_hand = int(zone_element.get('SABACC_HAND', '0'))
+
+        # Log warning if we didn't match any zones for ourselves
+        if player_zones and not matched_my_zones:
+            all_names = [z.get('name', '?') for z in player_zones]
+            logger.warning(f"⚠️ GS zones didn't match my_player_name='{self.board_state.my_player_name}'. "
+                          f"Zone names: {all_names}")
 
         # Parse power at locations
         dark_power_element = event.find('.//darkPowerAtLocations')

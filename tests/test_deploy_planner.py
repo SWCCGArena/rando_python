@@ -2938,6 +2938,141 @@ def test_space_pile_on_contested():
 
 
 # =============================================================================
+# CRUSH VS ESTABLISH PRIORITY TESTS
+# =============================================================================
+
+def test_ground_crush_contested_over_establish_empty():
+    """CRITICAL: Prefer CRUSHING contested location over establishing at empty.
+
+    Real bug scenario:
+    - Cloud City: Guest Quarters - empty, 2 their_icons (good for establishing)
+    - Tatooine: Desert Heart - enemy 6 power, 1 their_icons
+
+    Bot had 11 power available and deployed to empty Guest Quarters.
+    It SHOULD have deployed to Desert Heart and crushed the 6 power!
+
+    Beating the opponent is ALWAYS better than establishing at empty.
+    """
+    scenario = (
+        ScenarioBuilder("Ground Crush Over Establish")
+        .as_side("dark")
+        .with_force(14)  # 12 usable
+        # Empty location with good icons (attractive for establishing)
+        .add_ground_location("Guest Quarters", my_icons=1, their_icons=2,
+                            interior=True, exterior=False)
+        # Contested location with enemy presence we can CRUSH
+        .add_ground_location("Desert Heart", my_icons=2, their_icons=1,
+                            exterior=True, their_power=6)
+        # 3 characters: Ozzel (3, cost 0), Vader (6, cost 6), Thrawn (2, cost 4)
+        # Combined 11 power CRUSHES the 6 at Desert Heart
+        .add_character("Admiral Ozzel", power=3, deploy_cost=0)
+        .add_character("Darth Vader", power=6, deploy_cost=6)
+        .add_character("Grand Admiral Thrawn", power=2, deploy_cost=4)
+        # Should go to Desert Heart and CRUSH, not establish at Guest Quarters
+        .expect_target("Desert Heart")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Get where deployments went
+    desert_deploys = [i for i in result.plan.instructions
+                     if i.target_location_name == "Desert Heart"]
+    guest_deploys = [i for i in result.plan.instructions
+                    if i.target_location_name == "Guest Quarters"]
+
+    desert_power = sum(i.power_contribution for i in desert_deploys)
+    guest_power = sum(i.power_contribution for i in guest_deploys)
+
+    logger.info(f"   📊 Desert Heart: {desert_power} power (vs 6 enemy)")
+    logger.info(f"   📊 Guest Quarters: {guest_power} power (empty)")
+
+    # Should prioritize crushing at Desert Heart over establishing at Guest Quarters
+    assert desert_power > guest_power, \
+        f"Should CRUSH at Desert Heart ({desert_power}) over establish at Guest Quarters ({guest_power})!"
+    assert desert_power > 6, \
+        f"Should beat the 6 enemy power at Desert Heart! Got {desert_power}"
+
+
+def test_space_crush_contested_over_establish_empty():
+    """CRITICAL: Space version - prefer crushing contested over establishing empty.
+
+    Same logic as ground:
+    - Bespin System - empty, 2 their_icons
+    - Tatooine System - enemy 5 power, 1 their_icons
+
+    With 7+ power starship, should go crush Tatooine, not establish Bespin.
+    """
+    scenario = (
+        ScenarioBuilder("Space Crush Over Establish")
+        .as_side("dark")
+        .with_force(12)  # 10 usable
+        # Empty space location with good icons
+        .add_space_location("Bespin System", my_icons=1, their_icons=2)
+        # Contested space with enemy presence we can beat
+        .add_space_location("Tatooine System", my_icons=2, their_icons=1, their_power=5)
+        # Strong starship that can crush the 5 power
+        .add_starship("Accuser", power=7, deploy_cost=8, has_permanent_pilot=True)
+        # Should go to Tatooine and CRUSH, not establish at Bespin
+        .expect_target("Tatooine System")
+        .expect_deployment("Accuser")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    tatooine_deploys = [i for i in result.plan.instructions
+                       if i.target_location_name == "Tatooine System"]
+    bespin_deploys = [i for i in result.plan.instructions
+                     if i.target_location_name == "Bespin System"]
+
+    tatooine_power = sum(i.power_contribution for i in tatooine_deploys)
+    bespin_power = sum(i.power_contribution for i in bespin_deploys)
+
+    logger.info(f"   📊 Tatooine System: {tatooine_power} power (vs 5 enemy)")
+    logger.info(f"   📊 Bespin System: {bespin_power} power (empty)")
+
+    assert tatooine_power > bespin_power, \
+        f"Should CRUSH at Tatooine ({tatooine_power}) over establish at Bespin ({bespin_power})!"
+    assert tatooine_power > 5, \
+        f"Should beat the 5 enemy power at Tatooine! Got {tatooine_power}"
+
+
+def test_ground_crush_with_combo_over_establish():
+    """Multiple cards combine to crush contested - better than spreading to empty.
+
+    - Empty Location: 3 their_icons (very attractive for establishing)
+    - Contested Location: enemy 8 power, 1 their_icons
+
+    We have Vader (6) + Trooper (3) = 9 power, beats 8.
+    Should combine and crush, not establish at empty.
+    """
+    scenario = (
+        ScenarioBuilder("Ground Combo Crush Over Establish")
+        .as_side("dark")
+        .with_force(15)
+        # Very attractive empty location
+        .add_ground_location("High Value Empty", my_icons=1, their_icons=3)
+        # Contested location we can beat with combo
+        .add_ground_location("Contested Base", my_icons=2, their_icons=1, their_power=8)
+        # Cards that combine to beat 8
+        .add_character("Darth Vader", power=6, deploy_cost=6)
+        .add_character("Stormtrooper", power=3, deploy_cost=2)
+        # Should combine at Contested Base
+        .expect_target("Contested Base")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    contested_deploys = [i for i in result.plan.instructions
+                        if i.target_location_name == "Contested Base"]
+    contested_power = sum(i.power_contribution for i in contested_deploys)
+
+    logger.info(f"   📊 Contested Base: {contested_power} power (vs 8 enemy)")
+
+    assert contested_power > 8, \
+        f"Should combine cards to beat 8 enemy power! Got {contested_power}"
+
+
+# =============================================================================
 # MAIN (for standalone execution)
 # =============================================================================
 

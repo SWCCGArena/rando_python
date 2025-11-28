@@ -91,6 +91,12 @@ class CardSelectionEvaluator(ActionEvaluator):
         elif "choose target" in text_lower:
             # Weapon/ability target selection - MUST select, don't cancel!
             actions = self._evaluate_target_selection(context)
+        elif "or click 'done' to cancel" in text_lower or "or click 'Done' to cancel" in text:
+            # Target selection with cancel option (e.g., "Choose Emperor, or click 'Done' to cancel")
+            # We already committed to using this ability - MUST select, don't cancel!
+            # This pattern appears when an action/ability requires choosing a specific target.
+            actions = self._evaluate_target_selection(context)
+            logger.info(f"🎯 Treating as target selection (has 'click Done to cancel'): {len(actions)} options")
         else:
             # Unknown card selection - create neutral actions
             actions = self._evaluate_unknown(context)
@@ -999,20 +1005,38 @@ class CardSelectionEvaluator(ActionEvaluator):
 
     def _evaluate_unknown(self, context: DecisionContext) -> List[EvaluatedAction]:
         """
-        Unknown card selection - create neutral-scored actions.
+        Unknown card selection - default to selecting cards when allowed.
+
+        Key principle: If min=0 but max>0, we CAN select and usually SHOULD.
+        Passing should be the exception (handled by specific evaluators), not default.
+        Give cards a base score that beats PassEvaluator (~5-20) to prefer action.
         """
         actions = []
 
         logger.warning(f"Unknown CARD_SELECTION type: '{context.decision_text}'")
 
+        # Check if we can select cards (max > 0)
+        max_select = context.extra.get('max', 1)  # Default to 1 if not specified
+        min_select = context.extra.get('min', 0)
+
+        # Determine base score:
+        # - If max > 0: we can select, so give positive score to beat PassEvaluator
+        # - If max = 0: we can't select anything, neutral score
+        if max_select > 0:
+            base_score = 30.0  # Beats PassEvaluator's ~5-20 score
+            reason = f"Unknown selection (min={min_select}, max={max_select}) - prefer selecting"
+        else:
+            base_score = 0.0
+            reason = "Unknown selection with max=0 - can't select"
+
         for card_id in context.card_ids:
             action = EvaluatedAction(
                 action_id=card_id,
                 action_type=ActionType.UNKNOWN,
-                score=0.0,
+                score=base_score,
                 display_text=f"Select card {card_id}"
             )
-            action.add_reasoning("Unknown selection type - neutral", 0.0)
+            action.add_reasoning(reason, 0.0)  # Score already set in base_score
             actions.append(action)
 
         return actions

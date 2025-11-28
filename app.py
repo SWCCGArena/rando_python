@@ -505,6 +505,25 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
     if iteration >= max_iterations:
         logger.error(f"⚠️  Hit max iterations ({max_iterations}) in event processing!")
 
+        # === CONCEDE ON MAX ITERATIONS ===
+        # If we hit max iterations, we're stuck in an unbreakable loop.
+        # Concede the game to avoid hanging forever.
+        logger.error(f"🚨 CRITICAL: Max iterations reached - conceding game to avoid hang!")
+
+        # Send farewell message
+        if bot_state.chat_manager:
+            farewell = "I appear to be stuck in an unbreakable loop. Conceding to avoid hanging the game. GG!"
+            try:
+                client.post_chat_message(game_id, farewell)
+            except Exception as e:
+                logger.warning(f"Failed to send max-iterations concede message: {e}")
+
+        # Execute concede
+        if client.concede_game(game_id):
+            logger.info("✅ Game conceded due to max iterations")
+        else:
+            logger.error("Failed to concede! Game may be stuck.")
+
     return current_cn
 
 

@@ -236,15 +236,20 @@ class DrawEvaluator(ActionEvaluator):
         # === BASELINE: DRAW TOWARDS SOFT CAP ===
         # Give a baseline bonus for drawing when below soft cap (12).
         # This ensures drawing beats Pass (default 5.0) when hand is small.
-        # The bonus should be strong enough to beat Pass but not override
-        # late-game conservation or other penalties.
+        # CRITICAL: This bonus must be HIGH ENOUGH to beat Pass even after
+        # "save force" penalties are applied. Penalties can total -25 or more!
+        # So we need baseline to be at least 30+ for small hands.
         if hand_size < HAND_SOFT_CAP and remaining_life_force >= LATE_GAME_LIFE_FORCE:
             # Bonus scales with how far below cap we are
             cards_below_cap = HAND_SOFT_CAP - hand_size
-            # +3 per card below cap, minimum +10 to beat Pass's 5.0
-            baseline_bonus = max(10.0, cards_below_cap * 3)
+            # Use exponential scaling: smaller hands get MUCH stronger bonus
+            # This ensures drawing beats Pass even after force-saving penalties
+            # hand=8: +16, hand=6: +24, hand=4: +40, hand=2: +60
+            baseline_bonus = 8.0 * cards_below_cap
+            # Minimum of 30 to beat Pass (5) + typical penalties (-25)
+            baseline_bonus = max(30.0, baseline_bonus)
             action.add_reasoning(
-                f"Hand {hand_size} below soft cap {HAND_SOFT_CAP} ({cards_below_cap} cards to draw)",
+                f"Hand {hand_size} below soft cap {HAND_SOFT_CAP} - need cards!",
                 baseline_bonus
             )
             logger.info(f"🎴 Draw baseline bonus: hand {hand_size} < soft cap {HAND_SOFT_CAP}, +{baseline_bonus}")

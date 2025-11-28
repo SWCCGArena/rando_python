@@ -318,16 +318,22 @@ class DeployPhasePlanner:
         """
         Score a deployment plan based on strategic value.
 
-        Scoring factors:
-        - Icons denied (their_icons at target locations) - most important
-        - Power deployed - for winning battles
-        - Contesting opponent presence - denies force drains
+        Scoring factors (in priority order):
+        1. CRUSHING opponents (beating them with power advantage) - HIGHEST priority
+        2. Icons denied (their_icons at target locations)
+        3. Power deployed - for winning battles
+        4. Contesting opponent presence - denies force drains
+
+        CRITICAL: Beating an opponent is ALWAYS more valuable than establishing
+        at an empty location. Force drains only happen when you CONTROL, and
+        you can't control if the opponent has presence.
         """
         if not instructions:
             return 0.0
 
         score = 0.0
         target_loc_ids = set()
+        power_by_location = {}  # Track power going to each location
 
         for inst in instructions:
             # Find the target location
@@ -339,6 +345,11 @@ class DeployPhasePlanner:
                         target_loc = loc
                         break
 
+                # Track power by location for crush calculation
+                if inst.target_location_id not in power_by_location:
+                    power_by_location[inst.target_location_id] = 0
+                power_by_location[inst.target_location_id] += inst.power_contribution
+
             # Power contribution
             score += inst.power_contribution * 2
 
@@ -346,11 +357,27 @@ class DeployPhasePlanner:
             if target_loc and target_loc.their_power > 0:
                 score += 15  # Contesting is valuable
 
+        # === CRUSH BONUS (CRITICAL - HIGHEST PRIORITY) ===
+        # Beating opponents is MUCH more valuable than establishing at empty.
+        # Add a massive bonus for plans that BEAT enemy power.
+        for loc_id, our_power in power_by_location.items():
+            for loc in locations:
+                if loc.card_id == loc_id and loc.their_power > 0:
+                    if our_power > loc.their_power:
+                        # We BEAT them! This is the best outcome.
+                        power_advantage = our_power - loc.their_power
+                        # +50 base for any win, +10 per power advantage
+                        crush_bonus = 50 + (power_advantage * 10)
+                        score += crush_bonus
+                        logger.debug(f"   💥 CRUSH BONUS at {loc.name}: +{crush_bonus} "
+                                   f"({our_power} vs {loc.their_power})")
+                    break
+
         # Icons denied (only count each location once)
         for loc_id in target_loc_ids:
             for loc in locations:
                 if loc.card_id == loc_id:
-                    score += loc.their_icons * 20  # Icons are very valuable
+                    score += loc.their_icons * 20  # Icons are still valuable
                     break
 
         return score
@@ -508,7 +535,10 @@ class DeployPhasePlanner:
                                     force_budget: int,
                                     locations: List[LocationAnalysis]) -> List[Tuple[List[DeploymentInstruction], int, float]]:
         """
-        Generate multiple ground plans, including combined character deployments.
+        Generate multiple ground plans - one for EACH target location.
+
+        CRITICAL: Generate a plan for each location independently and score them.
+        This ensures we consider crushing contested locations vs establishing at empty.
 
         Returns list of (instructions, force_remaining, score) tuples.
         """
@@ -520,24 +550,57 @@ class DeployPhasePlanner:
         if not affordable_chars:
             return plans
 
-        # Plan 1: Combined deployment - use optimal combinations for each location
-        # This is the key fix for deploying multiple weak characters together!
-        combined_instructions, combined_force_left = self._generate_combined_ground_plan(
-            affordable_chars.copy(), ground_targets, force_budget
-        )
-        if combined_instructions:
-            score = self._score_plan(combined_instructions, locations)
-            plans.append((combined_instructions, combined_force_left, score))
+        MIN_ESTABLISH_POWER = self.deploy_threshold
 
-        # Plan 2+: Individual card-first plans (for comparison)
-        for char in affordable_chars:
-            other_chars = [c for c in characters if c != char]
-            instructions, force_left = self._generate_ground_plan_for_card(
-                char, other_chars, ground_targets, force_budget
+        # === GENERATE A PLAN FOR EACH TARGET LOCATION ===
+        # This is the key change: try each location independently
+        for target_loc in ground_targets:
+            # Skip if we can't deploy characters there (interior check done in target filtering)
+            if not target_loc.is_ground:
+                continue
+
+            # Calculate power needed for this specific location
+            power_goal = max(MIN_ESTABLISH_POWER, target_loc.their_power + 1)
+
+            # Find optimal combination of characters for THIS location
+            chars_for_loc, power_allocated, cost_used = self._find_optimal_combination(
+                affordable_chars.copy(), force_budget, power_goal, must_exceed=(target_loc.their_power > 0)
             )
+
+            if not chars_for_loc:
+                continue
+
+            # Must meet threshold OR beat enemy power
+            if target_loc.their_power > 0:
+                if power_allocated <= target_loc.their_power:
+                    continue  # Can't beat them, skip this location
+            elif power_allocated < MIN_ESTABLISH_POWER:
+                continue  # Can't establish, skip
+
+            # Build instructions for this location
+            instructions = []
+            force_remaining = force_budget - cost_used
+
+            for char in chars_for_loc:
+                if target_loc.their_power > 0:
+                    reason = f"Ground: Crush {target_loc.name} ({power_allocated} vs {target_loc.their_power})"
+                else:
+                    reason = f"Ground: Establish at {target_loc.name} (combined {power_allocated} power)"
+
+                instructions.append(DeploymentInstruction(
+                    card_blueprint_id=char['blueprint_id'],
+                    card_name=char['name'],
+                    target_location_id=target_loc.card_id,
+                    target_location_name=target_loc.name,
+                    priority=2,
+                    reason=reason,
+                    power_contribution=char['power'],
+                    deploy_cost=char['cost'],
+                ))
+
             if instructions:
                 score = self._score_plan(instructions, locations)
-                plans.append((instructions, force_left, score))
+                plans.append((instructions, force_remaining, score))
 
         return plans
 
@@ -868,7 +931,10 @@ class DeployPhasePlanner:
                                    pure_pilots: List[Dict],
                                    locations: List[LocationAnalysis]) -> List[Tuple[List[DeploymentInstruction], int, float]]:
         """
-        Generate multiple space plans, including combined starship deployments.
+        Generate multiple space plans - one for EACH target location.
+
+        CRITICAL: Generate a plan for each location independently and score them.
+        This ensures we consider crushing contested locations vs establishing at empty.
 
         Returns list of (instructions, force_remaining, score) tuples.
         """
@@ -880,24 +946,70 @@ class DeployPhasePlanner:
         if not affordable_ships:
             return plans
 
-        # Plan 1: Combined deployment - use optimal combinations for each location
-        # This considers deploying multiple small ships together!
-        combined_instructions, combined_force_left = self._generate_combined_space_plan(
-            affordable_ships.copy(), space_targets, force_budget, pure_pilots
-        )
-        if combined_instructions:
-            score = self._score_plan(combined_instructions, locations)
-            plans.append((combined_instructions, combined_force_left, score))
+        MIN_ESTABLISH_POWER = self.deploy_threshold
 
-        # Plan 2+: Individual ship-first plans (for comparison)
-        for ship in affordable_ships:
-            other_ships = [s for s in starships if s != ship]
-            instructions, force_left = self._generate_space_plan_for_ship(
-                ship, other_ships, space_targets, force_budget, pure_pilots
+        # === GENERATE A PLAN FOR EACH TARGET LOCATION ===
+        # This is the key change: try each location independently
+        for target_loc in space_targets:
+            # Calculate power needed for this specific location
+            power_goal = max(MIN_ESTABLISH_POWER, target_loc.their_power + 1)
+
+            # Find optimal combination of ships for THIS location
+            ships_for_loc, power_allocated, cost_used = self._find_optimal_combination(
+                affordable_ships.copy(), force_budget, power_goal, must_exceed=(target_loc.their_power > 0)
             )
+
+            if not ships_for_loc:
+                continue
+
+            # Must meet threshold OR beat enemy power
+            if target_loc.their_power > 0:
+                if power_allocated <= target_loc.their_power:
+                    continue  # Can't beat them, skip this location
+            elif power_allocated < MIN_ESTABLISH_POWER:
+                continue  # Can't establish, skip
+
+            # Build instructions for this location
+            instructions = []
+            force_remaining = force_budget - cost_used
+
+            for ship in ships_for_loc:
+                if target_loc.their_power > 0:
+                    reason = f"Space: Crush {target_loc.name} ({power_allocated} vs {target_loc.their_power})"
+                else:
+                    reason = f"Space: Control {target_loc.name} (combined {power_allocated} power)"
+
+                instructions.append(DeploymentInstruction(
+                    card_blueprint_id=ship['blueprint_id'],
+                    card_name=ship['name'],
+                    target_location_id=target_loc.card_id,
+                    target_location_name=target_loc.name,
+                    priority=2,
+                    reason=reason,
+                    power_contribution=ship['power'],
+                    deploy_cost=ship['cost'],
+                ))
+
+            # Add pilots if available and affordable
+            if pure_pilots and force_remaining > 0:
+                for pilot in pure_pilots:
+                    if pilot['cost'] <= force_remaining:
+                        instructions.append(DeploymentInstruction(
+                            card_blueprint_id=pilot['blueprint_id'],
+                            card_name=pilot['name'],
+                            target_location_id=target_loc.card_id,
+                            target_location_name=target_loc.name,
+                            priority=3,
+                            reason=f"Pilot aboard at {target_loc.name}",
+                            power_contribution=pilot['power'],
+                            deploy_cost=pilot['cost'],
+                        ))
+                        force_remaining -= pilot['cost']
+                        break  # One pilot is enough
+
             if instructions:
                 score = self._score_plan(instructions, locations)
-                plans.append((instructions, force_left, score))
+                plans.append((instructions, force_remaining, score))
 
         return plans
 
@@ -913,6 +1025,20 @@ class DeployPhasePlanner:
         # Get current state for cache invalidation
         current_phase = getattr(board_state, 'current_phase', '')
         current_turn = getattr(board_state, 'turn_number', 0)
+        is_my_turn = board_state.is_my_turn() if hasattr(board_state, 'is_my_turn') else True
+
+        # === CRITICAL: Don't plan during opponent's turn! ===
+        # Both players have "Deploy (turn #X)" phase, but we only want to plan for OUR deploy.
+        # If it's not our turn, don't create or update the plan.
+        if not is_my_turn:
+            logger.debug(f"📋 Skipping deploy plan - not our turn (phase={current_phase})")
+            # Return a HOLD_BACK plan if we don't have one, or the cached plan
+            if not self.current_plan:
+                return DeploymentPlan(
+                    strategy=DeployStrategy.HOLD_BACK,
+                    reason="Not our turn - waiting",
+                )
+            return self.current_plan
 
         # ONLY invalidate cache on phase or turn change
         # Do NOT invalidate due to force/hand changes during deployment!
@@ -1196,7 +1322,13 @@ class DeployPhasePlanner:
             and loc.my_power == 0  # We don't have presence yet
             and loc.my_icons > 0  # MUST have our force icons to deploy there
         ]
-        char_ground_targets.sort(key=lambda x: (x.their_icons, x.their_power), reverse=True)
+        # CRITICAL: Sort contested locations FIRST (their_power > 0), then by icons
+        # Beating opponents is MORE valuable than establishing at empty locations!
+        # Sort key: (is_contested DESC, their_icons DESC)
+        char_ground_targets.sort(
+            key=lambda x: (x.their_power > 0, x.their_icons),  # Contested first, then icons
+            reverse=True
+        )
         char_ground_targets = char_ground_targets[:MAX_ESTABLISH_LOCATIONS]
 
         # Log why locations were excluded
@@ -1576,7 +1708,8 @@ class DeployPhasePlanner:
         from .card_loader import get_card
 
         deployable = []
-        available_force = board_state.force_pile - 1
+        # Reserve 1 force for battle effects, but never go negative
+        available_force = max(0, board_state.force_pile - 1)
 
         for card in board_state.cards_in_hand:
             if not card.blueprint_id:
