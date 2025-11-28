@@ -75,6 +75,22 @@ class ActionTextEvaluator(ActionEvaluator):
         owner = self._get_card_owner_from_context(context, card_id)
         return owner == bs.my_player_name if owner else False
 
+    def _extract_card_name_from_prevent_text(self, action_text: str) -> Optional[str]:
+        """
+        Extract card name from barrier card text like:
+        "Prevent Han With Heavy Blaster Pistol from battling or moving"
+
+        Returns the card name (e.g., "Han With Heavy Blaster Pistol")
+        """
+        # Pattern: "Prevent <CARD NAME> from battling or moving"
+        if "Prevent" in action_text and "from battling or moving" in action_text:
+            # Extract the middle part
+            start_idx = action_text.find("Prevent") + len("Prevent ")
+            end_idx = action_text.find(" from battling or moving")
+            if start_idx > 0 and end_idx > start_idx:
+                return action_text[start_idx:end_idx].strip()
+        return None
+
     def _get_target_from_action_text(self, action_text: str, context: DecisionContext) -> dict:
         """
         Try to identify the target of an action from the action text.
@@ -360,10 +376,40 @@ class ActionTextEvaluator(ActionEvaluator):
                     action.score = GOOD_DELTA
                     action.add_reasoning("Taking card into hand", GOOD_DELTA)
 
-            # ========== Prevent Battle/Move ==========
+            # ========== Prevent Battle/Move (Barrier Cards) ==========
+            # Barrier cards prevent opponents from battling or moving.
+            # ONLY valuable when used at a CONTESTED location (both players present).
+            # The whole point is to stop them from attacking after they deploy.
             elif "Prevent" in action_text and "from battling or moving" in action_text:
-                action.score = GOOD_DELTA
-                action.add_reasoning("Preventing opponent actions", GOOD_DELTA)
+                # Try to find the target card and check if location is contested
+                target_card_name = self._extract_card_name_from_prevent_text(action_text)
+                location_contested = False
+
+                if bs and target_card_name:
+                    # Find the card being prevented
+                    for card_id, card in bs.cards_in_play.items():
+                        if card.card_title and target_card_name.lower() in card.card_title.lower():
+                            # Found the card - check if its location is contested
+                            loc_idx = card.location_index
+                            if loc_idx >= 0 and loc_idx < len(bs.locations):
+                                loc = bs.locations[loc_idx]
+                                if loc:
+                                    # Contested = both players have presence
+                                    has_my_presence = len(loc.my_cards) > 0
+                                    has_their_presence = len(loc.their_cards) > 0
+                                    location_contested = has_my_presence and has_their_presence
+                                    logger.info(f"🚧 Barrier check: {target_card_name} at {loc.site_name or loc.system_name}, "
+                                               f"my={len(loc.my_cards)}, their={len(loc.their_cards)}, contested={location_contested}")
+                            break
+
+                if location_contested:
+                    # Location IS contested - barrier is valuable!
+                    action.score = GOOD_DELTA
+                    action.add_reasoning("Preventing opponent actions at CONTESTED location", GOOD_DELTA)
+                else:
+                    # Location NOT contested - save the barrier for later
+                    action.score = BAD_DELTA
+                    action.add_reasoning("Save barrier - location not contested", BAD_DELTA)
 
             # ========== Monnok-type (Reveal Hand) ==========
             elif "LOST: Reveal opponent's hand" in action_text:

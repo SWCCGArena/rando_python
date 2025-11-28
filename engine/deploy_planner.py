@@ -380,20 +380,15 @@ class DeployPhasePlanner:
                 break  # Take first viable location (already sorted by priority)
 
         if not best_loc:
-            # Card can't meet requirements at any location alone
-            # Only deploy if there's an occupied location where we can help contest
-            occupied_locs = [loc for loc in ground_targets if loc.their_power > 0]
-            if occupied_locs:
-                # Deploy to contest even if we can't beat them alone
-                best_loc = occupied_locs[0]
-            else:
-                # All locations empty and card doesn't meet establish threshold - skip
-                logger.debug(f"   ⏭️ {card['name']} ({card['power']} power) can't establish control (need {MIN_ESTABLISH_POWER})")
-                return instructions, force_remaining
+            # Card can't beat enemy or establish at any location - skip
+            # IMPORTANT: Don't deploy into deficit or matching scenarios!
+            # We should only deploy if we can BEAT the enemy power.
+            logger.debug(f"   ⏭️ {card['name']} ({card['power']} power) can't beat enemy or establish (threshold {MIN_ESTABLISH_POWER})")
+            return instructions, force_remaining
 
         # Build reason based on whether location is empty or contested
         if best_loc.their_power > 0:
-            reason = f"Ground: Contest {best_loc.name} (vs {best_loc.their_power} power)"
+            reason = f"Ground: Beat {best_loc.name} ({card['power']} vs {best_loc.their_power} power)"
         else:
             reason = f"Ground: Establish control at {best_loc.name} ({card['power']} power)"
 
@@ -690,20 +685,15 @@ class DeployPhasePlanner:
                 break
 
         if not best_loc:
-            # Ship can't meet requirements at any location alone
-            # Only deploy if there's an occupied location where we can help contest
-            occupied_locs = [loc for loc in space_targets if loc.their_power > 0]
-            if occupied_locs:
-                # Deploy to contest even if we can't beat them alone
-                best_loc = occupied_locs[0]
-            else:
-                # All locations empty and ship doesn't meet establish threshold - skip
-                logger.debug(f"   ⏭️ {ship['name']} ({ship['power']} power) can't establish space control (need {MIN_ESTABLISH_POWER})")
-                return instructions, force_remaining
+            # Ship can't beat enemy or establish at any location - skip
+            # IMPORTANT: Don't deploy into deficit or matching scenarios!
+            # We should only deploy if we can BEAT the enemy power.
+            logger.debug(f"   ⏭️ {ship['name']} ({ship['power']} power) can't beat enemy or establish space control (threshold {MIN_ESTABLISH_POWER})")
+            return instructions, force_remaining
 
         # Deploy the primary ship
         if best_loc.their_power > 0:
-            reason = f"Space: Contest {best_loc.name} (vs {best_loc.their_power} power)"
+            reason = f"Space: Beat {best_loc.name} ({ship['power']} vs {best_loc.their_power} power)"
         else:
             reason = f"Space: Establish control at {best_loc.name} ({ship['power']} power)"
 
@@ -952,15 +942,19 @@ class DeployPhasePlanner:
         my_side = getattr(board_state, 'my_side', 'unknown')
         logger.info(f"   🎭 My side: {my_side}")
 
-        # DIAGNOSTIC: Log raw board_state to debug hand discrepancy
+        # DIAGNOSTIC: Log full hand for debugging
         raw_hand = getattr(board_state, 'cards_in_hand', [])
         logger.info(f"   📊 Raw board_state: force_pile={board_state.force_pile}, "
                    f"cards_in_hand={len(raw_hand)}, turn={getattr(board_state, 'turn_number', '?')}")
         if raw_hand:
-            for i, c in enumerate(raw_hand[:3]):  # Log first 3 cards
-                logger.info(f"      Hand[{i}]: {c.card_title or c.blueprint_id} (id={c.card_id})")
-            if len(raw_hand) > 3:
-                logger.info(f"      ... and {len(raw_hand) - 3} more cards")
+            logger.info(f"   🃏 Full hand ({len(raw_hand)} cards):")
+            for i, c in enumerate(raw_hand):
+                # Get card metadata for power/deploy info
+                card_meta = get_card(c.blueprint_id) if c.blueprint_id else None
+                power = card_meta.power_value if card_meta and card_meta.power_value else 0
+                deploy = card_meta.deploy_value if card_meta and card_meta.deploy_value else 0
+                card_type = card_meta.card_type if card_meta else "Unknown"
+                logger.info(f"      [{i}] {c.card_title or c.blueprint_id} ({card_type}) - Power: {power}, Deploy: {deploy}")
 
         # Get available force (reserve some for battle)
         total_force = board_state.force_pile

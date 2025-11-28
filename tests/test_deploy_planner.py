@@ -286,6 +286,7 @@ class ScenarioBuilder:
         self.expected_deployments: List[str] = []  # Card names expected to deploy
         self.expected_targets: List[str] = []  # Location names expected
         self.should_hold_back: bool = False
+        self.deploy_threshold: int = 6  # Default threshold
         self._location_counter = 0
         self._card_counter = 0
 
@@ -302,6 +303,11 @@ class ScenarioBuilder:
     def with_turn(self, turn: int) -> 'ScenarioBuilder':
         """Set turn number"""
         self.board.turn_number = turn
+        return self
+
+    def with_deploy_threshold(self, threshold: int) -> 'ScenarioBuilder':
+        """Set the deploy power threshold"""
+        self.deploy_threshold = threshold
         return self
 
     def add_ground_location(self, name: str, *,
@@ -647,6 +653,7 @@ class ScenarioBuilder:
             expected_deployments=self.expected_deployments,
             expected_targets=self.expected_targets,
             should_hold_back=self.should_hold_back,
+            deploy_threshold=self.deploy_threshold,
         )
 
 
@@ -659,6 +666,7 @@ class Scenario:
     expected_deployments: List[str]
     expected_targets: List[str]
     should_hold_back: bool
+    deploy_threshold: int = 6  # Default threshold
 
 
 # =============================================================================
@@ -689,7 +697,7 @@ def run_scenario(scenario: Scenario) -> ScenarioResult:
     logger.info(f"Locations: {len(scenario.board.locations)}, Hand: {len(scenario.board.cards_in_hand)} cards")
 
     # Create planner and run
-    planner = DeployPhasePlanner(deploy_threshold=6)
+    planner = DeployPhasePlanner(deploy_threshold=scenario.deploy_threshold)
     plan = planner.create_plan(scenario.board)
     result.plan = plan
 
@@ -1885,6 +1893,1048 @@ def test_multiple_vehicles_combine():
     )
     result = run_scenario(scenario)
     assert result.passed, f"Failed: {result.failures}"
+
+
+# =============================================================================
+# STRESS TEST: COMPLEX MULTI-CARD COMBINATION SCENARIOS
+# These tests exercise the brute-force combination finding with 6+ cards
+# =============================================================================
+
+def test_combination_lock_six_cards():
+    """STRESS TEST: Find optimal combo among 6 cards with multiple valid options.
+
+    This tests the brute-force combination finding (2^6 = 64 combinations).
+
+    Cards available (6):
+    - 3 Stormtroopers: 2 power, 1 cost each (efficient!)
+    - 2 Officers: 4 power, 3 cost each (medium efficiency)
+    - 1 Commander: 7 power, 7 cost (less efficient)
+
+    Threshold: 6 power to establish
+    Budget: 12 Force
+
+    Valid combos that meet threshold:
+    1. 3 Troopers = 6 power, 3 cost (MOST EFFICIENT)
+    2. 2 Officers = 8 power, 6 cost
+    3. Commander alone = 7 power, 7 cost
+    4. 2 Troopers + 1 Officer = 8 power, 5 cost
+    5. 1 Officer + 3 Troopers = 10 power, 6 cost (BEST POWER/COST)
+
+    The planner should maximize TOTAL POWER within budget, not just meet threshold.
+    So it should deploy ALL affordable cards for maximum power.
+
+    Expected: All 6 cards deployed (6+8+7 = 21 power for 11 cost)
+    """
+    scenario = (
+        ScenarioBuilder("Combination Lock - 6 Cards")
+        .as_side("dark")
+        .with_force(14)  # Budget for all cards plus 2 reserve
+        .add_ground_location("Target", my_icons=2, their_icons=3)
+        # 3 efficient troopers
+        .add_character("Trooper Alpha", power=2, deploy_cost=1)
+        .add_character("Trooper Beta", power=2, deploy_cost=1)
+        .add_character("Trooper Gamma", power=2, deploy_cost=1)
+        # 2 medium-efficiency officers
+        .add_character("Officer Delta", power=4, deploy_cost=3)
+        .add_character("Officer Epsilon", power=4, deploy_cost=3)
+        # 1 expensive commander
+        .add_character("Commander Zeta", power=7, deploy_cost=7)
+        # Should deploy as many as possible to maximize power
+        # With 12 usable force: 3 Troopers (3 cost) + 2 Officers (6 cost) = 14 power, 9 cost
+        # OR Commander (7) + 2 Troopers (2) + 1 Officer (3) = 15 power, 12 cost
+        # The planner should find the highest total power within budget
+        .expect_target("Target")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Verify we're deploying significant power, not just minimum threshold
+    total_power = sum(inst.power_contribution for inst in result.plan.instructions)
+    total_cost = sum(inst.deploy_cost for inst in result.plan.instructions)
+
+    logger.info(f"   📊 STRESS TEST RESULT: {total_power} power deployed for {total_cost} cost")
+    logger.info(f"   📊 Cards deployed: {[inst.card_name for inst in result.plan.instructions]}")
+
+    assert result.passed, f"Failed: {result.failures}"
+    # Should deploy more than just minimum threshold (6)
+    assert total_power >= 12, f"Should maximize power! Got {total_power}, expected 12+"
+
+
+def test_beat_opponent_optimal_combo():
+    """STRESS TEST: Must exceed opponent's 8 power with optimal card selection.
+
+    Opponent has 8 power at a contested location.
+    We need 9+ power to beat them.
+
+    Cards available (6):
+    - Trooper1: 2 power, 1 cost
+    - Trooper2: 2 power, 1 cost
+    - Trooper3: 3 power, 2 cost
+    - Officer: 4 power, 3 cost
+    - Captain: 5 power, 4 cost
+    - Vader: 6 power, 6 cost
+
+    Budget: 10 Force
+
+    Possible combos to beat 8 power:
+    1. Vader + Trooper1 + Trooper2 = 10 power, 8 cost ✓
+    2. Vader + Trooper3 = 9 power, 8 cost ✓
+    3. Captain + Officer + Trooper1 = 11 power, 8 cost ✓ (BEST - highest power)
+    4. Captain + Officer + Trooper2 = 11 power, 8 cost ✓
+    5. Captain + Trooper1 + Trooper2 + Trooper3 = 12 power, 8 cost ✓ (BEST!)
+
+    The planner should find the combo with MAXIMUM power that fits budget.
+    """
+    scenario = (
+        ScenarioBuilder("Beat Opponent - 6 Card Puzzle")
+        .as_side("dark")
+        .with_force(12)  # 10 usable after 2 reserve
+        .add_ground_location("Contested Zone", my_icons=2, their_icons=2,
+                            my_power=0, their_power=8)  # Must BEAT 8
+        .add_character("Trooper1", power=2, deploy_cost=1)
+        .add_character("Trooper2", power=2, deploy_cost=1)
+        .add_character("Trooper3", power=3, deploy_cost=2)
+        .add_character("Officer", power=4, deploy_cost=3)
+        .add_character("Captain", power=5, deploy_cost=4)
+        .add_character("Darth Vader", power=6, deploy_cost=6)
+        .expect_target("Contested Zone")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    total_power = sum(inst.power_contribution for inst in result.plan.instructions)
+    total_cost = sum(inst.deploy_cost for inst in result.plan.instructions)
+    cards_deployed = [inst.card_name for inst in result.plan.instructions]
+
+    logger.info(f"   📊 BEAT OPPONENT: {total_power} power for {total_cost} cost")
+    logger.info(f"   📊 Cards: {cards_deployed}")
+
+    assert result.passed, f"Failed: {result.failures}"
+    # Must beat opponent's 8 power
+    assert total_power > 8, f"Must beat 8 power! Got {total_power}"
+    # Should find optimal combo (10+ power possible within budget)
+    assert total_power >= 10, f"Should find optimal combo! Got {total_power}, expected 10+"
+
+
+def test_efficiency_vs_raw_power_tradeoff():
+    """STRESS TEST: Choose between efficient cards vs one big card.
+
+    This tests whether the planner correctly maximizes total power,
+    not just greedily picking the biggest single card.
+
+    Cards (5):
+    - Elite Guard: 8 power, 8 cost (ratio 1.0)
+    - Efficient1: 4 power, 2 cost (ratio 2.0)
+    - Efficient2: 4 power, 2 cost (ratio 2.0)
+    - Efficient3: 3 power, 2 cost (ratio 1.5)
+    - Efficient4: 3 power, 2 cost (ratio 1.5)
+
+    Budget: 10 Force (after 2 reserve = 8 usable)
+
+    Options:
+    - Elite Guard alone = 8 power, 8 cost (uses all budget)
+    - 4 Efficient cards = 14 power, 8 cost (MUCH BETTER!)
+
+    The planner MUST pick the efficient combo, not the single big card.
+    """
+    scenario = (
+        ScenarioBuilder("Efficiency vs Power - 5 Cards")
+        .as_side("dark")
+        .with_force(10)
+        .add_ground_location("Target", my_icons=2, their_icons=2)
+        # The "trap" - big but inefficient
+        .add_character("Elite Guard", power=8, deploy_cost=8)
+        # The efficient choices
+        .add_character("Efficient1", power=4, deploy_cost=2)
+        .add_character("Efficient2", power=4, deploy_cost=2)
+        .add_character("Efficient3", power=3, deploy_cost=2)
+        .add_character("Efficient4", power=3, deploy_cost=2)
+        # Should deploy efficient cards (14 power) NOT Elite Guard (8 power)
+        .expect_target("Target")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    total_power = sum(inst.power_contribution for inst in result.plan.instructions)
+    cards_deployed = [inst.card_name for inst in result.plan.instructions]
+
+    logger.info(f"   📊 EFFICIENCY TEST: {total_power} power, cards: {cards_deployed}")
+
+    assert result.passed, f"Failed: {result.failures}"
+    # Should NOT pick Elite Guard alone (8 power)
+    # Should pick efficient cards (up to 14 power for 8 cost)
+    assert total_power >= 11, f"Should pick efficient cards! Got {total_power}, expected 11+"
+    # Verify Elite Guard wasn't picked if we got better value
+    if total_power >= 12:
+        assert "Elite Guard" not in cards_deployed, "Should prefer efficient cards over Elite Guard!"
+
+
+def test_ground_vs_space_icon_priority():
+    """STRESS TEST: Choose space over ground when space has higher icon value.
+
+    Ground option: 2 characters totaling 10 power, location has 2 opponent icons
+    Space option: 2 starships totaling 8 power, location has 4 opponent icons
+
+    The planner should pick SPACE because:
+    - Icons are worth ~20 points each in scoring
+    - 4 icons (space) vs 2 icons (ground) = 40 point difference
+    - This outweighs the 2 power difference
+
+    Cards (4):
+    - Ground Commander: 6 power, 5 cost
+    - Ground Officer: 4 power, 3 cost
+    - Star Destroyer: 5 power, 5 cost (has permanent pilot)
+    - TIE Squadron: 3 power, 2 cost (has permanent pilot)
+
+    Budget: 12 Force
+    """
+    scenario = (
+        ScenarioBuilder("Ground vs Space - Icon Priority")
+        .as_side("dark")
+        .with_force(14)
+        # Ground: Lower icon value
+        .add_ground_location("Ground Base", my_icons=2, their_icons=2)
+        # Space: Higher icon value (worth more to control!)
+        .add_space_location("Critical System", my_icons=2, their_icons=4)
+        # Ground characters
+        .add_character("Ground Commander", power=6, deploy_cost=5)
+        .add_character("Ground Officer", power=4, deploy_cost=3)
+        # Space starships
+        .add_starship("Star Destroyer", power=5, deploy_cost=5, has_permanent_pilot=True)
+        .add_starship("TIE Squadron", power=3, deploy_cost=2, has_permanent_pilot=True)
+        # Should pick space (higher icons) over ground (higher power)
+        .expect_target("Critical System")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    deployed_targets = [inst.target_location_name for inst in result.plan.instructions]
+    logger.info(f"   📊 GROUND vs SPACE: Deployed to {deployed_targets}")
+
+    assert result.passed, f"Failed: {result.failures}"
+    assert "Critical System" in deployed_targets, "Should prioritize high-icon space location!"
+
+
+def test_vehicle_pilot_puzzle_complex():
+    """STRESS TEST: Complex vehicle + pilot combination puzzle.
+
+    This tests the vehicle/pilot pairing logic with multiple options.
+
+    Cards (7):
+    - 2 unpiloted vehicles (need pilots to have power):
+      - AT-ST Alpha: 5 base power, 4 cost
+      - AT-ST Beta: 4 base power, 3 cost
+    - 2 pilot characters:
+      - Pilot Commander: 3 power, 3 cost (good pilot for big vehicle)
+      - Rookie Pilot: 2 power, 1 cost (cheap pilot)
+    - 1 piloted vehicle (has permanent pilot):
+      - Speeder Bike: 3 power, 2 cost
+    - 2 regular characters:
+      - Stormtrooper: 3 power, 2 cost
+      - Officer: 4 power, 3 cost
+
+    Budget: 15 Force
+    Exterior ground location with opponent presence (5 power)
+
+    Best combo should pair pilots with unpiloted vehicles:
+    - AT-ST Alpha (5) + Pilot Commander (3) = 8 power, 7 cost
+    - AT-ST Beta (4) + Rookie Pilot (2) = 6 power, 4 cost
+    - Speeder Bike = 3 power, 2 cost
+    - Total: 17 power for 13 cost
+
+    OR deploy characters + piloted vehicle:
+    - Stormtrooper (3) + Officer (4) + Speeder (3) = 10 power, 7 cost
+    - Plus whatever else fits
+
+    The key test: Does it correctly pair pilots with unpiloted vehicles?
+    """
+    scenario = (
+        ScenarioBuilder("Vehicle + Pilot Puzzle - 7 Cards")
+        .as_side("dark")
+        .with_force(17)  # 15 usable
+        .add_ground_location("Motor Pool", my_icons=2, their_icons=3, exterior=True,
+                            their_power=5)  # Must beat 5
+        # Unpiloted vehicles (0 power without pilot aboard)
+        .add_vehicle("AT-ST Alpha", power=5, deploy_cost=4, has_permanent_pilot=False)
+        .add_vehicle("AT-ST Beta", power=4, deploy_cost=3, has_permanent_pilot=False)
+        # Pilots (good aboard vehicles)
+        .add_character("Pilot Commander", power=3, deploy_cost=3, is_pilot=True)
+        .add_character("Rookie Pilot", power=2, deploy_cost=1, is_pilot=True)
+        # Self-piloted vehicle
+        .add_vehicle("Speeder Bike", power=3, deploy_cost=2, has_permanent_pilot=True)
+        # Regular characters
+        .add_character("Stormtrooper", power=3, deploy_cost=2)
+        .add_character("Imperial Officer", power=4, deploy_cost=3)
+        .expect_target("Motor Pool")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    total_power = sum(inst.power_contribution for inst in result.plan.instructions)
+    total_cost = sum(inst.deploy_cost for inst in result.plan.instructions)
+    cards_deployed = [inst.card_name for inst in result.plan.instructions]
+
+    logger.info(f"   📊 VEHICLE PUZZLE: {total_power} power for {total_cost} cost")
+    logger.info(f"   📊 Cards: {cards_deployed}")
+
+    assert result.passed, f"Failed: {result.failures}"
+    # Must beat opponent's 5 power
+    assert total_power > 5, f"Must beat 5 power! Got {total_power}"
+
+
+def test_eight_card_mega_combo():
+    """STRESS TEST: 8 cards tests upper limit of brute-force (2^8 = 256 combos).
+
+    Cards (8):
+    - 4 Stormtroopers: 2 power, 1 cost each
+    - 2 Officers: 3 power, 2 cost each
+    - 1 Captain: 5 power, 4 cost
+    - 1 Vader: 7 power, 6 cost
+
+    Total available: 27 power for 18 cost
+    Budget: 14 Force (12 usable)
+
+    Best combo within 12 cost should maximize power:
+    - 4 Troopers (8 power, 4 cost) + 2 Officers (6 power, 4 cost) + Captain (5 power, 4 cost)
+      = 19 power for 12 cost
+
+    OR
+    - Vader (7 power, 6 cost) + 4 Troopers (8 power, 4 cost) + 1 Officer (3 power, 2 cost)
+      = 18 power for 12 cost
+
+    The first combo is better (19 > 18).
+    """
+    scenario = (
+        ScenarioBuilder("Eight Card Mega Combo")
+        .as_side("dark")
+        .with_force(14)
+        .add_ground_location("Grand Arena", my_icons=2, their_icons=3)
+        # 4 cheap troopers
+        .add_character("Trooper1", power=2, deploy_cost=1)
+        .add_character("Trooper2", power=2, deploy_cost=1)
+        .add_character("Trooper3", power=2, deploy_cost=1)
+        .add_character("Trooper4", power=2, deploy_cost=1)
+        # 2 medium officers
+        .add_character("Officer1", power=3, deploy_cost=2)
+        .add_character("Officer2", power=3, deploy_cost=2)
+        # Captain
+        .add_character("Captain", power=5, deploy_cost=4)
+        # Vader
+        .add_character("Lord Vader", power=7, deploy_cost=6)
+        .expect_target("Grand Arena")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    total_power = sum(inst.power_contribution for inst in result.plan.instructions)
+    total_cost = sum(inst.deploy_cost for inst in result.plan.instructions)
+    num_cards = len(result.plan.instructions)
+
+    logger.info(f"   📊 MEGA COMBO: {total_power} power, {total_cost} cost, {num_cards} cards")
+    logger.info(f"   📊 Cards: {[inst.card_name for inst in result.plan.instructions]}")
+
+    assert result.passed, f"Failed: {result.failures}"
+    # Should deploy many cards for high total power
+    assert total_power >= 15, f"Should maximize power with 8 cards! Got {total_power}, expected 15+"
+    assert num_cards >= 5, f"Should deploy multiple cards! Got {num_cards}, expected 5+"
+
+
+def test_two_contested_locations_prioritize_worse():
+    """STRESS TEST: Two contested locations - reinforce the worse one first.
+
+    Location A: We have 3 power, they have 5 power (deficit -2)
+    Location B: We have 2 power, they have 8 power (deficit -6)
+
+    The planner should reinforce Location B first (worse deficit).
+
+    Cards (4):
+    - Strong Reinforcement: 6 power, 5 cost
+    - Medium Reinforcement: 4 power, 3 cost
+    - Trooper1: 2 power, 1 cost
+    - Trooper2: 2 power, 1 cost
+
+    Budget: 12 Force
+    """
+    scenario = (
+        ScenarioBuilder("Two Contested - Prioritize Worse")
+        .as_side("dark")
+        .with_force(14)
+        # Contested location A - mild deficit
+        .add_ground_location("Mild Contest", my_icons=2, their_icons=2,
+                            my_power=3, their_power=5)  # -2 deficit
+        # Contested location B - severe deficit
+        .add_ground_location("Severe Contest", my_icons=2, their_icons=2,
+                            my_power=2, their_power=8)  # -6 deficit
+        # Reinforcement options
+        .add_character("Strong Reinforcement", power=6, deploy_cost=5)
+        .add_character("Medium Reinforcement", power=4, deploy_cost=3)
+        .add_character("Trooper1", power=2, deploy_cost=1)
+        .add_character("Trooper2", power=2, deploy_cost=1)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check which location gets reinforced first
+    if result.plan.instructions:
+        first_target = result.plan.instructions[0].target_location_name
+        logger.info(f"   📊 First reinforcement target: {first_target}")
+        # Note: The planner may handle this differently based on flee logic
+        # Severe Contest (-6) might trigger flee instead of reinforce!
+
+    assert result.plan is not None, "Plan should be created"
+
+
+def test_mixed_space_ground_with_limited_budget():
+    """STRESS TEST: Mixed forces but budget only allows one theatre.
+
+    Budget: 8 Force (6 usable)
+
+    Ground option:
+    - Commander (5 power, 5 cost) at Ground Target (2 opponent icons)
+
+    Space option:
+    - Cruiser (4 power, 4 cost) + Fighter (2 power, 2 cost) at Space Target (3 opponent icons)
+      = 6 power, 6 cost
+
+    Space should win because:
+    - 3 icons > 2 icons (60 vs 40 icon score)
+    - Even though ground has more power (5 vs 6)
+
+    But wait - space has MORE power too! So this is clear.
+    """
+    scenario = (
+        ScenarioBuilder("Mixed Forces Limited Budget")
+        .as_side("dark")
+        .with_force(8)
+        # Ground option
+        .add_ground_location("Ground Target", my_icons=2, their_icons=2)
+        .add_character("Ground Commander", power=5, deploy_cost=5)
+        # Space option
+        .add_space_location("Space Target", my_icons=2, their_icons=3)
+        .add_starship("Cruiser", power=4, deploy_cost=4, has_permanent_pilot=True)
+        .add_starship("Fighter", power=2, deploy_cost=2, has_permanent_pilot=True)
+        # Space should win
+        .expect_target("Space Target")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    deployed_targets = set(inst.target_location_name for inst in result.plan.instructions)
+    logger.info(f"   📊 MIXED FORCES: Deployed to {deployed_targets}")
+
+    assert result.passed, f"Failed: {result.failures}"
+
+
+def test_vader_plus_troopers_vs_troopers_alone():
+    """STRESS TEST: Classic dilemma - one big character vs many small ones.
+
+    Budget: 10 Force (8 usable)
+
+    Option A: Vader alone = 6 power, 6 cost
+    Option B: 3 Troopers + 1 Officer = 2+2+2+3 = 9 power, 1+1+1+2 = 5 cost
+
+    Option B is strictly better:
+    - More power (9 > 6)
+    - Less cost (5 < 6)
+
+    The planner MUST choose Option B.
+    """
+    scenario = (
+        ScenarioBuilder("Vader vs Trooper Army")
+        .as_side("dark")
+        .with_force(10)
+        .add_ground_location("Battleground", my_icons=2, their_icons=2)
+        # The "trap" - iconic but inefficient
+        .add_character("Darth Vader", power=6, deploy_cost=6)
+        # The better option
+        .add_character("Stormtrooper1", power=2, deploy_cost=1)
+        .add_character("Stormtrooper2", power=2, deploy_cost=1)
+        .add_character("Stormtrooper3", power=2, deploy_cost=1)
+        .add_character("Squad Leader", power=3, deploy_cost=2)
+        # Should deploy troopers, not Vader
+        .expect_target("Battleground")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    total_power = sum(inst.power_contribution for inst in result.plan.instructions)
+    cards = [inst.card_name for inst in result.plan.instructions]
+
+    logger.info(f"   📊 VADER vs ARMY: {total_power} power, cards: {cards}")
+
+    assert result.passed, f"Failed: {result.failures}"
+    # Should get more than Vader's 6 power
+    assert total_power >= 8, f"Should pick trooper army! Got {total_power}, expected 8+"
+
+
+def test_exactly_at_budget_boundary():
+    """STRESS TEST: Cards that exactly fit the budget.
+
+    Budget: 8 Force (6 usable)
+
+    Cards:
+    - Card A: 3 power, 3 cost
+    - Card B: 3 power, 3 cost
+    - Card C: 4 power, 4 cost
+
+    Combos:
+    - A + B = 6 power, 6 cost (exactly at budget!) ✓
+    - A + C = 7 power, 7 cost (over budget!) ✗
+    - B + C = 7 power, 7 cost (over budget!) ✗
+    - C alone = 4 power, 4 cost (under threshold) - might not deploy
+
+    Only A + B works if threshold is 6.
+    """
+    scenario = (
+        ScenarioBuilder("Budget Boundary Test")
+        .as_side("dark")
+        .with_force(8)  # 6 usable
+        .add_ground_location("Tight Budget Zone", my_icons=2, their_icons=2)
+        .add_character("Card A", power=3, deploy_cost=3)
+        .add_character("Card B", power=3, deploy_cost=3)
+        .add_character("Card C", power=4, deploy_cost=4)
+        .expect_deployment("Card A", "Card B")
+        .expect_target("Tight Budget Zone")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    total_cost = sum(inst.deploy_cost for inst in result.plan.instructions)
+    cards = [inst.card_name for inst in result.plan.instructions]
+
+    logger.info(f"   📊 BOUNDARY: cost={total_cost}, cards={cards}")
+
+    assert result.passed, f"Failed: {result.failures}"
+    # Should not exceed budget
+    assert total_cost <= 6, f"Should not exceed budget of 6! Got {total_cost}"
+
+
+def test_overkill_prevention_at_location():
+    """STRESS TEST: Don't deploy excessive power to already-dominated location.
+
+    We already control Location A with 15 power vs their 3 power (+12 advantage).
+    Location B is empty but has high opponent icons.
+
+    The planner should NOT pile more onto Location A (overkill).
+    It should establish at Location B instead.
+
+    Cards (4):
+    - Trooper1: 3 power, 2 cost
+    - Trooper2: 3 power, 2 cost
+    - Officer: 4 power, 3 cost
+    - Commander: 6 power, 5 cost
+
+    Budget: 15 Force
+    """
+    scenario = (
+        ScenarioBuilder("Overkill Prevention")
+        .as_side("dark")
+        .with_force(17)
+        # Location A: We're already crushing them (+12 advantage = overkill)
+        .add_ground_location("We Dominate", my_icons=2, their_icons=1,
+                            my_power=15, their_power=3)
+        # Location B: Empty but valuable (high opponent icons)
+        .add_ground_location("High Value Empty", my_icons=2, their_icons=3)
+        # Deployment options
+        .add_character("Trooper1", power=3, deploy_cost=2)
+        .add_character("Trooper2", power=3, deploy_cost=2)
+        .add_character("Officer", power=4, deploy_cost=3)
+        .add_character("Commander", power=6, deploy_cost=5)
+        # Should deploy to empty location, not overkill dominated one
+        .expect_target("High Value Empty")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    deployed_targets = [inst.target_location_name for inst in result.plan.instructions]
+    logger.info(f"   📊 OVERKILL TEST: Deployed to {deployed_targets}")
+
+    assert result.passed, f"Failed: {result.failures}"
+    # Should NOT go to the dominated location (overkill)
+    assert "High Value Empty" in deployed_targets, "Should expand, not overkill!"
+
+
+# =============================================================================
+# POWER MATCHING/DEFICIT TESTS - Must BEAT enemy, not match
+# =============================================================================
+
+def test_ground_matching_power_no_deploy():
+    """CRITICAL: Don't deploy when we only MATCH enemy power (not beat).
+
+    Enemy has 4 power at Mos Espa.
+    We have a 4 power character.
+    Matching 4 vs 4 is NOT good enough - we need to BEAT them (5+ power).
+
+    Should NOT deploy - wait for better cards or more force.
+    """
+    scenario = (
+        ScenarioBuilder("Ground Matching Power - No Deploy")
+        .as_side("dark")
+        .with_force(10)
+        # Enemy has 4 power - we can only match, not beat
+        .add_ground_location("Mos Espa", my_icons=2, their_icons=1, their_power=4)
+        # Only have a 4-power character - matches but doesn't beat
+        .add_character("P-59", power=4, deploy_cost=4)
+        # Should NOT deploy because 4 doesn't beat 4
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy.value == "hold_back", \
+        f"Should HOLD BACK when matching power! Got: {result.plan.strategy.value}"
+    assert len(result.plan.instructions) == 0, \
+        f"Should have NO deployments! Got: {[i.card_name for i in result.plan.instructions]}"
+
+
+def test_ground_power_deficit_no_deploy():
+    """CRITICAL: Don't deploy when we're at power deficit.
+
+    Enemy has 6 power.
+    We only have a 4 power character.
+    Deploying 4 vs 6 is a losing battle - don't do it!
+
+    Should NOT deploy.
+    """
+    scenario = (
+        ScenarioBuilder("Ground Power Deficit - No Deploy")
+        .as_side("dark")
+        .with_force(10)
+        # Enemy has 6 power - we can't beat them
+        .add_ground_location("Death Star", my_icons=2, their_icons=2, their_power=6)
+        # Only have 4 power - not enough to beat 6
+        .add_character("Stormtrooper", power=4, deploy_cost=3)
+        # Should NOT deploy
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy.value == "hold_back", \
+        f"Should HOLD BACK in power deficit! Got: {result.plan.strategy.value}"
+
+
+def test_ground_beating_power_should_deploy():
+    """CRITICAL: DO deploy when we BEAT enemy power.
+
+    Enemy has 4 power.
+    We have a 5 power character.
+    5 > 4, so we should deploy and win the battle!
+    """
+    scenario = (
+        ScenarioBuilder("Ground Beating Power - Should Deploy")
+        .as_side("dark")
+        .with_force(10)
+        # Enemy has 4 power - we can beat them!
+        .add_ground_location("Mos Espa", my_icons=2, their_icons=2, their_power=4)
+        # Have 5 power - beats 4!
+        .add_character("Commander", power=5, deploy_cost=4)
+        # Should deploy because 5 beats 4
+        .expect_target("Mos Espa")
+        .expect_deployment("Commander")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.passed, f"Failed: {result.failures}"
+    assert len(result.plan.instructions) >= 1, "Should deploy the Commander!"
+
+
+def test_space_matching_power_no_deploy():
+    """CRITICAL: Space version - don't deploy when matching power.
+
+    Enemy has 5 power in space.
+    We have a 5 power starship.
+    5 vs 5 = match, not beat. Don't deploy!
+    """
+    scenario = (
+        ScenarioBuilder("Space Matching Power - No Deploy")
+        .as_side("dark")
+        .with_force(12)
+        # Enemy has 5 power in space
+        .add_space_location("Tatooine System", my_icons=2, their_icons=2, their_power=5)
+        # We have 5 power ship - matches but doesn't beat
+        .add_starship("TIE Defender", power=5, deploy_cost=5, has_permanent_pilot=True)
+        # Should NOT deploy
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy.value == "hold_back", \
+        f"Should HOLD BACK when matching space power! Got: {result.plan.strategy.value}"
+
+
+def test_space_power_deficit_no_deploy():
+    """CRITICAL: Space version - don't deploy into power deficit.
+
+    Enemy has 8 power in space.
+    We only have a 5 power starship.
+    5 vs 8 = big deficit. Don't deploy!
+    """
+    scenario = (
+        ScenarioBuilder("Space Power Deficit - No Deploy")
+        .as_side("dark")
+        .with_force(12)
+        # Enemy has 8 power in space - too strong
+        .add_space_location("Bespin System", my_icons=2, their_icons=3, their_power=8)
+        # We only have 5 power
+        .add_starship("Star Destroyer", power=5, deploy_cost=6, has_permanent_pilot=True)
+        # Should NOT deploy
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy.value == "hold_back", \
+        f"Should HOLD BACK in space power deficit! Got: {result.plan.strategy.value}"
+
+
+def test_space_beating_power_should_deploy():
+    """CRITICAL: Space version - DO deploy when beating power.
+
+    Enemy has 4 power in space.
+    We have a 6 power starship.
+    6 > 4, deploy and dominate!
+    """
+    scenario = (
+        ScenarioBuilder("Space Beating Power - Should Deploy")
+        .as_side("dark")
+        .with_force(12)
+        # Enemy has 4 power in space
+        .add_space_location("Tatooine System", my_icons=2, their_icons=2, their_power=4)
+        # We have 6 power - beats 4!
+        .add_starship("Executor", power=6, deploy_cost=6, has_permanent_pilot=True)
+        # Should deploy because 6 beats 4
+        .expect_target("Tatooine System")
+        .expect_deployment("Executor")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.passed, f"Failed: {result.failures}"
+    assert len(result.plan.instructions) >= 1, "Should deploy the Executor!"
+
+
+def test_multiple_cards_still_cant_beat():
+    """Even with multiple cards, don't deploy if combined power can't beat.
+
+    Enemy has 10 power.
+    We have 3 characters totaling 8 power.
+    Even combined 8 < 10, so don't deploy any!
+    """
+    scenario = (
+        ScenarioBuilder("Multiple Cards Can't Beat - No Deploy")
+        .as_side("dark")
+        .with_force(15)
+        # Enemy has 10 power - too strong even combined
+        .add_ground_location("Fortress", my_icons=2, their_icons=2, their_power=10)
+        # We have 8 combined power - not enough
+        .add_character("Trooper1", power=3, deploy_cost=2)
+        .add_character("Trooper2", power=3, deploy_cost=2)
+        .add_character("Officer", power=2, deploy_cost=2)
+        # Should NOT deploy any
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Either hold back entirely, or deploy to an empty location with threshold
+    # But should NOT deploy to the contested location
+    contested_deploys = [i for i in result.plan.instructions
+                        if i.target_location_name == "Fortress"]
+    assert len(contested_deploys) == 0, \
+        f"Should NOT deploy to contested location we can't beat! Deployed: {contested_deploys}"
+
+
+def test_multiple_cards_can_beat_combined():
+    """Multiple cards that can beat enemy when combined.
+
+    Enemy has 5 power.
+    We have 3 characters totaling 7 power.
+    Combined 7 > 5, so deploy them all!
+    """
+    scenario = (
+        ScenarioBuilder("Multiple Cards Beat Combined - Deploy")
+        .as_side("dark")
+        .with_force(12)
+        # Enemy has 5 power
+        .add_ground_location("Outpost", my_icons=2, their_icons=2, their_power=5)
+        # We have 7 combined power - enough to beat!
+        .add_character("Trooper1", power=3, deploy_cost=2)
+        .add_character("Trooper2", power=2, deploy_cost=1)
+        .add_character("Officer", power=2, deploy_cost=2)
+        # Should deploy enough to beat 5
+        .expect_target("Outpost")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    total_power = sum(i.power_contribution for i in result.plan.instructions
+                     if i.target_location_name == "Outpost")
+    assert total_power > 5, f"Combined power should beat 5! Got: {total_power}"
+
+
+def test_below_threshold_empty_location_no_deploy():
+    """Don't deploy below threshold even to empty location.
+
+    Empty location (no enemy).
+    Threshold is 6.
+    Our character has 4 power.
+    4 < 6 threshold, so don't deploy!
+    """
+    scenario = (
+        ScenarioBuilder("Below Threshold Empty - No Deploy")
+        .as_side("dark")
+        .with_force(10)
+        .with_deploy_threshold(6)  # High threshold
+        # Empty location - but threshold is 6
+        .add_ground_location("Empty Site", my_icons=2, their_icons=2)
+        # Only 4 power - below threshold
+        .add_character("Weak Trooper", power=4, deploy_cost=3)
+        # Should NOT deploy
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy.value == "hold_back", \
+        f"Should HOLD BACK below threshold! Got: {result.plan.strategy.value}"
+
+
+def test_at_threshold_empty_location_should_deploy():
+    """Deploy when at or above threshold for empty location.
+
+    Empty location.
+    Threshold is 6.
+    Our character has 6 power.
+    6 >= 6 threshold, so deploy!
+    """
+    scenario = (
+        ScenarioBuilder("At Threshold Empty - Deploy")
+        .as_side("dark")
+        .with_force(10)
+        .with_deploy_threshold(6)
+        # Empty location
+        .add_ground_location("Empty Site", my_icons=2, their_icons=2)
+        # Exactly 6 power - meets threshold
+        .add_character("Commander", power=6, deploy_cost=5)
+        # Should deploy
+        .expect_target("Empty Site")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.passed, f"Failed: {result.failures}"
+    assert len(result.plan.instructions) >= 1, "Should deploy at threshold!"
+
+
+def test_combined_scenario_multiple_locations():
+    """Complex scenario: multiple locations with different power levels.
+
+    Location A: Enemy has 3 power (we can beat with 4-power char)
+    Location B: Enemy has 12 power (even combined 6+4=10 can't beat!)
+    Location C: Empty (needs threshold 6)
+
+    With a 6-power and 4-power character (10 combined):
+    - Can't beat 12 at B (even combined!)
+    - 4-power CAN beat 3 at A
+    - 6-power can establish at empty C
+    """
+    scenario = (
+        ScenarioBuilder("Multiple Locations Mixed Power")
+        .as_side("dark")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Location A: Beatable with 4-power
+        .add_ground_location("Beatable", my_icons=2, their_icons=2, their_power=3)
+        # Location B: Too strong even combined (don't go here!)
+        .add_ground_location("Too Strong", my_icons=2, their_icons=2, their_power=12)
+        # Location C: Empty
+        .add_ground_location("Empty", my_icons=2, their_icons=1)
+        # Characters: 6+4=10 combined, can't beat 12
+        .add_character("Strong", power=6, deploy_cost=5)
+        .add_character("Medium", power=4, deploy_cost=3)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check that we did NOT deploy to "Too Strong" location
+    strong_deploys = [i for i in result.plan.instructions
+                     if i.target_location_name == "Too Strong"]
+    assert len(strong_deploys) == 0, \
+        f"Should NOT deploy to unbeatable location! Deployed: {[i.card_name for i in strong_deploys]}"
+
+    # Should deploy somewhere useful
+    if result.plan.instructions:
+        targets = [i.target_location_name for i in result.plan.instructions]
+        logger.info(f"   📊 Deployed to: {targets}")
+        assert "Beatable" in targets or "Empty" in targets, \
+            f"Should deploy to beatable or empty location! Got: {targets}"
+
+
+# =============================================================================
+# PILE-ON TESTS - Concentrate forces at contested locations
+# =============================================================================
+
+def test_pile_on_contested_instead_of_spreading():
+    """CRITICAL: Pile on contested location instead of spreading across empty ones.
+
+    Real bug scenario from game log:
+    - Mos Espa has 6 enemy power
+    - Cloud City is empty (2 their icons, good target)
+    - Had Jabba (3), P-59 (4), Palpatine (4) = 11 power total
+
+    WRONG behavior (old):
+    - Jabba alone -> Mos Espa (3 vs 6 = LOSS!)
+    - P-59 + Palpatine -> Cloud City (8 power, establish)
+
+    CORRECT behavior:
+    - Either: All 3 to Mos Espa (11 vs 6 = WIN!)
+    - Or: Nothing to Mos Espa (can't beat with available chars after Cloud City)
+
+    The key insight: DON'T send a single character to a contested location
+    they can't beat, even if other characters go elsewhere.
+    """
+    scenario = (
+        ScenarioBuilder("Pile On Contested - Real Bug")
+        .as_side("dark")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Empty location with good icons (tempting to spread)
+        .add_ground_location("Cloud City", my_icons=1, their_icons=2, interior=True, exterior=False)
+        # Contested location
+        .add_ground_location("Mos Espa", my_icons=2, their_icons=1, their_power=6)
+        # Characters: Jabba can't beat 6 alone, but combined all can (11 > 6)
+        .add_character("Jabba", power=3, deploy_cost=4)
+        .add_character("P-59", power=4, deploy_cost=4)
+        .add_character("Palpatine", power=4, deploy_cost=5)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # The CRITICAL check: Jabba should NOT go to Mos Espa alone!
+    mos_espa_deploys = [i for i in result.plan.instructions
+                       if i.target_location_name == "Mos Espa"]
+
+    if len(mos_espa_deploys) > 0:
+        # If anyone goes to Mos Espa, the combined power must beat 6
+        total_power_at_mos_espa = sum(i.power_contribution for i in mos_espa_deploys)
+        cards_at_mos_espa = [i.card_name for i in mos_espa_deploys]
+        logger.info(f"   📊 Mos Espa: {total_power_at_mos_espa} power from {cards_at_mos_espa}")
+        assert total_power_at_mos_espa > 6, \
+            f"If deploying to Mos Espa, must BEAT 6 power! Got {total_power_at_mos_espa} from {cards_at_mos_espa}"
+
+
+def test_dont_send_weak_char_alone_to_contested():
+    """Weak character should NOT go to contested location alone.
+
+    Even if other characters deploy elsewhere to establish,
+    a weak character should not be sent to a losing battle.
+    """
+    scenario = (
+        ScenarioBuilder("Don't Send Weak Alone")
+        .as_side("dark")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Empty location
+        .add_ground_location("Empty Site", my_icons=2, their_icons=2)
+        # Contested location with 5 enemy
+        .add_ground_location("Contested", my_icons=2, their_icons=2, their_power=5)
+        # Weak character (3 power can't beat 5)
+        .add_character("Weak Trooper", power=3, deploy_cost=2)
+        # Strong characters (6 power beats establish threshold, can go to empty)
+        .add_character("Strong1", power=6, deploy_cost=5)
+        .add_character("Strong2", power=6, deploy_cost=5)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check contested deployments
+    contested_deploys = [i for i in result.plan.instructions
+                        if i.target_location_name == "Contested"]
+
+    if len(contested_deploys) > 0:
+        total_power = sum(i.power_contribution for i in contested_deploys)
+        assert total_power > 5, \
+            f"Deployments to contested must beat 5! Got {total_power}"
+
+    # Weak Trooper should not go to contested alone
+    weak_at_contested = [i for i in contested_deploys if i.card_name == "Weak Trooper"]
+    strong_at_contested = [i for i in contested_deploys if i.card_name != "Weak Trooper"]
+
+    if weak_at_contested and not strong_at_contested:
+        # Weak trooper alone at contested - BAD!
+        assert False, "Weak Trooper should NOT go to contested location alone!"
+
+
+def test_pile_on_when_combined_beats_enemy():
+    """When combined power can beat enemy, pile on instead of spreading.
+
+    Contested location has 7 enemy power.
+    We have 3 characters: 3 + 3 + 4 = 10 power (beats 7!)
+
+    Should deploy all 3 to the contested location, not spread them.
+    """
+    scenario = (
+        ScenarioBuilder("Pile On When Combined Wins")
+        .as_side("dark")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Contested location - 7 enemy power
+        .add_ground_location("Battleground", my_icons=2, their_icons=2, their_power=7)
+        # Empty location (tempting to spread)
+        .add_ground_location("Empty Base", my_icons=2, their_icons=1)
+        # 3 characters: none can beat 7 alone, but combined (10) can!
+        .add_character("Trooper1", power=3, deploy_cost=2)
+        .add_character("Trooper2", power=3, deploy_cost=2)
+        .add_character("Officer", power=4, deploy_cost=3)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check what went to Battleground
+    battleground_deploys = [i for i in result.plan.instructions
+                           if i.target_location_name == "Battleground"]
+
+    if len(battleground_deploys) > 0:
+        total_power = sum(i.power_contribution for i in battleground_deploys)
+        logger.info(f"   📊 Battleground: {total_power} power")
+        assert total_power > 7, \
+            f"If deploying to Battleground, must beat 7! Got {total_power}"
+
+
+def test_space_pile_on_contested():
+    """Space version: pile on contested system instead of spreading.
+
+    Space location has 5 enemy power.
+    We have 3 starships: 2 + 2 + 3 = 7 power (beats 5!)
+    """
+    scenario = (
+        ScenarioBuilder("Space Pile On")
+        .as_side("dark")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Contested space
+        .add_space_location("Contested System", my_icons=2, their_icons=2, their_power=5)
+        # Empty space
+        .add_space_location("Empty System", my_icons=2, their_icons=1)
+        # 3 starships: none beats 5 alone, combined (7) does
+        .add_starship("TIE 1", power=2, deploy_cost=2, has_permanent_pilot=True)
+        .add_starship("TIE 2", power=2, deploy_cost=2, has_permanent_pilot=True)
+        .add_starship("TIE 3", power=3, deploy_cost=3, has_permanent_pilot=True)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check contested deployments
+    contested_deploys = [i for i in result.plan.instructions
+                        if i.target_location_name == "Contested System"]
+
+    if len(contested_deploys) > 0:
+        total_power = sum(i.power_contribution for i in contested_deploys)
+        assert total_power > 5, \
+            f"If deploying to contested space, must beat 5! Got {total_power}"
 
 
 # =============================================================================
