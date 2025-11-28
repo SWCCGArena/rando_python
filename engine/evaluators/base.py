@@ -198,21 +198,31 @@ class PassEvaluator(ActionEvaluator):
         if context.board_state:
             bs = context.board_state
 
-            # CRITICAL: Don't apply "save force" logic during ACTIVATE decisions!
-            # Activating force costs NOTHING - it just moves cards from reserve to force pile.
-            # We should almost always activate all available force.
-            is_activate_decision = "Activate" in (context.decision_text or "")
+            # CRITICAL: Don't apply "save force" logic during certain decisions!
+            # - ACTIVATE: Costs nothing, just moves cards from reserve to force pile
+            # - DRAW: Drawing IS what we want to do
+            # - BATTLE: We just deployed, we WANT to battle! Don't discourage it.
+            decision_text_lower = (context.decision_text or "").lower()
+            is_activate_decision = "activate" in decision_text_lower
+            is_draw_decision = "draw" in decision_text_lower and "action" in decision_text_lower
+            is_battle_decision = "battle action" in decision_text_lower or "initiate battle" in decision_text_lower
 
-            if bs.force_pile < 3 and not is_activate_decision:
+            # For battle decisions, pass should have VERY low score
+            # We deployed for a reason - we want to fight!
+            if is_battle_decision:
+                action.add_reasoning("Battle decision - should fight, not pass", -10.0)
+                return [action]  # Don't add any other bonuses for pass during battle
+
+            if bs.force_pile < 3 and not is_activate_decision and not is_draw_decision:
                 action.add_reasoning("Low on Force - prefer to pass", +5.0)
 
             if bs.reserve_deck_low():
                 action.add_reasoning("Reserve deck low - conserve cards", +3.0)
 
             # Hand management: If hand is small, save force for drawing
-            # BUT NOT DURING ACTIVATE - activating gives us MORE force to draw with!
+            # BUT NOT DURING ACTIVATE or DRAW - we're already drawing!
             hand_size = bs.hand_size if bs.hand_size > 0 else len(bs.cards_in_hand)
-            if not is_activate_decision:
+            if not is_activate_decision and not is_draw_decision:
                 if hand_size < 5:
                     # Small hand - strongly prefer passing to save force for draw phase
                     action.add_reasoning(f"Small hand ({hand_size}) - save force for drawing", +15.0)

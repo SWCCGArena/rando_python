@@ -57,6 +57,12 @@ class DeployEvaluator(ActionEvaluator):
         """Reset pending deploy tracking (call at turn start)"""
         self.pending_deploy_card_ids.clear()
 
+    def reset_for_new_game(self):
+        """Reset all state for a new game"""
+        self.pending_deploy_card_ids.clear()
+        self._last_turn_number = -1
+        self.planner.reset()
+
     def track_deploy(self, card_id: str):
         """Track that we tried deploying this card"""
         self.pending_deploy_card_ids.add(card_id)

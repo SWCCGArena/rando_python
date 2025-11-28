@@ -71,9 +71,18 @@ class DrawEvaluator(ActionEvaluator):
         if context.decision_type not in ['CARD_ACTION_CHOICE', 'ACTION_CHOICE']:
             return False
 
-        # Check if any action is a draw action
+        # Check if decision text mentions "Draw" - this is the primary trigger
+        decision_lower = (context.decision_text or "").lower()
+        if "draw" in decision_lower and "action" in decision_lower:
+            logger.info(f"🎴 DrawEvaluator triggered by decision text: '{context.decision_text}'")
+            logger.info(f"   Action texts available: {context.action_texts}")
+            return True
+
+        # Also check if any action is a draw action (case-insensitive, flexible matching)
         for action_text in context.action_texts:
-            if action_text == "Draw card into hand from Force Pile":
+            action_lower = action_text.lower()
+            if "draw" in action_lower:
+                logger.info(f"🎴 DrawEvaluator triggered by action text: '{action_text}'")
                 return True
 
         return False
@@ -87,8 +96,13 @@ class DrawEvaluator(ActionEvaluator):
         for i, action_id in enumerate(context.action_ids):
             action_text = context.action_texts[i] if i < len(context.action_texts) else ""
 
-            if action_text != "Draw card into hand from Force Pile":
+            # Flexible matching for draw actions (case-insensitive)
+            # Match any action containing "draw" (e.g., "Draw", "Draw card", "Draw card into hand from Force Pile")
+            action_lower = action_text.lower()
+            if "draw" not in action_lower:
                 continue
+
+            logger.info(f"🎴 Evaluating draw action: '{action_text}' (id={action_id})")
 
             action = EvaluatedAction(
                 action_id=action_id,

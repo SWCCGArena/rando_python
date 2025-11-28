@@ -632,6 +632,34 @@ class BoardState:
             return 0
         return len(self.locations[location_index].their_cards)
 
+    def my_power_from_cards(self, location_index: int) -> int:
+        """
+        Calculate my power at a location by summing card power values.
+
+        More reliable than power dictionaries which may be stale.
+        """
+        if location_index < 0 or location_index >= len(self.locations) or not self.locations[location_index]:
+            return 0
+        total = 0
+        for card in self.locations[location_index].my_cards:
+            if card.power and card.power > 0:
+                total += card.power
+        return total
+
+    def their_power_from_cards(self, location_index: int) -> int:
+        """
+        Calculate opponent's power at a location by summing card power values.
+
+        More reliable than power dictionaries which may be stale.
+        """
+        if location_index < 0 or location_index >= len(self.locations) or not self.locations[location_index]:
+            return 0
+        total = 0
+        for card in self.locations[location_index].their_cards:
+            if card.power and card.power > 0:
+                total += card.power
+        return total
+
     # ========== Resource Queries ==========
 
     def can_afford(self, cost: int) -> bool:

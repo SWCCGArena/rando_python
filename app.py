@@ -748,6 +748,16 @@ def bot_worker():
                             bot_state.strategy_controller.setup()  # Reset for new game
                             logger.info(f"🎮 Board state tracking initialized (side will be detected from cards)")
 
+                            # Reset brain evaluators for new game (clears cached plans)
+                            if bot_state.brain and hasattr(bot_state.brain, 'reset_for_new_game'):
+                                bot_state.brain.reset_for_new_game()
+                            elif bot_state.brain and hasattr(bot_state.brain, 'combined_evaluator'):
+                                # StaticBrain: reset evaluators directly
+                                for evaluator in bot_state.brain.evaluators:
+                                    if hasattr(evaluator, 'reset_for_new_game'):
+                                        evaluator.reset_for_new_game()
+                            logger.info(f"🧠 Brain evaluators reset for new game")
+
                             # Register callback for card placements (achievements)
                             if bot_state.chat_manager:
                                 def on_card_placed(card_title, blueprint_id, zone, owner):

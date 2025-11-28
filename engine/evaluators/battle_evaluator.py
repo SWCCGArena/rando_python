@@ -62,10 +62,16 @@ class BattleEvaluator(ActionEvaluator):
         if context.decision_type not in ['CARD_ACTION_CHOICE', 'ACTION_CHOICE']:
             return False
 
-        # Check if any action is a battle action
+        # Check if any action is a battle action (case-insensitive, includes variants)
+        # Matches: "Initiate battle", "Initiate battle for free", etc.
         for action_text in context.action_texts:
-            if action_text == "Initiate battle":
+            if "initiate battle" in action_text.lower():
                 return True
+
+        # Also check decision text for battle context
+        decision_lower = (context.decision_text or "").lower()
+        if "battle action" in decision_lower:
+            return True
 
         return False
 
@@ -77,8 +83,10 @@ class BattleEvaluator(ActionEvaluator):
 
         for i, action_id in enumerate(context.action_ids):
             action_text = context.action_texts[i] if i < len(context.action_texts) else ""
+            action_lower = action_text.lower()
 
-            if action_text != "Initiate battle":
+            # Match any battle initiation action (includes "for free" variants)
+            if "initiate battle" not in action_lower:
                 continue
 
             action = EvaluatedAction(
@@ -87,6 +95,10 @@ class BattleEvaluator(ActionEvaluator):
                 score=0.0,
                 display_text=action_text
             )
+
+            # BONUS: "for free" is always better than paying!
+            if "for free" in action_lower:
+                action.add_reasoning("Battle for FREE - no force cost!", GOOD_DELTA * 3)
 
             if bs:
                 # Get card ID to determine location
@@ -192,14 +204,22 @@ class BattleEvaluator(ActionEvaluator):
                 return
 
         # Fallback: Battle logic when GameStrategy not available
-        # Be VERY conservative - losing battles costs cards from hand/table
+        # IMPORTANT: When we have a power advantage, we should ALMOST ALWAYS battle!
+        # Battles are how we win the game - force drains are based on control.
+        # Scores need to be HIGH (50+) to beat PassEvaluator's "save force" bonuses.
 
         if power_diff >= 6:
             # Overwhelming advantage - definitely battle
-            action.add_reasoning(f"Crushing advantage (+{power_diff}) - battle!", VERY_GOOD_DELTA)
+            action.add_reasoning(f"Crushing advantage (+{power_diff}) - BATTLE!", VERY_GOOD_DELTA)
+        elif power_diff >= 4:
+            # Strong advantage - highly recommended
+            action.add_reasoning(f"Strong advantage (+{power_diff}) - battle!", 80.0)
         elif power_diff >= 2:
-            # Good odds - battle recommended
-            action.add_reasoning(f"Good odds (+{power_diff}) - battle", GOOD_DELTA * 2)
+            # Good odds - battle recommended (score high enough to beat Pass)
+            action.add_reasoning(f"Good advantage (+{power_diff}) - battle!", 60.0)
+        elif power_diff >= 0:
+            # Even fight - still worth battling to contest
+            action.add_reasoning(f"Even fight ({power_diff}) - battle to contest", 40.0)
         elif power_diff >= -2:
             # Close fight - only battle if we have good ability for destiny
             if ability_test:
