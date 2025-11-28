@@ -1197,6 +1197,47 @@ class DeployPhasePlanner:
         contested_ground.sort(key=lambda x: (not x.is_battle_opportunity, x.power_differential))
         contested_space.sort(key=lambda x: (not x.is_battle_opportunity, x.power_differential))
 
+        # =================================================================
+        # STEP 2B: IDENTIFY WEAK PRESENCE LOCATIONS (below threshold)
+        # Locations where we have presence but power < deploy_threshold
+        # These need reinforcement BEFORE we establish at new locations!
+        # =================================================================
+        MIN_ESTABLISH_POWER = self.deploy_threshold
+
+        weak_presence_ground = [
+            loc for loc in locations
+            if loc.my_power > 0  # We have presence
+            and loc.their_power == 0  # No enemy (not contested)
+            and loc.my_power < MIN_ESTABLISH_POWER  # Below threshold
+            and loc.is_ground  # Ground location
+            and loc.my_icons > 0  # Skip 0-icon locations (low value to reinforce)
+        ]
+        weak_presence_space = [
+            loc for loc in locations
+            if loc.my_power > 0  # We have presence
+            and loc.their_power == 0  # No enemy (not contested)
+            and loc.my_power < MIN_ESTABLISH_POWER  # Below threshold
+            and loc.is_space  # Space location
+            and loc.my_icons > 0  # Skip 0-icon locations (low value to reinforce)
+        ]
+
+        # Sort by icons (higher value locations first), then by how close to threshold
+        weak_presence_ground.sort(key=lambda x: (-x.my_icons, x.my_power), reverse=False)
+        weak_presence_space.sort(key=lambda x: (-x.my_icons, x.my_power), reverse=False)
+
+        if weak_presence_ground:
+            logger.info(f"   🔧 Weak presence ground (need reinforcement): "
+                       f"{[(loc.name, loc.my_power) for loc in weak_presence_ground]}")
+        if weak_presence_space:
+            logger.info(f"   🔧 Weak presence space (need reinforcement): "
+                       f"{[(loc.name, loc.my_power) for loc in weak_presence_space]}")
+
+        # CRITICAL: Merge weak presence locations into contested list for processing
+        # They have HIGHER priority than establishing at new locations
+        # Add them AFTER truly contested locations (enemy > 0) but BEFORE establish
+        contested_ground = contested_ground + weak_presence_ground
+        contested_space = contested_space + weak_presence_space
+
         # Combined list for backwards compatibility (STEP 4 uses this for ground)
         contested = contested_ground
 
@@ -1242,9 +1283,9 @@ class DeployPhasePlanner:
             logger.info(f"   🚀 Space targets (starships): {[loc.name for loc in uncontested_space]}")
 
         # =================================================================
-        # STEP 4: ALLOCATE CHARACTERS TO CONTESTED LOCATIONS
-        # Priority: Reinforce locations where we're losing
-        # Goal: Reach power parity or advantage
+        # STEP 4: ALLOCATE CHARACTERS TO CONTESTED/WEAK LOCATIONS
+        # Priority: Reinforce locations where we're losing OR below threshold
+        # Goal: Reach power advantage (contested) or threshold (weak presence)
         # Uses optimal combination finding to maximize power within budget
         # =================================================================
         available_chars = characters.copy()
@@ -1253,11 +1294,22 @@ class DeployPhasePlanner:
             if not available_chars or force_remaining <= 0:
                 break
 
-            deficit = abs(loc.power_differential)
-            power_needed = deficit + BATTLE_FAVORABLE_THRESHOLD  # Want to reach favorable
-
-            battle_tag = "BATTLE OPP" if loc.is_battle_opportunity else "Contested"
-            logger.info(f"   ⚔️ {battle_tag}: {loc.name} ({loc.my_power} vs {loc.their_power}, need +{power_needed})")
+            # Calculate power needed based on location type
+            is_weak_presence = loc.their_power == 0 and loc.my_power > 0
+            if is_weak_presence:
+                # Weak presence: need to reach threshold
+                power_needed = MIN_ESTABLISH_POWER - loc.my_power
+                if power_needed <= 0:
+                    # Already at or above threshold, skip
+                    continue
+                log_tag = "WEAK"
+                logger.info(f"   🔧 {log_tag}: {loc.name} (have {loc.my_power}, need +{power_needed} to reach {MIN_ESTABLISH_POWER})")
+            else:
+                # Contested: need to beat enemy
+                deficit = abs(loc.power_differential)
+                power_needed = deficit + BATTLE_FAVORABLE_THRESHOLD  # Want to reach favorable
+                log_tag = "BATTLE OPP" if loc.is_battle_opportunity else "Contested"
+                logger.info(f"   ⚔️ {log_tag}: {loc.name} ({loc.my_power} vs {loc.their_power}, need +{power_needed})")
 
             # Find OPTIMAL combination of cards within budget
             cards_for_location, power_allocated, cost_used = self._find_optimal_combination(
@@ -1286,7 +1338,11 @@ class DeployPhasePlanner:
                 if loc.is_battle_opportunity:
                     reason = f"BATTLE OPP at {loc.name} (deploy +{char['power']}, then fight!)"
                     priority = 1  # Same as reinforce but flagged for battle
+                elif is_weak_presence:
+                    reason = f"Reinforce {loc.name} (had {loc.my_power}, adding {char['power']} to reach threshold)"
+                    priority = 1  # Same priority as contested reinforce
                 else:
+                    deficit = abs(loc.power_differential)
                     reason = f"Reinforce {loc.name} (was -{deficit}, adding {char['power']})"
                     priority = 1
 
@@ -1300,8 +1356,80 @@ class DeployPhasePlanner:
                     power_contribution=char['power'],
                     deploy_cost=char['cost'],
                 ))
-                emoji = "⚔️" if loc.is_battle_opportunity else "🛡️"
+                emoji = "🔧" if is_weak_presence else ("⚔️" if loc.is_battle_opportunity else "🛡️")
                 logger.info(f"   {emoji} Plan: Deploy {char['name']} ({char['power']} power, {char['cost']} cost) to {loc.name}")
+
+        # =================================================================
+        # STEP 4B: ALLOCATE STARSHIPS TO CONTESTED/WEAK SPACE LOCATIONS
+        # Same as STEP 4 but for starships to space locations
+        # =================================================================
+        available_ships = starships.copy()
+
+        for loc in contested_space:
+            if not available_ships or force_remaining <= 0:
+                break
+
+            # Calculate power needed based on location type
+            is_weak_presence = loc.their_power == 0 and loc.my_power > 0
+            if is_weak_presence:
+                # Weak presence: need to reach threshold
+                power_needed = MIN_ESTABLISH_POWER - loc.my_power
+                if power_needed <= 0:
+                    # Already at or above threshold, skip
+                    continue
+                log_tag = "WEAK SPACE"
+                logger.info(f"   🔧 {log_tag}: {loc.name} (have {loc.my_power}, need +{power_needed} to reach {MIN_ESTABLISH_POWER})")
+            else:
+                # Contested: need to beat enemy
+                deficit = abs(loc.power_differential)
+                power_needed = deficit + BATTLE_FAVORABLE_THRESHOLD  # Want to reach favorable
+                log_tag = "BATTLE OPP" if loc.is_battle_opportunity else "Contested"
+                logger.info(f"   🚀 {log_tag}: {loc.name} ({loc.my_power} vs {loc.their_power}, need +{power_needed})")
+
+            # Find OPTIMAL combination of starships within budget
+            ships_for_location, power_allocated, cost_used = self._find_optimal_combination(
+                available_ships,
+                force_remaining,
+                power_needed,
+                must_exceed=False  # >= is fine for reinforcement
+            )
+
+            if not ships_for_location:
+                logger.info(f"   ⏭️ No affordable starships for {loc.name}")
+                continue
+
+            # Log the selected combination
+            ship_names = [s['name'] for s in ships_for_location]
+            logger.info(f"   📊 Optimal starship combo: {ship_names} = {power_allocated} power for {cost_used} Force")
+
+            # Update remaining budget and available ships
+            force_remaining -= cost_used
+            for ship in ships_for_location:
+                if ship in available_ships:
+                    available_ships.remove(ship)
+
+            # Create instructions for these deployments
+            for ship in ships_for_location:
+                if is_weak_presence:
+                    reason = f"Reinforce {loc.name} (had {loc.my_power}, adding {ship['power']} to reach threshold)"
+                    priority = 1  # Same priority as contested reinforce
+                else:
+                    deficit = abs(loc.power_differential)
+                    reason = f"Reinforce {loc.name} (was -{deficit}, adding {ship['power']})"
+                    priority = 1
+
+                plan.instructions.append(DeploymentInstruction(
+                    card_blueprint_id=ship['blueprint_id'],
+                    card_name=ship['name'],
+                    target_location_id=loc.card_id,
+                    target_location_name=loc.name,
+                    priority=priority,
+                    reason=reason,
+                    power_contribution=ship['power'],
+                    deploy_cost=ship['cost'],
+                ))
+                emoji = "🔧" if is_weak_presence else "🚀"
+                logger.info(f"   {emoji} Plan: Deploy {ship['name']} ({ship['power']} power, {ship['cost']} cost) to {loc.name}")
 
         # =================================================================
         # STEP 5: COMPARE GROUND vs SPACE PLANS
@@ -1567,24 +1695,25 @@ class DeployPhasePlanner:
                 if force_remaining <= BATTLE_FORCE_RESERVE:
                     break
 
-                # Deploy any remaining piloted vehicles here
-                for vehicle in piloted_vehicles[:]:
-                    if force_remaining <= BATTLE_FORCE_RESERVE:
-                        break
-                    if vehicle['cost'] <= force_remaining - BATTLE_FORCE_RESERVE:
-                        plan.instructions.append(DeploymentInstruction(
-                            card_blueprint_id=vehicle['blueprint_id'],
-                            card_name=vehicle['name'],
-                            target_location_id=loc.card_id,
-                            target_location_name=loc.name,
-                            priority=2,
-                            reason=f"PILE ON at {loc.name} (+{vehicle['power']} power)",
-                            power_contribution=vehicle['power'],
-                            deploy_cost=vehicle['cost'],
-                        ))
-                        logger.info(f"   💪 PILE ON: Deploy {vehicle['name']} ({vehicle['power']} power) to {loc.name}")
-                        force_remaining -= vehicle['cost']
-                        piloted_vehicles.remove(vehicle)
+                # Deploy any remaining piloted vehicles here (only to exterior locations!)
+                if loc.is_exterior:
+                    for vehicle in piloted_vehicles[:]:
+                        if force_remaining <= BATTLE_FORCE_RESERVE:
+                            break
+                        if vehicle['cost'] <= force_remaining - BATTLE_FORCE_RESERVE:
+                            plan.instructions.append(DeploymentInstruction(
+                                card_blueprint_id=vehicle['blueprint_id'],
+                                card_name=vehicle['name'],
+                                target_location_id=loc.card_id,
+                                target_location_name=loc.name,
+                                priority=2,
+                                reason=f"PILE ON at {loc.name} (+{vehicle['power']} power)",
+                                power_contribution=vehicle['power'],
+                                deploy_cost=vehicle['cost'],
+                            ))
+                            logger.info(f"   💪 PILE ON: Deploy {vehicle['name']} ({vehicle['power']} power) to {loc.name}")
+                            force_remaining -= vehicle['cost']
+                            piloted_vehicles.remove(vehicle)
 
                 # Deploy any remaining characters here (if it's a ground location)
                 if loc.is_ground:
@@ -1841,16 +1970,10 @@ class DeployPhasePlanner:
             analysis.is_exterior = is_exterior
 
             # Get power from board_state (uses array index, same as admin panel)
+            # Note: board_state power values are authoritative - no need to recalculate from cards
             raw_my_power = board_state.my_power_at_location(idx) if hasattr(board_state, 'my_power_at_location') else 0
             raw_their_power = board_state.their_power_at_location(idx) if hasattr(board_state, 'their_power_at_location') else 0
 
-            # Debug: Also calculate power from cards to compare
-            cards_my_power = sum(c.power for c in loc.my_cards if hasattr(c, 'power') and c.power) if hasattr(loc, 'my_cards') else 0
-            cards_their_power = sum(c.power for c in loc.their_cards if hasattr(c, 'power') and c.power) if hasattr(loc, 'their_cards') else 0
-
-            if cards_their_power != max(0, raw_their_power):
-                logger.warning(f"   ⚠️ POWER MISMATCH at {loc_name}: dict says {raw_their_power}, cards sum to {cards_their_power}")
-                logger.warning(f"      Their cards: {[(c.card_title, c.power) for c in loc.their_cards] if hasattr(loc, 'their_cards') else []}")
             analysis.my_power = max(0, raw_my_power)
             analysis.their_power = max(0, raw_their_power)
             analysis.i_control = getattr(loc, 'i_control', False)

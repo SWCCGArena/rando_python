@@ -329,10 +329,12 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.add_reasoning("Substituting destiny is good", GOOD_DELTA)
 
             # ========== React ==========
+            # Bot doesn't understand react timing well, so avoid using reacts
+            # Let normal deployment be preferred over reacting
             elif "react" in text_lower:
                 action.action_type = ActionType.REACT
-                action.score = VERY_GOOD_DELTA
-                action.add_reasoning("Reacting is always good", VERY_GOOD_DELTA)
+                action.score = BAD_DELTA
+                action.add_reasoning("Avoid reacts (bot doesn't understand timing)", BAD_DELTA)
 
             # ========== Steal ==========
             elif "steal" in text_lower:

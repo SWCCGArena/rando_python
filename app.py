@@ -421,8 +421,9 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
                             except Exception as e:
                                 logger.warning(f"Failed to send concede message: {e}")
 
-                            # Record as a loss (player_won=True means opponent won)
-                            bot_state.chat_manager.on_game_end(won=True, board_state=board_state_for_decision)
+                        # NOTE: Don't call on_game_end() here - the normal game_ended
+                        # handler will be triggered when server confirms concede,
+                        # avoiding double-recording of stats
 
                         # Execute concede
                         if client.concede_game(game_id):

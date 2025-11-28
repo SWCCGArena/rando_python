@@ -315,6 +315,20 @@ class ChatManager:
         is_new_top_astrogator = False
 
         if self.stats_repo and self.opponent_name:
+            # Get effective deck name - try multiple sources if not set
+            effective_deck_name = self.deck_name
+            if not effective_deck_name:
+                # Try to recover from persisted table state (survives restarts)
+                try:
+                    from engine.table_manager import _load_table_state
+                    table_state = _load_table_state()
+                    if table_state and table_state.get('deck_name'):
+                        effective_deck_name = table_state['deck_name']
+                        logger.info(f"📊 Recovered deck_name from table state: {effective_deck_name}")
+                except Exception as e:
+                    logger.warning(f"Could not load table state for deck_name: {e}")
+            effective_deck_name = effective_deck_name or "Unknown"
+
             # Always update player stats and game history (regardless of who won)
             player = self.stats_repo.record_game_result(
                 player_name=self.opponent_name,
@@ -329,7 +343,7 @@ class ChatManager:
             # Record game to history
             self.stats_repo.record_game(
                 opponent_name=self.opponent_name,
-                deck_name=self.deck_name or "Unknown",
+                deck_name=effective_deck_name,
                 my_side=self.my_side or "unknown",
                 won=won,
                 route_score=route_score if won else 0,
@@ -342,18 +356,19 @@ class ChatManager:
             # Route score / deck records only apply when opponent won (beat the bot's deck)
             if won:
                 # Update deck stats (global high score for this deck)
-                if self.deck_name:
-                    deck_stats, is_new_deck_record = self.stats_repo.update_deck_score(
-                        self.deck_name, self.opponent_name, route_score
-                    )
-                    if not is_new_deck_record and deck_stats:
-                        previous_holder = deck_stats.best_player
-                        previous_score = deck_stats.best_score
+                logger.info(f"📊 Recording deck stats for '{effective_deck_name}' - player: {self.opponent_name}, score: {route_score}")
+                deck_stats, is_new_deck_record = self.stats_repo.update_deck_score(
+                    effective_deck_name, self.opponent_name, route_score
+                )
+                if not is_new_deck_record and deck_stats:
+                    previous_holder = deck_stats.best_player
+                    previous_score = deck_stats.best_score
 
-                    # Update player's score on this specific deck
-                    self.stats_repo.update_player_deck_score(
-                        self.opponent_name, self.deck_name, route_score
-                    )
+                # Update player's score on this specific deck
+                self.stats_repo.update_player_deck_score(
+                    self.opponent_name, effective_deck_name, route_score
+                )
+                logger.info(f"📊 Deck stats recorded successfully")
 
                 # Check global astrogation record
                 is_new_top_astrogator, _ = self.stats_repo.check_and_update_global_record(

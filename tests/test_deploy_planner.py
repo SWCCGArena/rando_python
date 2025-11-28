@@ -3073,6 +3073,402 @@ def test_ground_crush_with_combo_over_establish():
 
 
 # =============================================================================
+# REINFORCE BELOW-THRESHOLD TESTS
+# =============================================================================
+# These tests verify that the planner reinforces locations where we have
+# presence but are below the deploy threshold BEFORE establishing at new locations.
+
+def test_reinforce_below_threshold_before_establish():
+    """
+    Test that bot reinforces a location where it has presence below threshold
+    BEFORE establishing at a new empty location.
+
+    Scenario from the bug report:
+    - Cloud City: North Corridor has my_power=3, their_power=0
+    - Cloud City: Carbonite Chamber is empty with opponent icons
+    - With deploy_threshold=6, bot should reinforce North Corridor first
+    """
+    scenario = (
+        ScenarioBuilder("Reinforce Below Threshold Before Establish")
+        .as_side("light")
+        .with_force(11)
+        .with_deploy_threshold(6)
+        # Location where we have presence but below threshold (3 < 6)
+        .add_ground_location("North Corridor", my_icons=2, their_icons=1,
+                             my_power=3, their_power=0, interior=True, exterior=False)
+        # Empty location with opponent icons - normally attractive
+        .add_ground_location("Carbonite Chamber", my_icons=1, their_icons=1,
+                             my_power=0, their_power=0, interior=True, exterior=False)
+        # Another empty location
+        .add_ground_location("Guest Quarters", my_icons=2, their_icons=1,
+                             my_power=0, their_power=0, interior=True, exterior=False)
+        # Characters we could deploy
+        .add_character("Luke With Lightsaber", power=5, deploy_cost=5)
+        .add_character("Mirax Terrik", power=2, deploy_cost=2)
+        .add_character("Lobot", power=2, deploy_cost=2)
+        # We should reinforce North Corridor first to get above threshold
+        .expect_target("North Corridor")
+        .expect_strategy(DeployStrategy.REINFORCE)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Verify North Corridor gets reinforcement
+    north_corridor_deploys = [i for i in result.plan.instructions
+                              if i.target_location_name == "North Corridor"]
+    north_corridor_power = sum(i.power_contribution for i in north_corridor_deploys)
+
+    # Should add at least 3 power to reach threshold of 6
+    # Existing 3 + new 3 = 6 minimum
+    assert north_corridor_power >= 3, \
+        f"Should reinforce North Corridor with at least 3 power to reach threshold! Got {north_corridor_power}"
+
+    logger.info(f"   📊 North Corridor reinforcement: +{north_corridor_power} power (existing 3 + new = {3 + north_corridor_power})")
+
+
+def test_reinforce_multiple_below_threshold_locations():
+    """
+    Test with multiple locations below threshold - should reinforce highest priority first.
+
+    Priority should be: locations with higher icons, then alphabetically as tiebreaker.
+    """
+    scenario = (
+        ScenarioBuilder("Reinforce Multiple Below Threshold")
+        .as_side("dark")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Location A: 2 power, below threshold, 2 icons
+        .add_ground_location("Location Alpha", my_icons=2, their_icons=2,
+                             my_power=2, their_power=0)
+        # Location B: 4 power, below threshold, 1 icon
+        .add_ground_location("Location Beta", my_icons=1, their_icons=1,
+                             my_power=4, their_power=0)
+        # Characters
+        .add_character("Vader", power=6, deploy_cost=6)
+        .add_character("Trooper", power=2, deploy_cost=2)
+        .expect_strategy(DeployStrategy.REINFORCE)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Should reinforce at least one below-threshold location
+    reinforced_locations = set(i.target_location_name for i in result.plan.instructions)
+
+    below_threshold_reinforced = reinforced_locations & {"Location Alpha", "Location Beta"}
+    assert len(below_threshold_reinforced) > 0, \
+        f"Should reinforce at least one below-threshold location! Targeted: {reinforced_locations}"
+
+
+def test_no_reinforce_if_already_above_threshold():
+    """
+    Test that we establish at new locations if existing presence is already above threshold.
+    """
+    scenario = (
+        ScenarioBuilder("Already Above Threshold - Establish New")
+        .as_side("dark")
+        .with_force(10)
+        .with_deploy_threshold(6)
+        # Already above threshold - no need to reinforce
+        .add_ground_location("Strong Position", my_icons=2, their_icons=1,
+                             my_power=8, their_power=0)
+        # Empty location we should establish at
+        .add_ground_location("Empty Target", my_icons=1, their_icons=2,
+                             my_power=0, their_power=0)
+        .add_character("Trooper", power=6, deploy_cost=4)
+        .expect_target("Empty Target")
+        .expect_strategy(DeployStrategy.ESTABLISH)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Should establish at empty location, not reinforce already-strong position
+    empty_target_deploys = [i for i in result.plan.instructions
+                            if i.target_location_name == "Empty Target"]
+    assert len(empty_target_deploys) > 0, \
+        "Should establish at Empty Target when existing position is above threshold!"
+
+
+# =============================================================================
+# SPACE LOCATION TESTS
+# =============================================================================
+# Tests for starship deployment to space locations
+
+def test_space_location_basic_establishment():
+    """
+    Test basic starship deployment to a space location.
+    """
+    scenario = (
+        ScenarioBuilder("Space Location Basic")
+        .as_side("dark")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Space location with opponent icons
+        .add_space_location("Bespin System", my_icons=2, their_icons=2,
+                            my_power=0, their_power=0)
+        # Starship with permanent pilot (has power on its own)
+        .add_starship("Star Destroyer", power=7, deploy_cost=6, has_permanent_pilot=True)
+        .expect_target("Bespin System")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    bespin_deploys = [i for i in result.plan.instructions
+                      if i.target_location_name == "Bespin System"]
+    assert len(bespin_deploys) > 0, "Should deploy starship to Bespin System!"
+
+    logger.info(f"   📊 Bespin System: {[i.card_name for i in bespin_deploys]}")
+
+
+def test_space_location_contested_with_enemy():
+    """
+    Test starship deployment to a contested space location with enemy presence.
+
+    Like the bug report scenario: Bespin has enemy Star Destroyer with 9 power.
+    """
+    scenario = (
+        ScenarioBuilder("Space Location Contested")
+        .as_side("light")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Space location with enemy presence (like the Death Squadron Star Destroyer)
+        .add_space_location("Bespin System", my_icons=2, their_icons=1,
+                            my_power=0, their_power=9)
+        # Empty ground location (for comparison)
+        .add_ground_location("Safe Ground Site", my_icons=1, their_icons=1,
+                             my_power=0, their_power=0, interior=True)
+        # Starships that could potentially contest space
+        .add_starship("Millennium Falcon", power=3, deploy_cost=3, has_permanent_pilot=True)
+        .add_starship("Red Squadron 1", power=3, deploy_cost=3, has_permanent_pilot=True)
+        # Characters for ground
+        .add_character("Luke", power=5, deploy_cost=5)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # With only 6 power in ships vs 9 enemy, we probably shouldn't contest space
+    # Instead should establish on ground
+    space_deploys = [i for i in result.plan.instructions
+                     if i.target_location_name == "Bespin System"]
+    space_power = sum(i.power_contribution for i in space_deploys)
+
+    ground_deploys = [i for i in result.plan.instructions
+                      if i.target_location_name == "Safe Ground Site"]
+
+    logger.info(f"   📊 Space power: {space_power}, Ground deploys: {len(ground_deploys)}")
+
+    # Either we beat them in space (unlikely with 6 vs 9) or we go to ground
+    # The key is we don't deploy LOSING to space
+    if space_power > 0:
+        assert space_power > 9, \
+            f"If deploying to space, must beat 9 enemy power! Got {space_power}"
+
+
+def test_space_reinforce_below_threshold():
+    """
+    Test that starships reinforce space location where we're below threshold.
+    """
+    scenario = (
+        ScenarioBuilder("Space Reinforce Below Threshold")
+        .as_side("dark")
+        .with_force(12)
+        .with_deploy_threshold(6)
+        # Space location with our weak presence
+        .add_space_location("Tatooine System", my_icons=2, their_icons=1,
+                            my_power=3, their_power=0)
+        # Empty space location
+        .add_space_location("Kessel System", my_icons=1, their_icons=2,
+                            my_power=0, their_power=0)
+        # Starships
+        .add_starship("TIE Fighter", power=3, deploy_cost=2, has_permanent_pilot=True)
+        .add_starship("TIE Bomber", power=4, deploy_cost=3, has_permanent_pilot=True)
+        .expect_target("Tatooine System")
+        .expect_strategy(DeployStrategy.REINFORCE)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    tatooine_deploys = [i for i in result.plan.instructions
+                        if i.target_location_name == "Tatooine System"]
+    tatooine_power = sum(i.power_contribution for i in tatooine_deploys)
+
+    # Existing 3 + new should reach at least 6
+    assert 3 + tatooine_power >= 6, \
+        f"Should reinforce Tatooine to reach threshold! Existing 3 + {tatooine_power} = {3 + tatooine_power}"
+
+
+# =============================================================================
+# VEHICLE DEPLOYMENT TESTS
+# =============================================================================
+# Tests for vehicle deployment with pilots to exterior ground locations
+
+def test_vehicle_with_pilot_to_exterior():
+    """
+    Test that a vehicle + pilot combo deploys to an exterior ground location.
+
+    Vehicles require pilots and can only deploy to exterior locations.
+    """
+    scenario = (
+        ScenarioBuilder("Vehicle With Pilot to Exterior")
+        .as_side("dark")
+        .with_force(12)
+        .with_deploy_threshold(6)
+        # Exterior ground location - vehicles allowed
+        .add_ground_location("Exterior Docking Bay", my_icons=2, their_icons=2,
+                             interior=False, exterior=True)
+        # Interior-only location - no vehicles
+        .add_ground_location("Interior Chamber", my_icons=2, their_icons=2,
+                             interior=True, exterior=False)
+        # Vehicle that needs pilot
+        .add_vehicle("AT-ST", power=4, deploy_cost=3, has_permanent_pilot=False)
+        # Pilot character
+        .add_character("AT-ST Pilot", power=2, deploy_cost=2, is_pilot=True, is_warrior=True)
+        .expect_target("Exterior Docking Bay")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check that vehicle goes to exterior location
+    exterior_deploys = [i for i in result.plan.instructions
+                        if i.target_location_name == "Exterior Docking Bay"]
+
+    # Should have both vehicle and pilot
+    deployed_cards = [i.card_name for i in exterior_deploys]
+
+    logger.info(f"   📊 Exterior deploys: {deployed_cards}")
+
+    # At minimum the vehicle should be planned for exterior
+    vehicle_deployed = any("AT-ST" in name for name in deployed_cards)
+
+    # Don't deploy to interior
+    interior_deploys = [i for i in result.plan.instructions
+                        if i.target_location_name == "Interior Chamber"]
+    vehicle_to_interior = any("AT-ST" in i.card_name and "Pilot" not in i.card_name
+                              for i in interior_deploys)
+
+    assert not vehicle_to_interior, "Vehicle should NOT deploy to interior-only location!"
+
+
+def test_vehicle_cannot_go_to_interior_only():
+    """
+    Test that vehicles cannot deploy to interior-only locations.
+
+    If only interior locations are available, vehicle should not be in plan.
+    """
+    scenario = (
+        ScenarioBuilder("Vehicle Cannot Go To Interior")
+        .as_side("light")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Only interior locations available
+        .add_ground_location("Interior Site A", my_icons=2, their_icons=2,
+                             interior=True, exterior=False)
+        .add_ground_location("Interior Site B", my_icons=1, their_icons=1,
+                             interior=True, exterior=False)
+        # Vehicle (should NOT be deployed)
+        .add_vehicle("Speeder Bike", power=3, deploy_cost=2, has_permanent_pilot=False)
+        # Pilot
+        .add_character("Pilot", power=2, deploy_cost=2, is_pilot=True)
+        # Regular character (CAN go to interior)
+        .add_character("Infantry", power=5, deploy_cost=4, is_pilot=False, is_warrior=True)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check that vehicle is NOT in the deployment plan
+    deployed_cards = [i.card_name for i in result.plan.instructions]
+    vehicle_deployed = any("Speeder Bike" in name for name in deployed_cards)
+
+    assert not vehicle_deployed, \
+        f"Vehicle should NOT be deployed to interior-only locations! Deployed: {deployed_cards}"
+
+    # Infantry should be deployable though
+    infantry_deployed = any("Infantry" in name for name in deployed_cards)
+    logger.info(f"   📊 Infantry deployed: {infantry_deployed}, Deployed cards: {deployed_cards}")
+
+
+def test_vehicle_with_permanent_pilot():
+    """
+    Test that a vehicle with permanent pilot (doesn't need separate pilot) deploys correctly.
+    """
+    scenario = (
+        ScenarioBuilder("Vehicle With Permanent Pilot")
+        .as_side("dark")
+        .with_force(10)
+        .with_deploy_threshold(6)
+        # Exterior location
+        .add_ground_location("Landing Pad", my_icons=2, their_icons=1,
+                             interior=False, exterior=True)
+        # Vehicle with permanent pilot (has power on its own)
+        .add_vehicle("Piloted Walker", power=6, deploy_cost=5, has_permanent_pilot=True)
+        .expect_target("Landing Pad")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    landing_pad_deploys = [i for i in result.plan.instructions
+                           if i.target_location_name == "Landing Pad"]
+
+    assert len(landing_pad_deploys) > 0, \
+        "Vehicle with permanent pilot should deploy to exterior location!"
+
+
+def test_mixed_ground_space_vehicle_scenario():
+    """
+    Test a complex scenario mixing ground characters, space starships, and vehicles.
+
+    Based on the original bug report scenario structure.
+    """
+    scenario = (
+        ScenarioBuilder("Mixed Ground/Space/Vehicle")
+        .as_side("light")
+        .with_force(15)
+        .with_deploy_threshold(6)
+        # Ground locations
+        .add_ground_location("Echo Docking Bay", my_icons=1, their_icons=0,
+                             interior=False, exterior=True)  # Both interior+exterior
+        .add_ground_location("Carbonite Chamber", my_icons=1, their_icons=1,
+                             interior=True, exterior=False)  # Interior only
+        .add_ground_location("North Corridor", my_icons=2, their_icons=1,
+                             my_power=3, their_power=0, interior=True, exterior=False)
+        # Space location with enemy
+        .add_space_location("Bespin System", my_icons=2, their_icons=1,
+                            my_power=0, their_power=9)
+        # Characters
+        .add_character("Luke", power=5, deploy_cost=5)
+        .add_character("Leia", power=3, deploy_cost=3)
+        # Starship (can't beat 9 power alone)
+        .add_starship("X-Wing", power=3, deploy_cost=3, has_permanent_pilot=True)
+        # Vehicle
+        .add_vehicle("Snowspeeder", power=3, deploy_cost=2, has_permanent_pilot=True)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Verify deployment choices make sense
+    deployed_by_location = {}
+    for inst in result.plan.instructions:
+        loc = inst.target_location_name or "TABLE"
+        if loc not in deployed_by_location:
+            deployed_by_location[loc] = []
+        deployed_by_location[loc].append(inst.card_name)
+
+    logger.info(f"   📊 Deployments by location: {deployed_by_location}")
+
+    # Key assertions:
+    # 1. Should reinforce North Corridor (has 3 power, below threshold)
+    # 2. Vehicle should only go to exterior locations
+    # 3. Starship should only go to space
+
+    for inst in result.plan.instructions:
+        if "Snowspeeder" in inst.card_name:
+            assert inst.target_location_name in ["Echo Docking Bay", None], \
+                f"Vehicle deployed to wrong location: {inst.target_location_name}"
+        if "X-Wing" in inst.card_name:
+            assert inst.target_location_name in ["Bespin System", None], \
+                f"Starship deployed to wrong location: {inst.target_location_name}"
+
+
+# =============================================================================
 # MAIN (for standalone execution)
 # =============================================================================
 

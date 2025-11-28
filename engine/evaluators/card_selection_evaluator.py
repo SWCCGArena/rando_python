@@ -700,9 +700,10 @@ class CardSelectionEvaluator(ActionEvaluator):
         # Get reserve deck size
         reserve_size = bs.reserve_deck if bs else 30
 
-        # Separate cards into Force (from reserve) vs cards in battle
+        # Separate cards into Force (from reserve) vs cards in battle vs cards from hand
         force_options = []  # Cards representing Force loss (usually -1_2 blueprint)
-        battle_cards = []   # Actual cards in battle to forfeit
+        battle_cards = []   # Actual cards in battle to forfeit (at battle location)
+        hand_cards = []     # Cards from hand - can only be lost, NOT forfeited
 
         for card_id in context.card_ids:
             card = bs.cards_in_play.get(card_id) if bs else None
@@ -713,10 +714,21 @@ class CardSelectionEvaluator(ActionEvaluator):
             if blueprint.startswith("-1_") or blueprint == "":
                 # This is a Force loss option (not a real card)
                 force_options.append(card_id)
-            else:
+            elif card is None:
+                # Card not in play - likely from hand
+                hand_cards.append((card_id, None))
+            elif battle_location_idx >= 0 and hasattr(card, 'location_index') and card.location_index == battle_location_idx:
+                # Card is at the battle location - can be forfeited
                 battle_cards.append((card_id, card))
+            elif battle_location_idx < 0:
+                # Don't know battle location - assume all cards in play are in battle
+                battle_cards.append((card_id, card))
+            else:
+                # Card is in play but NOT at battle location - probably from hand
+                # or GEMP included cards from other locations
+                hand_cards.append((card_id, card))
 
-        logger.debug(f"Force loss options: {len(force_options)}, Battle cards: {len(battle_cards)}")
+        logger.debug(f"Force loss options: {len(force_options)}, Battle cards: {len(battle_cards)}, Hand cards: {len(hand_cards)}")
 
         # Identify pilots attached to ships (should be forfeited first)
         pilots_on_ships = []
@@ -820,6 +832,33 @@ class CardSelectionEvaluator(ActionEvaluator):
                             action.add_reasoning("Ship/vehicle - prefer force loss", -15.0)
                     if card_meta.is_unique:
                         action.add_reasoning("Unique card - valuable", -10.0)
+
+            actions.append(action)
+
+        # Score hand cards - HEAVILY penalize losing cards from hand
+        # Hand cards can only be "lost" (worth 1 force each), not "forfeited" (worth forfeit value)
+        # Should almost always prefer forfeiting battle cards or losing force instead
+        for card_id, card in hand_cards:
+            card_title = card.card_title if card else card_id
+            card_meta = get_card(card.blueprint_id) if card and card.blueprint_id else None
+
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=-50.0,  # Very low base score - hand cards should be last resort
+                display_text=f"Lose {card_title} from hand"
+            )
+
+            action.add_reasoning("FROM HAND - can only lose, not forfeit!", -50.0)
+
+            # Effects and interrupts from hand are slightly less bad to lose
+            # since they can't be used anyway if we're losing the battle
+            if card_meta:
+                card_type = card_meta.card_type or ""
+                if card_type.lower() in ['effect', 'interrupt', 'used interrupt', 'lost interrupt']:
+                    action.add_reasoning(f"{card_type} - less valuable in hand", +30.0)
+                elif card_meta.is_unique:
+                    action.add_reasoning("Unique card - very bad to lose!", -30.0)
 
             actions.append(action)
 

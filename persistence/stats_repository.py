@@ -233,10 +233,12 @@ class StatsRepository:
         Returns:
             Tuple of (DeckStats, is_new_record)
         """
+        logger.info(f"update_deck_score called: deck='{deck_name}', player='{player_name}', score={score}")
         with session_scope() as session:
             deck = session.query(DeckStats).filter_by(deck_name=deck_name).first()
 
             if not deck:
+                logger.info(f"Creating new DeckStats row for '{deck_name}'")
                 deck = DeckStats(
                     deck_name=deck_name,
                     games_played=0,
