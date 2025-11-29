@@ -350,15 +350,15 @@ class DeployPhasePlanner:
         """
         Score a deployment plan based on strategic value.
 
-        Scoring factors (in priority order):
-        1. CRUSHING opponents (beating them with power advantage) - HIGHEST priority
-        2. Icons denied (their_icons at target locations)
-        3. Power deployed - for winning battles
-        4. Contesting opponent presence - denies force drains
+        Scoring factors:
+        1. FAVORABLE battles (power advantage >= threshold) - Highest priority
+        2. GUARANTEED CONTROL (0 enemy, we have presence) - Very valuable
+        3. Icons denied (their_icons at target locations)
+        4. Power deployed - base value
 
-        CRITICAL: Beating an opponent is ALWAYS more valuable than establishing
-        at an empty location. Force drains only happen when you CONTROL, and
-        you can't control if the opponent has presence.
+        KEY INSIGHT: A guaranteed win at an empty location is often BETTER than
+        a marginal fight. Marginal fights (+1 to +3 power) are risky due to
+        destiny variance. Only FAVORABLE fights (+4 or more) should get big bonuses.
         """
         if not instructions:
             return 0.0
@@ -382,34 +382,69 @@ class DeployPhasePlanner:
                     power_by_location[inst.target_location_id] = 0
                 power_by_location[inst.target_location_id] += inst.power_contribution
 
-            # Power contribution
+            # Power contribution (base value)
             score += inst.power_contribution * 2
 
-            # Bonus for deploying to location with opponent presence
-            if target_loc and target_loc.their_power > 0:
-                score += 15  # Contesting is valuable
-
-        # === CRUSH BONUS (CRITICAL - HIGHEST PRIORITY) ===
-        # Beating opponents is MUCH more valuable than establishing at empty.
-        # Add a massive bonus for plans that BEAT enemy power.
+        # === ANALYZE EACH TARGET LOCATION ===
         for loc_id, our_power in power_by_location.items():
+            target_loc = None
             for loc in locations:
-                if loc.card_id == loc_id and loc.their_power > 0:
-                    if our_power > loc.their_power:
-                        # We BEAT them! This is the best outcome.
-                        power_advantage = our_power - loc.their_power
-                        # +50 base for any win, +10 per power advantage
-                        crush_bonus = 50 + (power_advantage * 10)
-                        score += crush_bonus
-                        logger.debug(f"   💥 CRUSH BONUS at {loc.name}: +{crush_bonus} "
-                                   f"({our_power} vs {loc.their_power})")
+                if loc.card_id == loc_id:
+                    target_loc = loc
                     break
 
-        # Icons denied (only count each location once)
+            if not target_loc:
+                continue
+
+            if target_loc.their_power > 0:
+                # === CONTESTED LOCATION ===
+                power_advantage = our_power - target_loc.their_power
+
+                # CRITICAL: If we have icons here and they control it, they drain US!
+                # Contesting/winning prevents this drain, which is very valuable.
+                deny_drain_bonus = 0
+                if target_loc.my_icons > 0:
+                    # They're draining us for our icons - contesting stops this!
+                    deny_drain_bonus = target_loc.my_icons * 20
+                    logger.debug(f"   🛡️ DENY DRAIN at {target_loc.name}: +{deny_drain_bonus} "
+                               f"(prevent drain of {target_loc.my_icons} icons)")
+
+                if power_advantage >= BATTLE_FAVORABLE_THRESHOLD:
+                    # FAVORABLE FIGHT: We have solid advantage (+4 or more)
+                    # This is a true "crush" - give big bonus
+                    crush_bonus = 50 + (power_advantage * 10) + deny_drain_bonus
+                    score += crush_bonus
+                    logger.debug(f"   💥 FAVORABLE FIGHT at {target_loc.name}: +{crush_bonus} "
+                               f"({our_power} vs {target_loc.their_power}, +{power_advantage} advantage)")
+                elif power_advantage > 0:
+                    # MARGINAL FIGHT: We'd win but it's risky (+1 to +3)
+                    # Still valuable if we're being drained!
+                    marginal_bonus = 10 + (power_advantage * 5) + deny_drain_bonus
+                    score += marginal_bonus
+                    logger.debug(f"   ⚠️ MARGINAL FIGHT at {target_loc.name}: +{marginal_bonus} "
+                               f"({our_power} vs {target_loc.their_power}, only +{power_advantage})")
+                else:
+                    # LOSING FIGHT: We don't beat them
+                    # But contesting still denies force drain!
+                    score += 5 + deny_drain_bonus
+                    logger.debug(f"   ❌ LOSING at {target_loc.name}: +{5 + deny_drain_bonus} (contest only)")
+
+            else:
+                # === EMPTY LOCATION WITH OUR PRESENCE ===
+                # Guaranteed control = guaranteed force drain!
+                # This is very valuable, especially with high opponent icons
+                if target_loc.their_icons > 0:
+                    # We'll force drain them for their_icons every turn
+                    establish_bonus = 40 + (target_loc.their_icons * 15)
+                    score += establish_bonus
+                    logger.debug(f"   ✅ ESTABLISH CONTROL at {target_loc.name}: +{establish_bonus} "
+                               f"({our_power} power, {target_loc.their_icons} icons to drain)")
+
+        # Icons at target locations (additional value)
         for loc_id in target_loc_ids:
             for loc in locations:
                 if loc.card_id == loc_id:
-                    score += loc.their_icons * 20  # Icons are still valuable
+                    score += loc.their_icons * 10  # Reduced from 20, since establish_bonus covers this
                     break
 
         return score
@@ -1566,6 +1601,82 @@ class DeployPhasePlanner:
             # Update available_chars based on what was used
             used_blueprints = {inst.card_blueprint_id for inst in best_instructions}
             available_chars = [c for c in available_chars if c['blueprint_id'] not in used_blueprints]
+
+            # =================================================================
+            # STEP 5B: CROSS-DOMAIN DEPLOYMENT
+            # After choosing primary plan, deploy to OTHER domain with remaining force!
+            # This ensures we use all available resources efficiently.
+            # =================================================================
+            if force_remaining > 0:
+                if best_type == 'ground' and starships:
+                    # Ground plan chosen - deploy remaining piloted starships to space
+                    remaining_ships = [s for s in starships if s['blueprint_id'] not in used_blueprints]
+                    piloted_ships = [s for s in remaining_ships if not s.get('needs_pilot') and s['power'] > 0]
+
+                    if piloted_ships and space_targets:
+                        logger.info(f"   🔄 CROSS-DOMAIN: {force_remaining} force left, checking space deployment")
+                        for loc in space_targets:
+                            if force_remaining <= 0:
+                                break
+                            # Find affordable ships that meet threshold
+                            affordable = [s for s in piloted_ships
+                                         if s['cost'] <= force_remaining and s['power'] >= MIN_ESTABLISH_POWER]
+                            if not affordable:
+                                continue
+                            # Pick best ship
+                            best_ship = max(affordable, key=lambda s: s['power'])
+                            plan.instructions.append(DeploymentInstruction(
+                                card_blueprint_id=best_ship['blueprint_id'],
+                                card_name=best_ship['name'],
+                                target_location_id=loc.card_id,
+                                target_location_name=loc.name,
+                                priority=2,
+                                reason=f"Space: Cross-domain deploy after ground ({best_ship['power']} power)",
+                                power_contribution=best_ship['power'],
+                                deploy_cost=best_ship['cost'],
+                            ))
+                            logger.info(f"   🚀 CROSS-DOMAIN: Deploy {best_ship['name']} to {loc.name}")
+                            force_remaining -= best_ship['cost']
+                            piloted_ships.remove(best_ship)
+                            break  # One location per cross-domain for now
+
+                elif best_type == 'space' and available_chars:
+                    # Space plan chosen - deploy remaining characters to ground
+                    if char_ground_targets:
+                        logger.info(f"   🔄 CROSS-DOMAIN: {force_remaining} force left, checking ground deployment")
+                        for loc in char_ground_targets:
+                            if force_remaining <= 0:
+                                break
+                            # Find optimal character combination for this location
+                            power_goal = max(MIN_ESTABLISH_POWER, loc.their_power + 1)
+                            chars_for_loc, power_allocated, cost_used = self._find_optimal_combination(
+                                available_chars, force_remaining, power_goal, must_exceed=(loc.their_power > 0)
+                            )
+                            if not chars_for_loc:
+                                continue
+                            # Check if we meet requirements
+                            if loc.their_power > 0 and power_allocated <= loc.their_power:
+                                continue
+                            if loc.their_power == 0 and power_allocated < MIN_ESTABLISH_POWER:
+                                continue
+                            # Deploy characters
+                            for char in chars_for_loc:
+                                plan.instructions.append(DeploymentInstruction(
+                                    card_blueprint_id=char['blueprint_id'],
+                                    card_name=char['name'],
+                                    target_location_id=loc.card_id,
+                                    target_location_name=loc.name,
+                                    priority=2,
+                                    reason=f"Ground: Cross-domain deploy after space ({char['power']} power)",
+                                    power_contribution=char['power'],
+                                    deploy_cost=char['cost'],
+                                ))
+                                logger.info(f"   🎭 CROSS-DOMAIN: Deploy {char['name']} to {loc.name}")
+                                if char in available_chars:
+                                    available_chars.remove(char)
+                            force_remaining -= cost_used
+                            break  # One location per cross-domain for now
+
         else:
             logger.info(f"   ⏭️ No valid ground or space plans")
 
