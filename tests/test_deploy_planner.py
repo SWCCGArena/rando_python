@@ -3721,28 +3721,31 @@ class TestCharacterUniqueness:
     def test_non_unique_characters_can_deploy_multiple(self):
         """
         Non-unique characters (no • prefix) can have multiple copies deployed.
+
+        Uses higher power characters to ensure they meet deploy threshold.
         """
         scenario = (
             ScenarioBuilder("Non-Unique Characters - Multiple Allowed")
             .as_side("dark")
             .with_force(20)
-            .with_deploy_threshold(4)  # Lower threshold to allow more deploys
-            .add_ground_location("Death Star", my_icons=2, their_icons=1, their_power=6)
-            # Multiple non-unique Stormtroopers
-            .add_character("Stormtrooper", power=2, deploy_cost=2, is_unique=False)
-            .add_character("Stormtrooper", power=2, deploy_cost=2, is_unique=False)
-            .add_character("Stormtrooper", power=2, deploy_cost=2, is_unique=False)
+            .with_deploy_threshold(4)  # Standard threshold
+            .add_ground_location("Death Star", my_icons=2, their_icons=1, their_power=10)
+            # Multiple non-unique Elite Troopers (4 power each, meets threshold)
+            .add_character("Elite Stormtrooper", power=4, deploy_cost=3, is_unique=False)
+            .add_character("Elite Stormtrooper", power=4, deploy_cost=3, is_unique=False)
+            .add_character("Elite Stormtrooper", power=4, deploy_cost=3, is_unique=False)
             .build()
         )
         result = run_scenario(scenario)
 
-        # Multiple Stormtroopers CAN be deployed
+        # Multiple Elite Stormtroopers CAN be deployed (they're not unique)
         trooper_deployments = [i for i in result.plan.instructions if "Stormtrooper" in i.card_name]
 
-        # At least 2 should be deployed to beat the enemy's 6 power
+        # At least 2 should be deployed to beat the enemy's 10 power
         assert len(trooper_deployments) >= 2, \
             f"Non-unique characters should allow multiple deployments. " \
-            f"Only {len(trooper_deployments)} Stormtroopers planned."
+            f"Only {len(trooper_deployments)} Elite Stormtroopers planned. " \
+            f"Full plan: {[i.card_name for i in result.plan.instructions]}"
 
 
 class TestStarshipUniqueness:

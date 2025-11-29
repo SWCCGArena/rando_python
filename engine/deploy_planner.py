@@ -1955,6 +1955,17 @@ class DeployPhasePlanner:
             if not metadata:
                 continue
 
+            # === UNIQUENESS CHECK ===
+            # Skip if this unique card is already on the board
+            if metadata.is_unique and metadata.title in unique_titles_on_board:
+                logger.debug(f"   ⏭️ Skip {metadata.title}: unique card already on board")
+                continue
+
+            # Skip if we already have this unique card in our deployable list
+            if metadata.is_unique and metadata.title in unique_titles_in_plan:
+                logger.debug(f"   ⏭️ Skip {metadata.title}: duplicate unique in hand")
+                continue
+
             deploy_cost = metadata.deploy_value or 0
             if deploy_cost > available_force:
                 continue
@@ -2000,6 +2011,10 @@ class DeployPhasePlanner:
                 'is_targeted_weapon': is_targeted_weapon,  # Needs to attach to a target
                 'is_standalone_weapon': is_standalone_weapon,  # Automated/Artillery - no target needed
             })
+
+            # Track unique cards we've added (to prevent duplicates from hand)
+            if metadata.is_unique:
+                unique_titles_in_plan.add(metadata.title)
 
         return deployable
 
