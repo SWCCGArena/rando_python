@@ -420,6 +420,23 @@ class EventProcessor:
                     index = int(numeric_part)
                     self.board_state.light_power_at_locations[index] = int(attr_value)
 
+        # Parse battle attrition and damage (used during damage segment)
+        dark_attrition = event.get('darkBattleAttritionRemaining', '0')
+        dark_damage = event.get('darkBattleDamageRemaining', '0')
+        light_attrition = event.get('lightBattleAttritionRemaining', '0')
+        light_damage = event.get('lightBattleDamageRemaining', '0')
+
+        self.board_state.dark_attrition_remaining = int(dark_attrition)
+        self.board_state.dark_damage_remaining = int(dark_damage)
+        self.board_state.light_attrition_remaining = int(light_attrition)
+        self.board_state.light_damage_remaining = int(light_damage)
+
+        # Log if we're in damage segment with pending attrition/damage
+        total_pending = int(dark_attrition) + int(dark_damage) + int(light_attrition) + int(light_damage)
+        if total_pending > 0:
+            logger.info(f"⚔️ Battle damage: Dark attrition={dark_attrition}, damage={dark_damage} | "
+                       f"Light attrition={light_attrition}, damage={light_damage}")
+
         logger.info(f"📊 Game state updated: Force={self.board_state.force_pile}, "
                    f"Power={self.board_state.total_my_power()}, "
                    f"Reserve={self.board_state.reserve_deck}")

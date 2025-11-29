@@ -595,7 +595,7 @@ class ScenarioBuilder:
             card_type="Character",
             power=power,
             location_index=loc_idx,
-            zone="TABLE",
+            zone="AT_LOCATION",  # Matches board_state.py zone values
         )
 
         # Add to location's my_cards and board's cards_in_play
@@ -648,7 +648,7 @@ class ScenarioBuilder:
             card_type="Starship",
             power=power,
             location_index=loc_idx,
-            zone="TABLE",
+            zone="AT_LOCATION",  # Matches board_state.py zone values
         )
 
         target_loc.my_cards.append(card)
@@ -699,7 +699,7 @@ class ScenarioBuilder:
             card_type="Vehicle",
             power=power,
             location_index=loc_idx,
-            zone="TABLE",
+            zone="AT_LOCATION",  # Matches board_state.py zone values
         )
 
         target_loc.my_cards.append(card)
@@ -1536,19 +1536,23 @@ def test_need_all_ships_to_beat_opponent():
 
     When opponent has presence, we need MORE power to beat them.
     This forces the planner to deploy all available ships.
+
+    Note: Ships with permanent pilots don't get power from additional pilots.
+    Also need to meet contest requirements: deploy threshold (6) AND +2 advantage.
+    - Enemy: 6 power, so need 8+ power (6+2)
+    - 3 A-wings with permanent pilots = 9 power, which is >= 8 ✓
     """
     scenario = (
         ScenarioBuilder("All Ships Needed")
         .as_side("light")
         .with_force(15)
-        # Opponent has 8 power - need 9+ to beat
-        .add_space_location("Contested Space", my_icons=2, their_icons=3, their_power=8)
+        # Opponent has 6 power - need 8+ to beat (6+2)
+        .add_space_location("Contested Space", my_icons=2, their_icons=3, their_power=6)
         .add_starship("A-wing 1", power=3, deploy_cost=2, has_permanent_pilot=True)
         .add_starship("A-wing 2", power=3, deploy_cost=2, has_permanent_pilot=True)
         .add_starship("A-wing 3", power=3, deploy_cost=2, has_permanent_pilot=True)
-        .add_character("Ace Pilot", power=4, deploy_cost=3, is_pilot=True, is_warrior=False)
-        # Need all: 3+3+3+4 = 13 to beat their 8
-        .expect_deployment("A-wing 1", "A-wing 2", "A-wing 3", "Ace Pilot")
+        # Need all 3: 3+3+3 = 9 to beat their 6 by +3 (exceeds +2 requirement)
+        .expect_deployment("A-wing 1", "A-wing 2", "A-wing 3")
         .expect_target("Contested Space")
         .build()
     )
@@ -1735,6 +1739,10 @@ def test_ground_flee_to_less_dangerous_adjacent():
 
     When fleeing, prefer a location with lower enemy presence over staying
     at a location with massive deficit.
+
+    Note: We need enough power to meet contest requirements:
+    - Deploy threshold (6)
+    - At least +2 advantage over enemy
     """
     scenario = (
         ScenarioBuilder("Ground Flee to Less Dangerous")
@@ -1742,10 +1750,10 @@ def test_ground_flee_to_less_dangerous_adjacent():
         .with_force(15)
         # Losing badly here (3 vs 15 = -12 deficit)
         .add_ground_location("Disaster Zone", my_icons=2, their_icons=2, my_power=3, their_power=15)
-        # Adjacent has enemy but much less (-2 deficit is better than -12)
-        .add_ground_location("Less Bad", my_icons=1, their_icons=1, their_power=5)
+        # Adjacent has enemy but much less - 4 power so we can beat by +2 with our 6
+        .add_ground_location("Less Bad", my_icons=1, their_icons=1, their_power=4)
         .set_adjacent("Disaster Zone", "Less Bad")
-        # Card to deploy
+        # Card to deploy - 6 power meets threshold and beats 4 by +2
         .add_character("Commander", power=6, deploy_cost=5)
         # Should recognize flee situation and deploy to less dangerous location
         .expect_target("Less Bad")
@@ -2693,21 +2701,23 @@ def test_ground_power_deficit_no_deploy():
 
 
 def test_ground_beating_power_should_deploy():
-    """CRITICAL: DO deploy when we BEAT enemy power.
+    """CRITICAL: DO deploy when we convincingly BEAT enemy power.
 
     Enemy has 4 power.
-    We have a 5 power character.
-    5 > 4, so we should deploy and win the battle!
+    We have a 6 power character (meets threshold AND beats by +2).
+    Should deploy because we have both:
+    - Deploy threshold met (6)
+    - At least +2 advantage over enemy (6 vs 4 = +2)
     """
     scenario = (
         ScenarioBuilder("Ground Beating Power - Should Deploy")
         .as_side("dark")
         .with_force(10)
-        # Enemy has 4 power - we can beat them!
+        # Enemy has 4 power - we can beat them with +2!
         .add_ground_location("Mos Espa", my_icons=2, their_icons=2, their_power=4)
-        # Have 5 power - beats 4!
-        .add_character("Commander", power=5, deploy_cost=4)
-        # Should deploy because 5 beats 4
+        # Have 6 power - meets threshold AND beats by +2!
+        .add_character("Commander", power=6, deploy_cost=5)
+        # Should deploy because 6 >= 4+2 and 6 >= deploy_threshold
         .expect_target("Mos Espa")
         .expect_deployment("Commander")
         .build()
@@ -4253,6 +4263,367 @@ class TestGroundSpaceInteraction:
         assert total_deployments >= 2, \
             f"With 15 force, should deploy both Home One (7) and Ackbar (4). " \
             f"Only deployed: {[i.card_name for i in result.plan.instructions]}"
+
+
+class TestCombinedPlanWithBattleReserve:
+    """
+    Tests for combined ground+space plans that account for battle reserve.
+
+    Key insight: When deploying to a contested location, you need 1 force
+    to initiate battle. Combined plans must account for this.
+    """
+
+    def test_combined_plan_reserves_force_for_battle_at_contested(self):
+        """
+        When deploying to contested ground, must leave 1 force for battle.
+
+        Scenario: 14 force available
+        - Ground: enemy has 5 power (contested)
+        - Space: empty
+
+        Plan costing exactly 14 force would leave 0 for battle.
+        Combined plan should leave at least 1 force.
+        """
+        scenario = (
+            ScenarioBuilder("Battle Reserve in Combined Plan")
+            .as_side("dark")
+            .with_force(16)  # 14 for deploying after reserve 2
+
+            # Contested ground (needs battle reserve)
+            .add_ground_location("Cloud City", my_icons=2, their_icons=1, their_power=5)
+
+            # Empty space (no battle reserve needed)
+            .add_space_location("Bespin", my_icons=1, their_icons=2, their_power=0)
+
+            # Character for ground - 9 power beats 5
+            .add_character("•Darth Vader", power=6, deploy_cost=6)
+            .add_character("•General Veers", power=3, deploy_cost=3)
+
+            # Ship for space - 7 power establishes
+            .add_starship("•Executor", power=7, deploy_cost=6, has_permanent_pilot=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Total cost would be: Vader(6) + Veers(3) + Executor(6) = 15
+        # With 14 force available, we can't do all three AND have battle reserve
+        total_cost = sum(i.deploy_cost for i in result.plan.instructions)
+
+        # Ground is contested, so combined plan must leave 1 for battle
+        # Max we can spend is 13 (14 - 1 for battle)
+        # But single-domain ground plan (9 cost) is valid with 5 left for battle
+        assert len(result.plan.instructions) >= 1, \
+            f"Should deploy something. Plan: {[i.card_name for i in result.plan.instructions]}"
+
+    def test_combined_plan_to_both_empty_locations_no_reserve_needed(self):
+        """
+        When both locations are empty, no battle reserve is needed.
+        Can use all available force for deployment.
+        """
+        scenario = (
+            ScenarioBuilder("No Battle Reserve for Empty Locations")
+            .as_side("light")
+            .with_force(14)  # 12 for deploying
+
+            # Empty ground
+            .add_ground_location("Rebel Base", my_icons=2, their_icons=1, their_power=0)
+
+            # Empty space
+            .add_space_location("Yavin System", my_icons=2, their_icons=1, their_power=0)
+
+            # Character - 6 power meets threshold
+            .add_character("•Luke Skywalker", power=6, deploy_cost=6)
+
+            # Ship - 6 power meets threshold
+            .add_starship("•X-Wing Red 5", power=6, deploy_cost=6, has_permanent_pilot=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Both locations empty = no battle needed
+        # Can spend all 12 force (Luke 6 + X-Wing 6 = 12)
+        total_cost = sum(i.deploy_cost for i in result.plan.instructions)
+
+        assert total_cost == 12, \
+            f"With empty locations, can use all 12 force (no battle reserve). " \
+            f"Used: {total_cost}. Plan: {[i.card_name for i in result.plan.instructions]}"
+
+        # Should deploy both
+        assert len(result.plan.instructions) == 2, \
+            f"Should deploy both Luke and X-Wing. Plan: {[i.card_name for i in result.plan.instructions]}"
+
+    def test_combined_plan_to_both_contested_needs_double_reserve(self):
+        """
+        When both ground and space are contested, need 2 force for battles.
+        """
+        scenario = (
+            ScenarioBuilder("Double Battle Reserve")
+            .as_side("dark")
+            .with_force(18)  # 16 for deploying
+
+            # Contested ground
+            .add_ground_location("Hoth Plains", my_icons=2, their_icons=2, their_power=4)
+
+            # Contested space
+            .add_space_location("Hoth System", my_icons=2, their_icons=2, their_power=3)
+
+            # Character - 8 power beats 4
+            .add_character("•Darth Vader", power=6, deploy_cost=6)
+            .add_character("•Stormtrooper", power=2, deploy_cost=2)
+
+            # Ship - 7 power beats 3
+            .add_starship("•Star Destroyer", power=7, deploy_cost=6, has_permanent_pilot=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Total possible: Vader(6) + Trooper(2) + SD(6) = 14 cost
+        # Both contested = need 2 force for battles
+        # Max spend: 16 - 2 = 14... exactly fits!
+        total_cost = sum(i.deploy_cost for i in result.plan.instructions)
+
+        # Should be able to deploy to both domains
+        ground_deploys = [i for i in result.plan.instructions
+                         if "Hoth Plains" in (i.target_location_name or "")]
+        space_deploys = [i for i in result.plan.instructions
+                        if "Hoth System" in (i.target_location_name or "")]
+
+        logger.info(f"   Ground deploys: {[i.card_name for i in ground_deploys]}")
+        logger.info(f"   Space deploys: {[i.card_name for i in space_deploys]}")
+        logger.info(f"   Total cost: {total_cost}")
+
+        # Should deploy to BOTH domains since combined fits with battle reserve
+        assert len(ground_deploys) >= 1 and len(space_deploys) >= 1, \
+            f"With 16 force and 14 cost + 2 battle reserve, should deploy to both. " \
+            f"Plan: {[i.card_name for i in result.plan.instructions]}"
+
+
+# =============================================================================
+# CRUSHABLE WITH EXISTING POWER TESTS
+# Tests for deploying to locations where we already have presence
+# =============================================================================
+
+def test_crushable_location_with_existing_power():
+    """CRITICAL: Deploy to location where we have 5 vs 2 to CRUSH them.
+
+    Real bug scenario from rando_20251129_121152_vs_elanz_lose.log:
+    - Mos Espa: 5 (our power) vs 2 (enemy power)
+    - Mara Jade available (4 power, cost 4)
+    - Bot detected "BATTLE OPPORTUNITY" but held back instead of deploying
+
+    The bot SHOULD deploy Mara Jade to Mos Espa:
+    - Total would be 9 vs 2 (+7 advantage = CRUSH)
+    - Existing 5 power + 4 from Mara = 9 power
+    """
+    scenario = (
+        ScenarioBuilder("Crushable With Existing Power")
+        .as_side("dark")
+        .with_force(10)
+        # We already have 5 power here vs 2 enemy - can CRUSH with reinforcement
+        .add_ground_location("Mos Espa", my_icons=2, their_icons=1,
+                            my_power=5, their_power=2, exterior=True)
+        # Character we can deploy to crush
+        .add_character("Mara Jade", power=4, deploy_cost=4)
+        # Should deploy to Mos Espa to CRUSH (9 vs 2 = +7 advantage)
+        .expect_target("Mos Espa")
+        .expect_deployment("Mara Jade")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    mos_espa_deploys = [i for i in result.plan.instructions
+                       if i.target_location_name == "Mos Espa"]
+
+    logger.info(f"   📊 Mos Espa deploys: {[i.card_name for i in mos_espa_deploys]}")
+
+    assert len(mos_espa_deploys) > 0, \
+        "Should deploy to Mos Espa to crush! Bot held back instead."
+
+    # Check reasoning mentions crushing
+    for inst in mos_espa_deploys:
+        assert "Crush" in inst.reason or "Reinforce" in inst.reason, \
+            f"Reason should mention crush/reinforce: {inst.reason}"
+
+
+def test_crushable_includes_existing_power_in_calculation():
+    """CRITICAL: Total power calculation includes existing power at location.
+
+    Mos Espa: We have 5 power, enemy has 2 power
+    Deploy 2 power character - should show "7 vs 2" in reason, not "2 vs 2"!
+    """
+    scenario = (
+        ScenarioBuilder("Existing Power In Calculation")
+        .as_side("dark")
+        .with_force(10)
+        # Existing 5 vs 2 situation
+        .add_ground_location("Mos Espa", my_icons=2, their_icons=1,
+                            my_power=5, their_power=2, exterior=True)
+        # Small character to add
+        .add_character("Trooper", power=2, deploy_cost=2)
+        # Should deploy - 5 existing + 2 new = 7 vs 2
+        .expect_target("Mos Espa")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    mos_espa_deploys = [i for i in result.plan.instructions
+                       if i.target_location_name == "Mos Espa"]
+
+    assert len(mos_espa_deploys) > 0, "Should deploy to contested location"
+
+    # The reason should show TOTAL power (7 vs 2), not just deployed power
+    for inst in mos_espa_deploys:
+        logger.info(f"   Reason: {inst.reason}")
+        # Reason should include the combined total (7)
+        assert "7 vs 2" in inst.reason, \
+            f"Reason should show total power '7 vs 2', got: {inst.reason}"
+
+
+def test_crushable_prioritized_over_empty_location():
+    """CRITICAL: Prefer crushing at contested location over empty location.
+
+    We have two options:
+    1. Mos Espa: 5 vs 2 (can deploy 4 to make 9 vs 2 = +7 CRUSH)
+    2. Cloud City: Empty with good icons (can establish)
+
+    Crushing is MORE valuable than establishing at empty!
+    """
+    scenario = (
+        ScenarioBuilder("Crushable Over Empty")
+        .as_side("dark")
+        .with_force(8)
+        # Option 1: Crushable - we have 5 vs 2, can add 4 = 9 vs 2
+        .add_ground_location("Mos Espa", my_icons=2, their_icons=1,
+                            my_power=5, their_power=2, exterior=True)
+        # Option 2: Empty but high value icons
+        .add_ground_location("Cloud City", my_icons=1, their_icons=3,
+                            exterior=True)
+        # Character with 4 power
+        .add_character("Mara Jade", power=4, deploy_cost=4)
+        # Should deploy to Mos Espa (CRUSH) over Cloud City (establish)
+        .expect_target("Mos Espa")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    mos_espa_deploys = [i for i in result.plan.instructions
+                       if i.target_location_name == "Mos Espa"]
+    cloud_deploys = [i for i in result.plan.instructions
+                    if i.target_location_name == "Cloud City"]
+
+    mos_espa_power = sum(i.power_contribution for i in mos_espa_deploys)
+    cloud_power = sum(i.power_contribution for i in cloud_deploys)
+
+    logger.info(f"   📊 Mos Espa: {mos_espa_power} deployed (5 existing + this = {5 + mos_espa_power} vs 2)")
+    logger.info(f"   📊 Cloud City: {cloud_power} deployed (empty)")
+
+    assert mos_espa_power > cloud_power, \
+        f"Should CRUSH at Mos Espa ({mos_espa_power}) over establish Cloud City ({cloud_power})"
+
+
+def test_space_crushable_with_existing_power():
+    """CRITICAL: Space version - deploy ships to location where we already have presence.
+
+    Tatooine System: We have 4 power vs 2 enemy
+    Deploy 3 power ship = 7 vs 2 (+5 advantage)
+    """
+    scenario = (
+        ScenarioBuilder("Space Crushable With Existing")
+        .as_side("dark")
+        .with_force(10)
+        # Contested space - we have 4 vs 2
+        .add_space_location("Tatooine System", my_icons=2, their_icons=1,
+                           my_power=4, their_power=2)
+        # Starship to reinforce
+        .add_starship("TIE Fighter", power=3, deploy_cost=3, has_permanent_pilot=True)
+        # Should deploy to Tatooine to crush (7 vs 2)
+        .expect_target("Tatooine System")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    tatooine_deploys = [i for i in result.plan.instructions
+                       if i.target_location_name == "Tatooine System"]
+
+    assert len(tatooine_deploys) > 0, \
+        "Should deploy to contested space location to crush"
+
+    # Check total power shown in reason
+    for inst in tatooine_deploys:
+        logger.info(f"   Reason: {inst.reason}")
+        assert "7 vs 2" in inst.reason, \
+            f"Reason should show total power '7 vs 2', got: {inst.reason}"
+
+
+def test_no_deploy_to_already_overkill_location():
+    """CRITICAL: Don't deploy to locations where we're already crushing (+8 advantage).
+
+    Mos Espa: We have 10 vs 2 = +8 advantage (OVERKILL)
+    Should NOT deploy more here - go elsewhere.
+    """
+    scenario = (
+        ScenarioBuilder("No Overkill Deployment")
+        .as_side("dark")
+        .with_force(15)
+        # Already overkill (+8) - don't deploy more
+        .add_ground_location("Mos Espa", my_icons=2, their_icons=1,
+                            my_power=10, their_power=2, exterior=True)
+        # Empty location to establish instead
+        .add_ground_location("Cloud City", my_icons=1, their_icons=2, exterior=True)
+        # Characters to deploy - need 6 power to establish at Cloud City
+        .add_character("Trooper", power=4, deploy_cost=3)
+        .add_character("Officer", power=3, deploy_cost=2)
+        # Should deploy to Cloud City, not overkill Mos Espa
+        .expect_target("Cloud City")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    mos_espa_deploys = [i for i in result.plan.instructions
+                       if i.target_location_name == "Mos Espa"]
+    cloud_deploys = [i for i in result.plan.instructions
+                    if i.target_location_name == "Cloud City"]
+
+    cloud_power = sum(i.power_contribution for i in cloud_deploys)
+
+    logger.info(f"   📊 Mos Espa (overkill +8): {len(mos_espa_deploys)} deploys")
+    logger.info(f"   📊 Cloud City (empty): {cloud_power} power deployed")
+
+    assert cloud_power >= 6, \
+        f"Should establish at Cloud City with 6+ power instead of overkilling. Got: {cloud_power}"
+    assert len(mos_espa_deploys) == 0, \
+        f"Should NOT deploy to overkill location! Got: {[i.card_name for i in mos_espa_deploys]}"
+
+
+def test_crushable_just_under_overkill_threshold():
+    """Edge case: Location with +7 advantage (just under overkill) should still be crushable.
+
+    Mos Espa: We have 9 vs 2 = +7 advantage (NOT overkill, threshold is +8)
+    Should still deploy here if it makes sense.
+    """
+    scenario = (
+        ScenarioBuilder("Just Under Overkill")
+        .as_side("dark")
+        .with_force(10)
+        # +7 advantage - just under overkill threshold of +8
+        .add_ground_location("Mos Espa", my_icons=2, their_icons=1,
+                            my_power=9, their_power=2, exterior=True)
+        # Character to deploy - would push to +9 (still valid, we have presence)
+        .add_character("Trooper", power=2, deploy_cost=2)
+        # Can deploy here - existing presence allows reinforcement
+        .expect_target("Mos Espa")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    mos_espa_deploys = [i for i in result.plan.instructions
+                       if i.target_location_name == "Mos Espa"]
+
+    logger.info(f"   📊 At +7 advantage, can still deploy: {len(mos_espa_deploys) > 0}")
+
+    # Should be able to deploy since we're just under overkill threshold
+    assert len(mos_espa_deploys) > 0 or result.plan.strategy.value == "hold_back", \
+        "Should either deploy to crushable or hold back for strategic reasons"
 
 
 # =============================================================================

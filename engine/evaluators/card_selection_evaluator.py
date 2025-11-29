@@ -635,33 +635,137 @@ class CardSelectionEvaluator(ActionEvaluator):
         """
         Choose which card to forfeit in battle.
 
-        Prefer lowest forfeit value cards.
+        Strategic considerations:
+        1. Forfeit cards with LOWEST forfeit value first (satisfies damage more efficiently)
+        2. ALWAYS forfeit pilots before their ships (when ship is forfeited, pilots are lost too)
+        3. Consider attrition remaining - if we can satisfy it with a low-value card, do so
+        4. Prefer forfeiting low-power cards to keep high-power ones
+
+        From the rulebook: "Cards are forfeited from the battle to satisfy attrition
+        and battle damage up to their forfeit value"
         """
         actions = []
         bs = context.board_state
         is_optional = "if desired" in context.decision_text.lower()
+        from ..card_loader import get_card
 
+        # Get attrition remaining from board state
+        attrition_remaining = 0
+        if bs:
+            # Dark side attrition remaining is what the bot (dark) needs to satisfy
+            my_side = bs.my_side or "dark"
+            if my_side == "dark":
+                attrition_remaining = getattr(bs, 'dark_attrition_remaining', 0)
+            else:
+                attrition_remaining = getattr(bs, 'light_attrition_remaining', 0)
+
+        # First pass: collect card info for strategic decisions
+        card_info = []
         for card_id in context.card_ids:
+            card = bs.cards_in_play.get(card_id) if bs else None
+
+            # Get forfeit value - try card first, then fall back to card_loader
+            forfeit = 0
+            power = 0
+            card_title = card_id
+            is_pilot_on_ship = False
+            is_ship_with_pilots = False
+            card_meta = None
+
+            if card:
+                card_title = card.card_title or card_id
+                forfeit = getattr(card, 'forfeit', 0) or 0
+                power = getattr(card, 'power', 0) or 0
+
+                # If forfeit is 0, try loading from card_loader (metadata might not have loaded)
+                if forfeit == 0 and card.blueprint_id:
+                    card_meta = get_card(card.blueprint_id)
+                    if card_meta:
+                        forfeit = card_meta.forfeit_value or 0
+                        if power == 0:
+                            power = card_meta.power_value or 0
+
+                # Check if this is a pilot attached to a ship
+                if card.target_card_id:
+                    is_pilot_on_ship = True
+
+                # Check if this is a ship with pilots aboard
+                if card.attached_cards:
+                    is_ship_with_pilots = True
+
+            card_info.append({
+                'card_id': card_id,
+                'card': card,
+                'card_title': card_title,
+                'forfeit': forfeit,
+                'power': power,
+                'is_pilot_on_ship': is_pilot_on_ship,
+                'is_ship_with_pilots': is_ship_with_pilots,
+                'card_meta': card_meta or (get_card(card.blueprint_id) if card and card.blueprint_id else None)
+            })
+
+        # Sort by forfeit value for logging
+        sorted_by_forfeit = sorted(card_info, key=lambda x: x['forfeit'])
+        logger.info(f"🎯 Forfeit options (sorted by value): {[(c['card_title'], c['forfeit']) for c in sorted_by_forfeit]}")
+        if attrition_remaining > 0:
+            logger.info(f"🎯 Attrition remaining to satisfy: {attrition_remaining}")
+
+        for info in card_info:
+            card_id = info['card_id']
+            forfeit = info['forfeit']
+            power = info['power']
+            card_title = info['card_title']
+
             action = EvaluatedAction(
                 action_id=card_id,
                 action_type=ActionType.SELECT_CARD,
                 score=0.0,
-                display_text=f"Forfeit {card_id}"
+                display_text=f"Forfeit {card_title}"
             )
 
             if is_optional:
                 # Optional forfeit - avoid it
                 action.score = VERY_BAD_DELTA
                 action.add_reasoning("Optional forfeit - avoid", VERY_BAD_DELTA)
-            elif bs:
-                card = bs.cards_in_play.get(card_id)
-                if card:
-                    forfeit = card.forfeit if hasattr(card, 'forfeit') else 0
-                    forfeit = forfeit if isinstance(forfeit, int) else 0
-                    # Higher bonus for lower forfeit value
-                    forfeit_bonus = GOOD_DELTA * (20 - forfeit)
-                    action.add_reasoning(f"Forfeit value {forfeit}", forfeit_bonus)
-                    action.display_text = f"Forfeit {card.card_title or card_id}"
+                actions.append(action)
+                continue
+
+            # BASE SCORE: Lower forfeit value = higher score
+            # Formula: Score decreases as forfeit increases
+            # forfeit=0 -> +100, forfeit=7 -> +30, forfeit=10 -> 0
+            base_score = max(0, 100 - (forfeit * 10))
+            action.add_reasoning(f"Forfeit value {forfeit}", base_score)
+
+            # BONUS: Pilots on ships should be forfeited FIRST
+            # (when ship dies, pilots die too - so save the ship by forfeiting pilot)
+            if info['is_pilot_on_ship']:
+                action.add_reasoning("PILOT ON SHIP - forfeit first!", +50.0)
+
+            # PENALTY: Ships with pilots should NOT be forfeited until pilots are gone
+            if info['is_ship_with_pilots']:
+                action.add_reasoning("Ship has pilots - forfeit pilots first!", -100.0)
+
+            # BONUS: Low power cards are less valuable to keep
+            if power <= 2:
+                action.add_reasoning(f"Low power ({power}) - less valuable", +15.0)
+            elif power >= 5:
+                action.add_reasoning(f"High power ({power}) - try to keep", -20.0)
+
+            # BONUS: If this card exactly or minimally covers attrition, prefer it
+            if attrition_remaining > 0 and forfeit >= attrition_remaining:
+                waste = forfeit - attrition_remaining
+                if waste == 0:
+                    action.add_reasoning(f"Exactly covers attrition ({attrition_remaining})", +30.0)
+                elif waste <= 2:
+                    action.add_reasoning(f"Minimally covers attrition (waste={waste})", +15.0)
+
+            # PENALTY: Unique high-value characters should be kept if possible
+            card_meta = info['card_meta']
+            if card_meta and card_meta.is_unique:
+                # Check if it's a major character (high ability or power)
+                ability = card_meta.ability_value or 0
+                if ability >= 5 or power >= 5:
+                    action.add_reasoning("Valuable unique character", -25.0)
 
             actions.append(action)
 

@@ -30,11 +30,11 @@ logger = logging.getLogger(__name__)
 TABLE_STATE_FILE = Path(__file__).parent.parent / 'data' / 'current_table.json'
 
 
-def _save_table_state(table_id: str, deck_name: str) -> None:
+def _save_table_state(table_id: str, deck_name: str, welcome_sent: bool = False) -> None:
     """Persist current table info to survive restarts."""
     try:
         TABLE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        data = {'table_id': table_id, 'deck_name': deck_name}
+        data = {'table_id': table_id, 'deck_name': deck_name, 'welcome_sent': welcome_sent}
         with open(TABLE_STATE_FILE, 'w') as f:
             json.dump(data, f)
         logger.debug(f"Saved table state: {data}")
@@ -63,6 +63,26 @@ def _clear_table_state() -> None:
             logger.debug("Cleared table state file")
     except Exception as e:
         logger.warning(f"Failed to clear table state: {e}")
+
+
+def was_welcome_sent() -> bool:
+    """Check if welcome message was already sent for current game."""
+    state = _load_table_state()
+    if state:
+        return state.get('welcome_sent', False)
+    return False
+
+
+def mark_welcome_sent() -> None:
+    """Mark that welcome message has been sent for current game."""
+    state = _load_table_state()
+    if state:
+        _save_table_state(
+            table_id=state.get('table_id', ''),
+            deck_name=state.get('deck_name', ''),
+            welcome_sent=True
+        )
+        logger.debug("Marked welcome as sent in table state")
 
 
 def get_astrogation_chart_number(deck_name: str) -> str:

@@ -49,6 +49,7 @@ class CardInPlay:
     power: int = 0
     ability: int = 0
     deploy: int = 0
+    forfeit: int = 0
 
     def __repr__(self):
         return f"CardInPlay({self.blueprint_id}@{self.zone}, owner={self.owner}, loc={self.location_index})"
@@ -63,6 +64,7 @@ class CardInPlay:
                 self.power = metadata.power_value or 0
                 self.ability = metadata.ability_value or 0
                 self.deploy = metadata.deploy_value or 0
+                self.forfeit = metadata.forfeit_value or 0
 
 
 @dataclass
@@ -163,6 +165,12 @@ class BoardState:
         self.force_activated_this_turn: int = 0  # Force already activated this turn
         self.in_battle: bool = False       # True during battles/duels/attacks
         self.current_battle_location: int = -1  # Location index where battle is occurring (-1 if none)
+
+        # Battle damage tracking (from GS events during damage segment)
+        self.dark_attrition_remaining: int = 0  # Attrition Dark side must satisfy
+        self.dark_damage_remaining: int = 0     # Battle damage Dark side must satisfy
+        self.light_attrition_remaining: int = 0 # Attrition Light side must satisfy
+        self.light_damage_remaining: int = 0    # Battle damage Light side must satisfy
 
         # Game result tracking (from message events)
         self.game_winner: Optional[str] = None  # Player name who won, or None if game ongoing

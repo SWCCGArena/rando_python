@@ -172,6 +172,12 @@ class ChatManager:
         if not self.brain or not self.opponent_name:
             return
 
+        # Check if welcome was already sent (e.g., bot rejoined after restart)
+        from engine.table_manager import was_welcome_sent, mark_welcome_sent
+        if was_welcome_sent():
+            logger.info("⏭️ Skipping welcome message - already sent this game")
+            return
+
         message = self.brain.get_welcome_message(
             opponent_name=self.opponent_name,
             deck_name=self.deck_name or "Unknown Deck",
@@ -179,6 +185,7 @@ class ChatManager:
         )
 
         self._send_chat(message, message_type='welcome')
+        mark_welcome_sent()
 
     def on_turn_start(self, turn_number: int, board_state: 'BoardState'):
         """
