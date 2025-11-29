@@ -432,76 +432,165 @@ class ConnectionMonitor:
     - Track successful/failed requests
     - Detect connection loss patterns
     - Trigger reconnection when needed
+    - Exponential backoff for retries
+    - Stuck detection for long-running failures
     """
 
-    def __init__(self, client, max_failures: int = 3, recovery_delay: float = 5.0):
+    # Failure types for better diagnostics
+    FAILURE_TIMEOUT = "timeout"
+    FAILURE_NETWORK = "network"
+    FAILURE_SESSION = "session"
+    FAILURE_UNKNOWN = "unknown"
+
+    def __init__(self, client, max_failures: int = 2, recovery_delay: float = 3.0,
+                 max_recovery_delay: float = 60.0, stuck_threshold_seconds: float = 120.0):
         """
         Initialize connection monitor.
 
         Args:
             client: GEMPClient instance
-            max_failures: Consecutive failures before triggering recovery
-            recovery_delay: Seconds to wait before recovery attempt
+            max_failures: Consecutive failures before triggering recovery (lowered from 3 to 2)
+            recovery_delay: Base seconds to wait before recovery attempt
+            max_recovery_delay: Maximum backoff delay
+            stuck_threshold_seconds: If no success for this long, force recovery
         """
         self.client = client
         self.max_failures = max_failures
         self.recovery_delay = recovery_delay
+        self.max_recovery_delay = max_recovery_delay
+        self.stuck_threshold_seconds = stuck_threshold_seconds
 
         # State
         self.consecutive_failures = 0
         self.last_success_time = time.time()
+        self.last_failure_time = 0
         self.is_connected = True
         self.recovery_attempts = 0
+        self.total_recovery_attempts = 0  # Lifetime count
+        self.last_failure_reason = ""
 
     def record_success(self) -> None:
         """Record a successful request"""
+        was_recovering = self.consecutive_failures > 0
         self.consecutive_failures = 0
         self.last_success_time = time.time()
         self.is_connected = True
+        self.recovery_attempts = 0  # Reset recovery attempts on success
 
-    def record_failure(self, reason: str = "") -> bool:
+        if was_recovering:
+            logger.info("✅ Connection stable - failure count reset")
+
+    def record_failure(self, reason: str = "", failure_type: str = None) -> bool:
         """
         Record a failed request.
+
+        Args:
+            reason: Human-readable failure reason
+            failure_type: One of FAILURE_* constants for categorization
 
         Returns:
             True if recovery should be triggered
         """
         self.consecutive_failures += 1
-        logger.warning(f"Connection failure #{self.consecutive_failures}: {reason}")
+        self.last_failure_time = time.time()
+        self.last_failure_reason = reason
 
+        # Detect timeout from reason string
+        if failure_type is None:
+            if "timeout" in reason.lower() or "timed out" in reason.lower():
+                failure_type = self.FAILURE_TIMEOUT
+            elif "connection" in reason.lower() or "network" in reason.lower():
+                failure_type = self.FAILURE_NETWORK
+            elif "session" in reason.lower() or "expired" in reason.lower():
+                failure_type = self.FAILURE_SESSION
+            else:
+                failure_type = self.FAILURE_UNKNOWN
+
+        logger.warning(f"⚠️ Connection failure #{self.consecutive_failures} ({failure_type}): {reason}")
+
+        # Check if we've been stuck for too long
+        time_since_success = time.time() - self.last_success_time
+        if time_since_success > self.stuck_threshold_seconds:
+            logger.error(f"🚨 STUCK: No successful request for {time_since_success:.0f}s (threshold: {self.stuck_threshold_seconds}s)")
+            self.is_connected = False
+            return True
+
+        # Normal failure threshold check
         if self.consecutive_failures >= self.max_failures:
+            logger.warning(f"🔄 Max failures reached ({self.max_failures}), triggering recovery")
             self.is_connected = False
             return True
 
         return False
 
+    def get_recovery_delay(self) -> float:
+        """
+        Calculate recovery delay with exponential backoff.
+
+        Returns:
+            Delay in seconds before next recovery attempt
+        """
+        # Exponential backoff: base * 2^attempts, capped at max
+        delay = min(
+            self.recovery_delay * (2 ** self.recovery_attempts),
+            self.max_recovery_delay
+        )
+        return delay
+
     def attempt_recovery(self, username: str, password: str) -> bool:
         """
-        Attempt to recover connection.
+        Attempt to recover connection with exponential backoff.
 
         Returns:
             True if recovery successful
         """
         self.recovery_attempts += 1
-        logger.info(f"Connection recovery attempt #{self.recovery_attempts}")
+        self.total_recovery_attempts += 1
+
+        delay = self.get_recovery_delay()
+        logger.info(f"🔄 Connection recovery attempt #{self.recovery_attempts} (total: {self.total_recovery_attempts})")
+        logger.info(f"   Waiting {delay:.1f}s before retry (backoff)")
 
         try:
-            # Wait before retry
-            time.sleep(self.recovery_delay)
+            # Wait with exponential backoff
+            time.sleep(delay)
 
             # Try to re-login
             if self.client.login(username, password):
                 logger.info("✅ Connection recovered successfully")
                 self.consecutive_failures = 0
                 self.is_connected = True
+                self.recovery_attempts = 0  # Reset for next failure cycle
                 return True
             else:
-                logger.error("Recovery failed: login unsuccessful")
+                logger.error("❌ Recovery failed: login unsuccessful")
                 return False
 
         except Exception as e:
-            logger.error(f"Recovery failed: {e}")
+            logger.error(f"❌ Recovery failed with exception: {e}")
             return False
+
+    def should_force_recovery(self) -> bool:
+        """
+        Check if we should force a recovery attempt due to being stuck.
+
+        This is a fallback for when the normal failure count isn't triggered
+        but we've been failing for a long time.
+        """
+        if self.consecutive_failures == 0:
+            return False
+
+        time_since_success = time.time() - self.last_success_time
+        return time_since_success > self.stuck_threshold_seconds
+
+    def reset(self) -> None:
+        """Reset monitor state (e.g., after manual restart)"""
+        self.consecutive_failures = 0
+        self.last_success_time = time.time()
+        self.last_failure_time = 0
+        self.is_connected = True
+        self.recovery_attempts = 0
+        logger.info("🔄 ConnectionMonitor reset")
 
     def get_status(self) -> dict:
         """Get current status"""
@@ -509,5 +598,7 @@ class ConnectionMonitor:
             'connected': self.is_connected,
             'consecutive_failures': self.consecutive_failures,
             'recovery_attempts': self.recovery_attempts,
+            'total_recovery_attempts': self.total_recovery_attempts,
             'seconds_since_success': time.time() - self.last_success_time,
+            'last_failure_reason': self.last_failure_reason,
         }

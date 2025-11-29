@@ -433,8 +433,14 @@ class ScenarioBuilder:
         return self
 
     def add_character(self, name: str, power: int, deploy_cost: int,
-                      is_pilot: bool = False, is_warrior: bool = True) -> 'ScenarioBuilder':
-        """Add a character to hand"""
+                      is_pilot: bool = False, is_warrior: bool = True,
+                      is_unique: bool = True) -> 'ScenarioBuilder':
+        """Add a character to hand.
+
+        Args:
+            is_unique: If True, this card is unique (only 1 can be on board).
+                       In SWCCG, unique cards have • prefix in their name.
+        """
         card_id = f"card_{self._card_counter}"
         bp_id = f"char_bp_{self._card_counter}"
         self._card_counter += 1
@@ -459,13 +465,19 @@ class ScenarioBuilder:
             is_character=True,
             is_pilot=is_pilot,
             is_warrior=is_warrior,
+            is_unique=is_unique,
         )
 
         return self
 
     def add_starship(self, name: str, power: int, deploy_cost: int,
-                     has_permanent_pilot: bool = True) -> 'ScenarioBuilder':
-        """Add a starship to hand"""
+                     has_permanent_pilot: bool = True,
+                     is_unique: bool = True) -> 'ScenarioBuilder':
+        """Add a starship to hand.
+
+        Args:
+            is_unique: If True, this card is unique (only 1 can be on board).
+        """
         card_id = f"card_{self._card_counter}"
         bp_id = f"ship_bp_{self._card_counter}"
         self._card_counter += 1
@@ -488,13 +500,19 @@ class ScenarioBuilder:
             power_value=power,
             is_starship=True,
             has_permanent_pilot=has_permanent_pilot,
+            is_unique=is_unique,
         )
 
         return self
 
     def add_vehicle(self, name: str, power: int, deploy_cost: int,
-                    has_permanent_pilot: bool = False) -> 'ScenarioBuilder':
-        """Add a vehicle to hand"""
+                    has_permanent_pilot: bool = False,
+                    is_unique: bool = True) -> 'ScenarioBuilder':
+        """Add a vehicle to hand.
+
+        Args:
+            is_unique: If True, this card is unique (only 1 can be on board).
+        """
         card_id = f"card_{self._card_counter}"
         bp_id = f"vehicle_bp_{self._card_counter}"
         self._card_counter += 1
@@ -517,6 +535,7 @@ class ScenarioBuilder:
             power_value=power,
             is_vehicle=True,
             has_permanent_pilot=has_permanent_pilot,
+            is_unique=is_unique,
         )
 
         return self
@@ -542,6 +561,165 @@ class ScenarioBuilder:
             card_type="Location",
             deploy_value=deploy_cost,
             is_location=True,
+        )
+
+        return self
+
+    def add_character_in_play(self, name: str, power: int, location_name: str,
+                               is_unique: bool = True) -> 'ScenarioBuilder':
+        """Add a character that is already deployed on the board.
+
+        Used for testing uniqueness - if a unique card is already in play,
+        copies in hand should not be planned for deployment.
+        """
+        card_id = f"inplay_{self._card_counter}"
+        bp_id = f"inplay_char_bp_{self._card_counter}"
+        self._card_counter += 1
+
+        # Find the location
+        loc_idx = -1
+        target_loc = None
+        for i, loc in enumerate(self.board.locations):
+            if loc.name == location_name:
+                loc_idx = i
+                target_loc = loc
+                break
+
+        if target_loc is None:
+            raise ValueError(f"Location '{location_name}' not found. Add location first.")
+
+        card = MockCard(
+            card_id=card_id,
+            blueprint_id=bp_id,
+            card_title=name,
+            card_type="Character",
+            power=power,
+            location_index=loc_idx,
+            zone="TABLE",
+        )
+
+        # Add to location's my_cards and board's cards_in_play
+        target_loc.my_cards.append(card)
+        self.board.cards_in_play[card_id] = card
+
+        # Update power at location
+        if self.board.my_side == "dark":
+            self.board.dark_power_at_locations[loc_idx] = \
+                self.board.dark_power_at_locations.get(loc_idx, 0) + power
+        else:
+            self.board.light_power_at_locations[loc_idx] = \
+                self.board.light_power_at_locations.get(loc_idx, 0) + power
+
+        # Register metadata
+        register_mock_card(bp_id,
+            title=name,
+            side=self.board.my_side.capitalize(),
+            card_type="Character",
+            power_value=power,
+            is_character=True,
+            is_unique=is_unique,
+        )
+
+        return self
+
+    def add_starship_in_play(self, name: str, power: int, location_name: str,
+                              has_permanent_pilot: bool = True,
+                              is_unique: bool = True) -> 'ScenarioBuilder':
+        """Add a starship that is already deployed on the board."""
+        card_id = f"inplay_{self._card_counter}"
+        bp_id = f"inplay_ship_bp_{self._card_counter}"
+        self._card_counter += 1
+
+        loc_idx = -1
+        target_loc = None
+        for i, loc in enumerate(self.board.locations):
+            if loc.name == location_name:
+                loc_idx = i
+                target_loc = loc
+                break
+
+        if target_loc is None:
+            raise ValueError(f"Location '{location_name}' not found. Add location first.")
+
+        card = MockCard(
+            card_id=card_id,
+            blueprint_id=bp_id,
+            card_title=name,
+            card_type="Starship",
+            power=power,
+            location_index=loc_idx,
+            zone="TABLE",
+        )
+
+        target_loc.my_cards.append(card)
+        self.board.cards_in_play[card_id] = card
+
+        if self.board.my_side == "dark":
+            self.board.dark_power_at_locations[loc_idx] = \
+                self.board.dark_power_at_locations.get(loc_idx, 0) + power
+        else:
+            self.board.light_power_at_locations[loc_idx] = \
+                self.board.light_power_at_locations.get(loc_idx, 0) + power
+
+        register_mock_card(bp_id,
+            title=name,
+            side=self.board.my_side.capitalize(),
+            card_type="Starship",
+            power_value=power,
+            is_starship=True,
+            has_permanent_pilot=has_permanent_pilot,
+            is_unique=is_unique,
+        )
+
+        return self
+
+    def add_vehicle_in_play(self, name: str, power: int, location_name: str,
+                             has_permanent_pilot: bool = True,
+                             is_unique: bool = True) -> 'ScenarioBuilder':
+        """Add a vehicle that is already deployed on the board."""
+        card_id = f"inplay_{self._card_counter}"
+        bp_id = f"inplay_vehicle_bp_{self._card_counter}"
+        self._card_counter += 1
+
+        loc_idx = -1
+        target_loc = None
+        for i, loc in enumerate(self.board.locations):
+            if loc.name == location_name:
+                loc_idx = i
+                target_loc = loc
+                break
+
+        if target_loc is None:
+            raise ValueError(f"Location '{location_name}' not found. Add location first.")
+
+        card = MockCard(
+            card_id=card_id,
+            blueprint_id=bp_id,
+            card_title=name,
+            card_type="Vehicle",
+            power=power,
+            location_index=loc_idx,
+            zone="TABLE",
+        )
+
+        target_loc.my_cards.append(card)
+        self.board.cards_in_play[card_id] = card
+
+        if self.board.my_side == "dark":
+            self.board.dark_power_at_locations[loc_idx] = \
+                self.board.dark_power_at_locations.get(loc_idx, 0) + power
+        else:
+            self.board.light_power_at_locations[loc_idx] = \
+                self.board.light_power_at_locations.get(loc_idx, 0) + power
+
+        register_mock_card(bp_id,
+            title=name,
+            side=self.board.my_side.capitalize(),
+            card_type="Vehicle",
+            power_value=power,
+            is_vehicle=True,
+            has_permanent_pilot=has_permanent_pilot,
+            is_unique=is_unique,
         )
 
         return self
@@ -3466,6 +3644,321 @@ def test_mixed_ground_space_vehicle_scenario():
         if "X-Wing" in inst.card_name:
             assert inst.target_location_name in ["Bespin System", None], \
                 f"Starship deployed to wrong location: {inst.target_location_name}"
+
+
+# =============================================================================
+# UNIQUENESS TESTS
+# =============================================================================
+#
+# SWCCG Uniqueness Rules:
+# - Cards with • (1 dot) prefix are unique - only 1 copy can be on the entire board
+# - Cards with •• (2 dots) are limited to 2 copies
+# - Cards with ••• (3 dots) are limited to 3 copies
+#
+# These tests verify the deploy planner respects uniqueness:
+# 1. When 2+ copies of a unique card are in hand, only 1 should be planned
+# 2. When a unique card is already on board, copies in hand should not be planned
+# =============================================================================
+
+class TestCharacterUniqueness:
+    """Test uniqueness rules for character deployment."""
+
+    def test_two_unique_characters_in_hand_deploys_one(self):
+        """
+        Bug from logs: Bot planned to deploy •Rey (AI) twice to Crait.
+
+        When 2 copies of a unique character are in hand and none on board,
+        only 1 should be included in the deployment plan.
+        """
+        scenario = (
+            ScenarioBuilder("Two Unique Characters - Deploy One")
+            .as_side("light")
+            .with_force(15)
+            .add_ground_location("Crait", my_icons=2, their_icons=1, their_power=8)
+            # Two copies of unique Rey in hand
+            .add_character("•Rey", power=4, deploy_cost=4, is_unique=True)
+            .add_character("•Rey", power=4, deploy_cost=4, is_unique=True)
+            .add_character("•Leia", power=4, deploy_cost=4, is_unique=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Count how many times Rey appears in the plan
+        rey_deployments = [i for i in result.plan.instructions if "Rey" in i.card_name]
+
+        assert len(rey_deployments) <= 1, \
+            f"Unique character •Rey deployed {len(rey_deployments)} times! " \
+            f"Plan: {[i.card_name for i in result.plan.instructions]}"
+
+    def test_unique_character_already_on_board_blocks_hand_copy(self):
+        """
+        When a unique character is already deployed on the board,
+        copies in hand should NOT be included in the deployment plan.
+        """
+        scenario = (
+            ScenarioBuilder("Unique Character Already On Board")
+            .as_side("light")
+            .with_force(20)
+            .add_ground_location("Echo Base", my_icons=2, their_icons=1, my_power=4)
+            .add_ground_location("Hoth Plains", my_icons=2, their_icons=1, their_power=5)
+            # Rey is already deployed at Echo Base
+            .add_character_in_play("•Rey", power=4, location_name="Echo Base", is_unique=True)
+            # Another copy of Rey in hand - should NOT be deployed
+            .add_character("•Rey", power=4, deploy_cost=4, is_unique=True)
+            # Leia in hand - should be deployable
+            .add_character("•Leia", power=4, deploy_cost=4, is_unique=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Rey should NOT appear in deployment plan (already on board)
+        rey_deployments = [i for i in result.plan.instructions if "Rey" in i.card_name]
+
+        assert len(rey_deployments) == 0, \
+            f"Unique character •Rey already on board but planned for deployment! " \
+            f"Plan: {[i.card_name for i in result.plan.instructions]}"
+
+    def test_non_unique_characters_can_deploy_multiple(self):
+        """
+        Non-unique characters (no • prefix) can have multiple copies deployed.
+        """
+        scenario = (
+            ScenarioBuilder("Non-Unique Characters - Multiple Allowed")
+            .as_side("dark")
+            .with_force(20)
+            .with_deploy_threshold(4)  # Lower threshold to allow more deploys
+            .add_ground_location("Death Star", my_icons=2, their_icons=1, their_power=6)
+            # Multiple non-unique Stormtroopers
+            .add_character("Stormtrooper", power=2, deploy_cost=2, is_unique=False)
+            .add_character("Stormtrooper", power=2, deploy_cost=2, is_unique=False)
+            .add_character("Stormtrooper", power=2, deploy_cost=2, is_unique=False)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Multiple Stormtroopers CAN be deployed
+        trooper_deployments = [i for i in result.plan.instructions if "Stormtrooper" in i.card_name]
+
+        # At least 2 should be deployed to beat the enemy's 6 power
+        assert len(trooper_deployments) >= 2, \
+            f"Non-unique characters should allow multiple deployments. " \
+            f"Only {len(trooper_deployments)} Stormtroopers planned."
+
+
+class TestStarshipUniqueness:
+    """Test uniqueness rules for starship deployment."""
+
+    def test_two_unique_starships_in_hand_deploys_one(self):
+        """
+        When 2 copies of a unique starship are in hand,
+        only 1 should be included in the deployment plan.
+        """
+        scenario = (
+            ScenarioBuilder("Two Unique Starships - Deploy One")
+            .as_side("light")
+            .with_force(15)
+            .add_space_location("Endor System", my_icons=2, their_icons=1, their_power=5)
+            # Two copies of unique Falcon in hand
+            .add_starship("•Millennium Falcon", power=6, deploy_cost=6,
+                          has_permanent_pilot=True, is_unique=True)
+            .add_starship("•Millennium Falcon", power=6, deploy_cost=6,
+                          has_permanent_pilot=True, is_unique=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        falcon_deployments = [i for i in result.plan.instructions if "Falcon" in i.card_name]
+
+        assert len(falcon_deployments) <= 1, \
+            f"Unique starship •Millennium Falcon deployed {len(falcon_deployments)} times! " \
+            f"Plan: {[i.card_name for i in result.plan.instructions]}"
+
+    def test_unique_starship_already_on_board_blocks_hand_copy(self):
+        """
+        When a unique starship is already deployed,
+        copies in hand should NOT be included in the plan.
+        """
+        scenario = (
+            ScenarioBuilder("Unique Starship Already On Board")
+            .as_side("light")
+            .with_force(20)
+            .add_space_location("Yavin System", my_icons=2, their_icons=1, my_power=6)
+            .add_space_location("Endor System", my_icons=2, their_icons=1, their_power=5)
+            # Falcon already at Yavin
+            .add_starship_in_play("•Millennium Falcon", power=6,
+                                   location_name="Yavin System", is_unique=True)
+            # Another Falcon in hand - should NOT deploy
+            .add_starship("•Millennium Falcon", power=6, deploy_cost=6,
+                          has_permanent_pilot=True, is_unique=True)
+            # X-Wing can deploy
+            .add_starship("•Red 5", power=3, deploy_cost=3,
+                          has_permanent_pilot=True, is_unique=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        falcon_deployments = [i for i in result.plan.instructions if "Falcon" in i.card_name]
+
+        assert len(falcon_deployments) == 0, \
+            f"Unique starship •Millennium Falcon already on board but planned for deployment! " \
+            f"Plan: {[i.card_name for i in result.plan.instructions]}"
+
+
+class TestVehicleUniqueness:
+    """Test uniqueness rules for vehicle deployment."""
+
+    def test_two_unique_vehicles_in_hand_deploys_one(self):
+        """
+        When 2 copies of a unique vehicle are in hand,
+        only 1 should be included in the deployment plan.
+        """
+        scenario = (
+            ScenarioBuilder("Two Unique Vehicles - Deploy One")
+            .as_side("dark")
+            .with_force(15)
+            .add_ground_location("Hoth Plains", my_icons=2, their_icons=1,
+                                 their_power=5, exterior=True)
+            # Two copies of unique AT-AT in hand
+            .add_vehicle("•Blizzard 1", power=6, deploy_cost=6,
+                         has_permanent_pilot=True, is_unique=True)
+            .add_vehicle("•Blizzard 1", power=6, deploy_cost=6,
+                         has_permanent_pilot=True, is_unique=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        blizzard_deployments = [i for i in result.plan.instructions if "Blizzard" in i.card_name]
+
+        assert len(blizzard_deployments) <= 1, \
+            f"Unique vehicle •Blizzard 1 deployed {len(blizzard_deployments)} times! " \
+            f"Plan: {[i.card_name for i in result.plan.instructions]}"
+
+    def test_unique_vehicle_already_on_board_blocks_hand_copy(self):
+        """
+        When a unique vehicle is already deployed,
+        copies in hand should NOT be included in the plan.
+        """
+        scenario = (
+            ScenarioBuilder("Unique Vehicle Already On Board")
+            .as_side("dark")
+            .with_force(20)
+            .add_ground_location("Endor Bunker", my_icons=2, their_icons=1,
+                                 my_power=6, exterior=True)
+            .add_ground_location("Endor Forest", my_icons=2, their_icons=1,
+                                 their_power=5, exterior=True)
+            # AT-ST already deployed
+            .add_vehicle_in_play("•Tempest Scout 1", power=5,
+                                  location_name="Endor Bunker", is_unique=True)
+            # Another copy in hand - should NOT deploy
+            .add_vehicle("•Tempest Scout 1", power=5, deploy_cost=4,
+                         has_permanent_pilot=True, is_unique=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        tempest_deployments = [i for i in result.plan.instructions if "Tempest" in i.card_name]
+
+        assert len(tempest_deployments) == 0, \
+            f"Unique vehicle •Tempest Scout 1 already on board but planned for deployment! " \
+            f"Plan: {[i.card_name for i in result.plan.instructions]}"
+
+
+class TestMixedUniquenessScenarios:
+    """Test complex scenarios with multiple unique cards."""
+
+    def test_original_rey_crait_bug(self):
+        """
+        Recreation of the exact bug from the logs:
+        Bot planned to deploy •Rey (AI) twice to •Crait: Outpost Entrance Cavern.
+
+        Plan was:
+        1. •Lando Calrissian, Scoundrel -> Crait (6 power)
+        2. •Rey (AI) -> Crait (4 power)
+        3. •Rey (AI) -> Crait (4 power)  <-- BUG: Second Rey should not be here
+        4. •General Leia Organa (AI) -> Crait (4 power)
+        """
+        scenario = (
+            ScenarioBuilder("Original Rey Crait Bug")
+            .as_side("light")
+            .with_force(19)  # Matches log: 19 total, 17 for deploying
+            .add_ground_location("Crait Outpost", my_icons=1, their_icons=2, their_power=15)
+            # Cards matching the log
+            .add_character("•Lando Calrissian, Scoundrel", power=6, deploy_cost=5, is_unique=True)
+            .add_character("•Rey (AI)", power=4, deploy_cost=4, is_unique=True)
+            .add_character("•Rey (AI)", power=4, deploy_cost=4, is_unique=True)  # Second copy
+            .add_character("•General Leia Organa (AI)", power=4, deploy_cost=4, is_unique=True)
+            .add_character("•Jyn Erso (AI)", power=4, deploy_cost=4, is_unique=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Count Rey deployments
+        rey_deployments = [i for i in result.plan.instructions if "Rey" in i.card_name]
+
+        assert len(rey_deployments) <= 1, \
+            f"BUG REPRODUCED: •Rey (AI) planned for deployment {len(rey_deployments)} times! " \
+            f"This violates SWCCG uniqueness rules. " \
+            f"Full plan: {[i.card_name for i in result.plan.instructions]}"
+
+        # Verify the plan still has good total power
+        total_power = sum(i.power_contribution for i in result.plan.instructions)
+        logger.info(f"   Total power in plan: {total_power}")
+
+    def test_multiple_different_uniques_allowed(self):
+        """
+        Multiple DIFFERENT unique characters can all be deployed.
+        Uniqueness only restricts copies of the SAME card.
+        """
+        scenario = (
+            ScenarioBuilder("Multiple Different Uniques")
+            .as_side("light")
+            .with_force(20)
+            .add_ground_location("Rebel Base", my_icons=2, their_icons=1, their_power=10)
+            # Different unique characters - all should be deployable
+            .add_character("•Luke Skywalker", power=6, deploy_cost=5, is_unique=True)
+            .add_character("•Han Solo", power=5, deploy_cost=4, is_unique=True)
+            .add_character("•Leia Organa", power=4, deploy_cost=4, is_unique=True)
+            .add_character("•Chewbacca", power=5, deploy_cost=5, is_unique=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # All different uniques should be deployable (if force allows)
+        deployed_names = [i.card_name for i in result.plan.instructions]
+        logger.info(f"   Deployed: {deployed_names}")
+
+        # At least 2 should deploy (to beat enemy's 10 power)
+        assert len(result.plan.instructions) >= 2, \
+            f"Should deploy multiple different unique characters"
+
+    def test_unique_in_hand_and_on_board_different_locations(self):
+        """
+        If a unique character is at Location A, a copy in hand
+        should NOT be deployed to Location B either.
+        Uniqueness is board-wide, not location-specific.
+        """
+        scenario = (
+            ScenarioBuilder("Unique Board-Wide Restriction")
+            .as_side("light")
+            .with_force(20)
+            .add_ground_location("Echo Base", my_icons=2, their_icons=1, my_power=4)
+            .add_ground_location("Hoth Plains", my_icons=2, their_icons=1, their_power=6)
+            # Luke already at Echo Base
+            .add_character_in_play("•Luke Skywalker", power=6,
+                                    location_name="Echo Base", is_unique=True)
+            # Luke in hand - should NOT deploy to Hoth Plains either
+            .add_character("•Luke Skywalker", power=6, deploy_cost=5, is_unique=True)
+            # Han can deploy
+            .add_character("•Han Solo", power=5, deploy_cost=4, is_unique=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        luke_deployments = [i for i in result.plan.instructions if "Luke" in i.card_name]
+
+        assert len(luke_deployments) == 0, \
+            f"•Luke Skywalker is at Echo Base but was still planned for Hoth Plains! " \
+            f"Uniqueness is board-wide. Plan: {[i.card_name for i in result.plan.instructions]}"
 
 
 # =============================================================================

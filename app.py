@@ -10,6 +10,7 @@ from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 import logging
 import os
+import requests
 import xml.etree.ElementTree as ET
 from config import config
 from engine.state import GameState
@@ -940,13 +941,21 @@ def bot_worker():
                                 bot_state.last_error = "Session expired and re-login failed"
 
                     elif update_xml is None:
-                        # Request failed completely - track failure
+                        # Request failed completely - track failure with actual error
                         if bot_state.connection_monitor:
-                            should_recover = bot_state.connection_monitor.record_failure("Request returned None")
+                            # Get actual error from client (timeout, connection refused, etc.)
+                            error_reason = bot_state.client.last_error or "Request returned None"
+                            should_recover = bot_state.connection_monitor.record_failure(error_reason)
+
                             if should_recover:
                                 logger.warning("🔄 Multiple failures detected, attempting recovery...")
                                 socketio.emit('log_message', {'message': '🔄 Connection issues, attempting recovery...', 'level': 'warning'}, namespace='/')
-                                socketio.sleep(3)
+
+                                # Use exponential backoff delay from monitor
+                                delay = bot_state.connection_monitor.get_recovery_delay()
+                                logger.info(f"⏳ Waiting {delay:.1f}s before recovery attempt...")
+                                socketio.sleep(delay)
+
                                 if bot_state.connection_monitor.attempt_recovery(config.GEMP_USERNAME, config.GEMP_PASSWORD):
                                     logger.info("✅ Connection recovered")
                                     socketio.emit('log_message', {'message': '✅ Connection recovered', 'level': 'success'}, namespace='/')
@@ -1036,18 +1045,40 @@ def bot_worker():
                     else:
                         logger.warning("⚠️  Game update returned None (request failed)")
 
-                # Also check hall to see if table disappeared
-                tables = bot_state.client.get_hall_tables()
-                bot_state.current_tables = tables
+                # Skip hall check if we're in a failure state (network issues)
+                # This prevents false "game ended" detection when network is down
+                skip_hall_check = (bot_state.connection_monitor and
+                                   bot_state.connection_monitor.consecutive_failures > 0)
 
-                # Check if our table still exists
+                if skip_hall_check:
+                    logger.debug(f"⏭️ Skipping hall check due to connection failures ({bot_state.connection_monitor.consecutive_failures})")
+                    # Also check for stuck state - if no success for too long, force recovery
+                    if bot_state.connection_monitor.should_force_recovery():
+                        logger.warning("🚨 Stuck detected - forcing recovery attempt")
+                        socketio.emit('log_message', {'message': '🚨 Connection stuck - forcing recovery...', 'level': 'warning'}, namespace='/')
+                        delay = bot_state.connection_monitor.get_recovery_delay()
+                        socketio.sleep(delay)
+                        if bot_state.connection_monitor.attempt_recovery(config.GEMP_USERNAME, config.GEMP_PASSWORD):
+                            logger.info("✅ Forced recovery successful")
+                            socketio.emit('log_message', {'message': '✅ Connection recovered', 'level': 'success'}, namespace='/')
+                        else:
+                            logger.error("❌ Forced recovery failed")
+                            socketio.emit('log_message', {'message': '❌ Recovery failed', 'level': 'error'}, namespace='/')
+
+                # Only check hall if connection is stable
+                tables = []
                 my_table = None
-                for table in tables:
-                    if table.table_id == bot_state.current_table_id:
-                        my_table = table
-                        break
+                if not skip_hall_check:
+                    tables = bot_state.client.get_hall_tables()
+                    bot_state.current_tables = tables
 
-                if not my_table or my_table.status == 'finished':
+                    # Check if our table still exists
+                    for table in tables:
+                        if table.table_id == bot_state.current_table_id:
+                            my_table = table
+                            break
+
+                if not skip_hall_check and (not my_table or my_table.status == 'finished'):
                     # Game ended!
                     logger.info("🏁 Game ended!")
                     socketio.emit('log_message', {'message': '🏁 Game ended', 'level': 'info'}, namespace='/')
@@ -1114,7 +1145,31 @@ def bot_worker():
                 # Unknown state or not ready yet
                 socketio.sleep(0.5)
 
+        except requests.RequestException as e:
+            # Network errors - try to recover instead of stopping
+            logger.error(f"⚠️ Network error in worker: {e}", exc_info=True)
+            if bot_state.connection_monitor:
+                should_recover = bot_state.connection_monitor.record_failure(str(e))
+                if should_recover:
+                    logger.warning("🔄 Network error triggered recovery attempt...")
+                    socketio.emit('log_message', {'message': '🔄 Network error, attempting recovery...', 'level': 'warning'}, namespace='/')
+                    delay = bot_state.connection_monitor.get_recovery_delay()
+                    socketio.sleep(delay)
+                    if bot_state.connection_monitor.attempt_recovery(config.GEMP_USERNAME, config.GEMP_PASSWORD):
+                        logger.info("✅ Recovery successful after network error")
+                        socketio.emit('log_message', {'message': '✅ Connection recovered', 'level': 'success'}, namespace='/')
+                        continue  # Continue the main loop
+                    else:
+                        logger.error("❌ Recovery failed after network error")
+            # If no monitor or recovery failed, enter error state but don't stop
+            bot_state.state = GameState.ERROR
+            bot_state.last_error = f"Network error: {e}"
+            socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+            socketio.emit('log_message', {'message': f'Network error: {e}', 'level': 'error'}, namespace='/')
+            socketio.sleep(5)  # Wait before retrying
+
         except Exception as e:
+            # Non-network errors - log and stop
             logger.error(f"💥 Worker error: {e}", exc_info=True)
             bot_state.state = GameState.ERROR
             bot_state.last_error = str(e)

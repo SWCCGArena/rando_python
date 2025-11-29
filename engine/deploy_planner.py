@@ -118,6 +118,9 @@ class DeploymentPlan:
     phase_started: bool = False
     deployments_made: int = 0
 
+    # Original plan cost (before any deployments)
+    original_plan_cost: int = 0
+
     def should_deploy_card(self, blueprint_id: str) -> bool:
         """Check if a card is in our deployment plan"""
         return any(inst.card_blueprint_id == blueprint_id for inst in self.instructions)
@@ -133,6 +136,35 @@ class DeploymentPlan:
         """Get the target location for a card, if any"""
         inst = self.get_instruction_for_card(blueprint_id)
         return inst.target_location_id if inst else None
+
+    def is_plan_complete(self) -> bool:
+        """Check if all planned deployments have been executed"""
+        return len(self.instructions) == 0 and self.deployments_made > 0
+
+    def get_extra_force_budget(self, current_force: int) -> int:
+        """
+        Calculate how much extra force is available for non-planned actions.
+
+        Extra actions are allowed when:
+        1. The plan is complete (all planned deployments done)
+        2. We have more force than the reserved amount
+
+        Args:
+            current_force: Current force pile value
+
+        Returns:
+            Amount of force available for extra actions (0 if none)
+        """
+        if not self.is_plan_complete():
+            return 0  # Plan not complete, no extra actions yet
+
+        # Extra force = current force - reserved for battle
+        extra = current_force - self.force_reserved_for_battle
+        return max(0, extra)
+
+    def allows_extra_actions(self, current_force: int) -> bool:
+        """Check if we should allow non-planned extra actions"""
+        return self.get_extra_force_budget(current_force) > 0
 
 
 class DeployPhasePlanner:
@@ -1736,15 +1768,41 @@ class DeployPhasePlanner:
                             available_chars.remove(char)
 
         # =================================================================
-        # STEP 5E: DEPLOY WEAPONS if we have spare force (>= 2 remaining)
+        # STEP 5E: DEPLOY TARGETED WEAPONS if we have spare force (>= 2 remaining)
         # Priority: Attack locations we're deploying to, then existing presence
-        # Weapons attach to characters at locations, so we need chars there
+        # Weapons attach to characters/vehicles/starships based on weapon subtype
+        #
+        # RULES:
+        # - Each character/vehicle/starship can have at most 1 weapon attached
+        # - Weapon subtype must match target type (character→character, etc.)
+        # - Standalone weapons (automated, artillery) are NOT included here
+        #   (they're handled as "extra actions" after planned deployments)
         # =================================================================
         MIN_FORCE_FOR_WEAPONS = 2
-        if weapons and force_remaining >= MIN_FORCE_FOR_WEAPONS:
-            logger.info(f"   🗡️ Checking weapons ({len(weapons)} available, {force_remaining} force remaining)")
 
-            # Find locations where we have or WILL HAVE characters (for weapon targets)
+        # Filter to only TARGETED weapons (not standalone)
+        targeted_weapons = [w for w in weapons if w.get('is_targeted_weapon')]
+        standalone_weapons = [w for w in weapons if w.get('is_standalone_weapon')]
+
+        if standalone_weapons:
+            logger.info(f"   🎯 {len(standalone_weapons)} standalone weapons (automated/artillery) - saved for extra actions")
+
+        if targeted_weapons and force_remaining >= MIN_FORCE_FOR_WEAPONS:
+            logger.info(f"   🗡️ Checking {len(targeted_weapons)} targeted weapons ({force_remaining} force remaining)")
+
+            # Separate by weapon target type
+            char_weapons = [w for w in targeted_weapons if w.get('weapon_target_type') == 'character']
+            vehicle_weapons = [w for w in targeted_weapons if w.get('weapon_target_type') == 'vehicle']
+            starship_weapons = [w for w in targeted_weapons if w.get('weapon_target_type') == 'starship']
+
+            if char_weapons:
+                logger.info(f"      Character weapons: {[w['name'] for w in char_weapons]}")
+            if vehicle_weapons:
+                logger.info(f"      Vehicle weapons: {[w['name'] for w in vehicle_weapons]}")
+            if starship_weapons:
+                logger.info(f"      Starship weapons: {[w['name'] for w in starship_weapons]}")
+
+            # Find locations where we have or WILL HAVE presence
             # Priority order: attack locations (we're deploying there) > existing presence
             attack_locs_for_weapons = [loc for loc in locations if loc.card_id in attack_locations]
             existing_presence = [loc for loc in locations if loc.my_power > 0 and loc.card_id not in attack_locations]
@@ -1753,18 +1811,39 @@ class DeployPhasePlanner:
             weapon_target_locs = attack_locs_for_weapons + existing_presence
 
             if weapon_target_locs:
-                for weapon in weapons:
+                # Track which targets already have a weapon in the plan
+                # (to enforce 1 weapon max per target)
+                targets_with_planned_weapons: Set[str] = set()
+
+                for weapon in targeted_weapons:
                     if force_remaining < weapon['cost']:
                         continue
 
-                    # Find best location for this weapon
-                    target_loc = weapon_target_locs[0] if weapon_target_locs else None
+                    weapon_type = weapon.get('weapon_target_type')
+
+                    # Find a location with a valid target for this weapon type
+                    target_loc = None
+                    for loc in weapon_target_locs:
+                        # Check if this location has a valid target type
+                        # Ground locations: can have characters and vehicles
+                        # Space locations: can have starships
+                        if weapon_type == 'character' and loc.is_ground:
+                            target_loc = loc
+                            break
+                        elif weapon_type == 'vehicle' and loc.is_ground and loc.is_exterior:
+                            target_loc = loc
+                            break
+                        elif weapon_type == 'starship' and loc.is_space:
+                            target_loc = loc
+                            break
+
                     if not target_loc:
+                        logger.info(f"   ⏭️ No valid location for {weapon_type} weapon {weapon['name']}")
                         continue
 
                     # Add weapon to plan
                     is_attack_target = target_loc.card_id in attack_locations
-                    reason = f"Arm character at {target_loc.name}" + (" for BATTLE!" if is_attack_target else "")
+                    reason = f"Arm {weapon_type} at {target_loc.name}" + (" for BATTLE!" if is_attack_target else "")
 
                     plan.instructions.append(DeploymentInstruction(
                         card_blueprint_id=weapon['blueprint_id'],
@@ -1777,13 +1856,16 @@ class DeployPhasePlanner:
                         deploy_cost=weapon['cost'],
                     ))
                     force_remaining -= weapon['cost']
-                    logger.info(f"   🗡️ Plan: Deploy {weapon['name']} (cost {weapon['cost']}) to {target_loc.name}")
+                    logger.info(f"   🗡️ Plan: Deploy {weapon['name']} ({weapon_type} weapon, cost {weapon['cost']}) to {target_loc.name}")
             else:
-                logger.info("   🗡️ No locations with our characters for weapon targets")
+                logger.info("   🗡️ No locations with our presence for weapon targets")
 
         # =================================================================
         # STEP 6: FINALIZE PLAN
         # =================================================================
+
+        # Calculate original plan cost for extra action tracking
+        plan.original_plan_cost = sum(i.deploy_cost for i in plan.instructions)
 
         # Sort instructions by priority
         plan.instructions.sort(key=lambda x: x.priority)
@@ -1833,12 +1915,37 @@ class DeployPhasePlanner:
         return plan
 
     def _get_all_deployable_cards(self, board_state) -> List[Dict]:
-        """Get all cards we can deploy with their metadata"""
+        """Get all cards we can deploy with their metadata.
+
+        Respects SWCCG uniqueness rules:
+        - Unique cards (• prefix) can only have 1 copy on the entire board
+        - If a unique card is already in play, don't include copies from hand
+        - If multiple copies of a unique card are in hand, only include 1
+        """
         from .card_loader import get_card
 
         deployable = []
         # Reserve 1 force for battle effects, but never go negative
         available_force = max(0, board_state.force_pile - 1)
+
+        # === UNIQUENESS TRACKING ===
+        # Track unique card titles already on the board (our side only)
+        unique_titles_on_board: Set[str] = set()
+        my_player = getattr(board_state, 'my_player_name', None)
+
+        if hasattr(board_state, 'cards_in_play'):
+            for card_id, card_in_play in board_state.cards_in_play.items():
+                # Only check our own cards
+                if card_in_play.owner != my_player:
+                    continue
+                # Get metadata to check uniqueness
+                if card_in_play.blueprint_id:
+                    card_meta = get_card(card_in_play.blueprint_id)
+                    if card_meta and card_meta.is_unique:
+                        unique_titles_on_board.add(card_meta.title)
+
+        # Track unique card titles we've already added from hand
+        unique_titles_in_plan: Set[str] = set()
 
         for card in board_state.cards_in_hand:
             if not card.blueprint_id:
@@ -1864,6 +1971,11 @@ class DeployPhasePlanner:
             is_warrior = metadata.is_warrior if hasattr(metadata, 'is_warrior') else False
             is_pure_pilot = metadata.is_pilot and not is_warrior
 
+            # Weapon target type info
+            weapon_target_type = getattr(metadata, 'weapon_target_type', None)
+            is_targeted_weapon = getattr(metadata, 'is_targeted_weapon', False)
+            is_standalone_weapon = getattr(metadata, 'is_standalone_weapon', False)
+
             deployable.append({
                 'card_id': card.card_id,
                 'blueprint_id': card.blueprint_id,
@@ -1883,6 +1995,10 @@ class DeployPhasePlanner:
                 'is_device': metadata.is_device,
                 'has_permanent_pilot': has_permanent_pilot,
                 'needs_pilot': is_unpiloted_craft,
+                # Weapon-specific fields
+                'weapon_target_type': weapon_target_type,  # "character", "vehicle", "starship", or None
+                'is_targeted_weapon': is_targeted_weapon,  # Needs to attach to a target
+                'is_standalone_weapon': is_standalone_weapon,  # Automated/Artillery - no target needed
             })
 
         return deployable
@@ -2034,9 +2150,13 @@ class DeployPhasePlanner:
 
         return locations
 
-    def get_card_score(self, blueprint_id: str) -> Tuple[float, str]:
+    def get_card_score(self, blueprint_id: str, current_force: int = 0) -> Tuple[float, str]:
         """
         Get the score for a card based on whether it's in the plan.
+
+        Args:
+            blueprint_id: Card blueprint ID to score
+            current_force: Current force pile (for extra actions check)
 
         Returns (score, reason)
         """
@@ -2049,9 +2169,18 @@ class DeployPhasePlanner:
             priority_bonus = (3 - instruction.priority) * 50  # Priority 0 = +150, 1 = +100, 2 = +50
             return (100.0 + priority_bonus, instruction.reason)
         else:
-            # Card is NOT in the plan - should not deploy
+            # Card is NOT in the plan
             if self.current_plan.strategy == DeployStrategy.HOLD_BACK:
                 return (-500.0, f"HOLD BACK: {self.current_plan.reason}")
+
+            # Check if we can take extra actions
+            # Plan complete + have force above reserve = allow extra actions
+            if self.current_plan.allows_extra_actions(current_force):
+                extra_budget = self.current_plan.get_extra_force_budget(current_force)
+                logger.info(f"🎁 Plan complete, allowing extra actions (budget: {extra_budget} force)")
+                # Give a small positive score for extra actions
+                # (not as good as planned actions, but not penalized)
+                return (25.0, f"EXTRA ACTION (plan done, {extra_budget} force available)")
             else:
                 return (-100.0, "Not in deployment plan")
 

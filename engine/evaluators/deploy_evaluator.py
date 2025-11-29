@@ -355,9 +355,11 @@ class DeployEvaluator(ActionEvaluator):
                     # USE THE PLANNER'S DECISION - NO SECOND GUESSING!
                     # The planner already figured out the optimal deployment
                     # We just check if this card is in the plan
+                    # After the plan is complete, allow extra actions if we have force above reserve
                     # =======================================================
                     if deploy_plan and blueprint_id:
-                        plan_score, plan_reason = self.planner.get_card_score(blueprint_id)
+                        current_force = bs.force_pile if bs else 0
+                        plan_score, plan_reason = self.planner.get_card_score(blueprint_id, current_force)
                         action.add_reasoning(plan_reason, plan_score)
 
                         # If card is in plan, that's all we need
@@ -464,7 +466,10 @@ class DeployEvaluator(ActionEvaluator):
                         target_name = target_card.card_title or target_card.blueprint_id
                         action.display_text = f"Deploy to {target_name}"
 
-                        # Check if target already has a weapon attached
+                        # =====================================================
+                        # RULE 1: Check if target already has a weapon attached
+                        # Max 1 weapon per character/starship/vehicle
+                        # =====================================================
                         has_existing_weapon = any(
                             get_card(ac.blueprint_id) and get_card(ac.blueprint_id).is_weapon
                             for ac in target_card.attached_cards
@@ -477,6 +482,35 @@ class DeployEvaluator(ActionEvaluator):
                         else:
                             # Target has no weapon - good!
                             action.add_reasoning("Target has no weapon - good", +20.0)
+
+                        # =====================================================
+                        # RULE 2: Check weapon subtype matches target type
+                        # Character weapons → characters
+                        # Vehicle weapons → vehicles
+                        # Starship weapons → starships
+                        # =====================================================
+                        if is_weapon and deploying_card and target_meta:
+                            weapon_target_type = deploying_card.weapon_target_type
+                            if weapon_target_type:
+                                # This is a targeted weapon - check subtype match
+                                target_is_valid = False
+                                if weapon_target_type == "character" and target_meta.is_character:
+                                    target_is_valid = True
+                                    action.add_reasoning("Character weapon → Character", +10.0)
+                                elif weapon_target_type == "vehicle" and target_meta.is_vehicle:
+                                    target_is_valid = True
+                                    action.add_reasoning("Vehicle weapon → Vehicle", +10.0)
+                                elif weapon_target_type == "starship" and target_meta.is_starship:
+                                    target_is_valid = True
+                                    action.add_reasoning("Starship weapon → Starship", +10.0)
+
+                                if not target_is_valid:
+                                    # WRONG TARGET TYPE - VERY BAD
+                                    target_type = "character" if target_meta.is_character else \
+                                                  "vehicle" if target_meta.is_vehicle else \
+                                                  "starship" if target_meta.is_starship else "unknown"
+                                    action.add_reasoning(f"WRONG TARGET TYPE! {weapon_target_type} weapon on {target_type}", -500.0)
+                                    logger.warning(f"⚠️  {deploying_card.title} ({weapon_target_type}) cannot attach to {target_name} ({target_type})")
 
                         # Prefer our own cards over opponent's (if weapon can go on either)
                         if target_card.owner == bs.my_player_name:

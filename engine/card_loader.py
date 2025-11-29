@@ -133,6 +133,49 @@ class Card:
         return self.card_type == "Device"
 
     @property
+    def weapon_target_type(self) -> Optional[str]:
+        """
+        Get the target type for a weapon based on its subtype.
+
+        Returns:
+            "character" - deploys to characters
+            "vehicle" - deploys to vehicles
+            "starship" - deploys to starships
+            None - for automated/artillery/other (no specific target)
+        """
+        if not self.is_weapon:
+            return None
+        if not self.sub_type:
+            return None
+        sub_lower = self.sub_type.lower()
+        if sub_lower == "character":
+            return "character"
+        elif sub_lower == "vehicle":
+            return "vehicle"
+        elif sub_lower == "starship":
+            return "starship"
+        # Automated, Artillery, Death Star, etc. don't target specific cards
+        return None
+
+    @property
+    def is_targeted_weapon(self) -> bool:
+        """Check if this weapon needs to attach to a character/vehicle/starship"""
+        return self.weapon_target_type is not None
+
+    @property
+    def is_standalone_weapon(self) -> bool:
+        """
+        Check if this weapon can be used without attaching to a target.
+        Includes Automated weapons, Artillery, Death Star weapons.
+        """
+        if not self.is_weapon:
+            return False
+        if not self.sub_type:
+            return True  # No subtype, assume standalone
+        sub_lower = self.sub_type.lower()
+        return sub_lower in ("automated", "artillery", "death star", "death star ii")
+
+    @property
     def is_droid(self) -> bool:
         """Check if card is a droid (Character with Droid subtype)"""
         return self.is_character and self.sub_type and 'droid' in self.sub_type.lower()

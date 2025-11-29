@@ -33,6 +33,9 @@ class GEMPClient:
         # Set a reasonable timeout for all requests
         self.timeout = 15
 
+        # Track last error for better diagnostics
+        self.last_error: Optional[str] = None
+
         logger.info(f"GEMP client initialized for {self.server_url}")
 
     def login(self, username: str, password: str) -> bool:
@@ -400,6 +403,7 @@ class GEMPClient:
             )
 
             if response.status_code == 200:
+                self.last_error = None  # Clear error on success
                 logger.debug(f"✅ Game update successful (cn={channel_number}, {len(response.text)} bytes)")
                 # Log XML at INFO level for debugging
                 if len(response.text) < 3000:
@@ -409,15 +413,18 @@ class GEMPClient:
                 return response.text
             elif response.status_code == 409:
                 # 409 = session expired, need to re-login
+                self.last_error = "Session expired (HTTP 409)"
                 logger.warning(f"⚠️  HTTP 409 - Session expired, need to re-login")
                 self.logged_in = False
                 return "SESSION_EXPIRED"
             else:
+                self.last_error = f"HTTP {response.status_code}: {response.text[:100]}"
                 logger.error(f"Failed to get game update: HTTP {response.status_code}")
                 logger.error(f"Response: {response.text[:200]}")
                 return None
 
         except requests.RequestException as e:
+            self.last_error = str(e)
             logger.error(f"Game update request failed: {e}")
             return None
 

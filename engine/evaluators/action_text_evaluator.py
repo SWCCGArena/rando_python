@@ -176,12 +176,57 @@ class ActionTextEvaluator(ActionEvaluator):
             if action_text == "Activate Force":
                 action.action_type = ActionType.ACTIVATE
                 if bs:
-                    # ALMOST ALWAYS activate force - it costs nothing!
-                    # Only skip if reserve deck is critically low (< 5 cards)
+                    # Check if we'd actually activate any force
+                    # This prevents loops where we choose to activate but then activate 0
                     reserve_size = bs.reserve_deck if hasattr(bs, 'reserve_deck') else 20
+                    force_pile = bs.force_pile if hasattr(bs, 'force_pile') else 0
                     force_activated = getattr(bs, 'force_activated_this_turn', 0)
+                    used_pile = getattr(bs, 'used_pile', 0)
+                    life_force = reserve_size + force_pile + used_pile
 
-                    if reserve_size < 5:
+                    # Constants from force_activation_evaluator
+                    MAX_FORCE_PILE = 20
+                    RESERVE_FOR_DESTINY = 3
+                    RESERVE_FOR_DESTINY_ENDGAME = 2
+
+                    # Calculate if we'd actually want to activate any force
+                    would_activate_zero = False
+                    skip_reason = None
+
+                    # Check 1: Force pile already at cap
+                    if force_pile >= MAX_FORCE_PILE:
+                        would_activate_zero = True
+                        skip_reason = f"Force pile at max ({force_pile}/{MAX_FORCE_PILE})"
+
+                    # Check 2: Reserve too low for destiny draws
+                    elif life_force < 10:
+                        # Endgame - need 2 cards for destiny
+                        if reserve_size <= RESERVE_FOR_DESTINY_ENDGAME:
+                            would_activate_zero = True
+                            skip_reason = f"Endgame: reserve ({reserve_size}) needed for destiny"
+                    else:
+                        # Normal game - need 3 cards for destiny
+                        if reserve_size <= RESERVE_FOR_DESTINY:
+                            would_activate_zero = True
+                            skip_reason = f"Reserve ({reserve_size}) needed for destiny draws"
+
+                    # Check 3: Force pile high and already activated enough
+                    if not would_activate_zero and force_pile > 12:
+                        max_more_to_activate = max(0, 2 - force_activated)
+                        if max_more_to_activate == 0:
+                            would_activate_zero = True
+                            skip_reason = f"Force pile high ({force_pile}), already activated {force_activated}"
+                        # Also check if force pile would exceed cap with even 1 more
+                        elif force_pile >= MAX_FORCE_PILE - 1:
+                            would_activate_zero = True
+                            skip_reason = f"Force pile near max ({force_pile}/{MAX_FORCE_PILE})"
+
+                    # Now score based on whether we'd actually activate
+                    if would_activate_zero:
+                        # Would activate 0 - should Pass instead to avoid loop
+                        action.score = BAD_DELTA
+                        action.add_reasoning(f"Skip activation: {skip_reason}", BAD_DELTA)
+                    elif reserve_size < 5:
                         # Very low reserve - save for destiny draws
                         action.score = BAD_DELTA
                         action.add_reasoning(f"Reserve critically low ({reserve_size}) - save for destiny", BAD_DELTA)
