@@ -188,9 +188,26 @@ class BattleEvaluator(ActionEvaluator):
                 logger.warning(f"⚔️ 1-on-1 losing battle, can't flee: {reason}")
             return
 
-        # Use GameStrategy threat assessment if available
-        if game_strategy:
-            threat_level = game_strategy.get_location_threat(loc_idx)
+        # Calculate threat level FRESH from current power values
+        # (Don't use stale cached values from game_strategy - those are outdated after deploy phase)
+        if game_strategy and their_power > 0:
+            # Get thresholds from config
+            favorable = game_strategy._get_config('BATTLE_FAVORABLE_THRESHOLD', 4)
+            danger = game_strategy._get_config('BATTLE_DANGER_THRESHOLD', -6)
+
+            # Calculate fresh threat level
+            if power_diff >= favorable + 4:  # CRUSH
+                threat_level = ThreatLevel.CRUSH
+            elif power_diff >= favorable:  # FAVORABLE
+                threat_level = ThreatLevel.FAVORABLE
+            elif power_diff >= -favorable:  # RISKY (contested)
+                threat_level = ThreatLevel.RISKY
+            elif power_diff >= danger:  # DANGEROUS
+                threat_level = ThreatLevel.DANGEROUS
+            else:  # RETREAT
+                threat_level = ThreatLevel.RETREAT
+
+            logger.debug(f"⚔️ Fresh threat level at loc {loc_idx}: power_diff={power_diff}, threat={threat_level.value}")
 
             if threat_level == ThreatLevel.CRUSH:
                 action.add_reasoning(f"Overwhelming advantage (+{power_diff}) - crush them!", VERY_GOOD_DELTA)

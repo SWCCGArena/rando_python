@@ -75,6 +75,21 @@ class DecisionHandler:
         decision_id = decision_element.get('id', '0')
         decision_text = decision_element.get('text', '')
 
+        # === DETECT "HIT" EVENTS ===
+        # When a character is hit by a weapon, the decision text starts with 'Hit'
+        # e.g., "'Hit' <div class='cardHint' value='224_16'>•Han Solo (V)</div> - Optional responses"
+        # We track hit cards to avoid targeting them again (wasteful)
+        if board_state and decision_text.startswith("'Hit'"):
+            import re
+            # Extract blueprint from cardHint value
+            match = re.search(r"value='([^']+)'", decision_text)
+            if match:
+                hit_blueprint = match.group(1)
+                # Find card_id(s) matching this blueprint at battle location
+                for card_id, card in board_state.cards_in_play.items():
+                    if card.blueprint_id == hit_blueprint:
+                        board_state.mark_card_hit(card_id)
+
         # Parse noLongDelay from decision parameters
         # This flag indicates if a quick response is expected
         server_no_long_delay = False

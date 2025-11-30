@@ -146,9 +146,26 @@ class MoveEvaluator(ActionEvaluator):
 
         power_diff = my_power - their_power
 
-        # Use GameStrategy threat assessment for retreat decisions
-        if game_strategy:
-            threat_level = game_strategy.get_location_threat(loc_idx)
+        # Calculate threat level FRESH from current power values
+        # (Don't use stale cached values from game_strategy - those are outdated after deploy phase)
+        if game_strategy and their_power > 0:
+            # Get thresholds from config
+            favorable = game_strategy._get_config('BATTLE_FAVORABLE_THRESHOLD', 4)
+            danger = game_strategy._get_config('BATTLE_DANGER_THRESHOLD', -6)
+
+            # Calculate fresh threat level
+            if power_diff >= favorable + 4:  # CRUSH
+                threat_level = ThreatLevel.CRUSH
+            elif power_diff >= favorable:  # FAVORABLE
+                threat_level = ThreatLevel.FAVORABLE
+            elif power_diff >= -favorable:  # RISKY (contested)
+                threat_level = ThreatLevel.RISKY
+            elif power_diff >= danger:  # DANGEROUS
+                threat_level = ThreatLevel.DANGEROUS
+            else:  # RETREAT
+                threat_level = ThreatLevel.RETREAT
+
+            logger.debug(f"🏃 Fresh threat level at loc {loc_idx}: power_diff={power_diff}, threat={threat_level.value}")
 
             if threat_level == ThreatLevel.RETREAT:
                 # Definitely should retreat - we're badly outmatched
@@ -158,9 +175,9 @@ class MoveEvaluator(ActionEvaluator):
                 # Should consider retreating
                 action.add_reasoning(f"Dangerous location - retreat recommended ({power_diff})", GOOD_DELTA * 2)
                 return
-            elif game_strategy.is_location_dangerous(loc_idx):
-                # Location is marked dangerous in strategy
-                action.add_reasoning("Retreating from danger zone", GOOD_DELTA)
+            elif threat_level in [ThreatLevel.CRUSH, ThreatLevel.FAVORABLE]:
+                # We have the advantage - don't retreat!
+                action.add_reasoning(f"Power advantage ({power_diff}) - stay and fight!", BAD_DELTA * 2)
                 return
 
         # Flee logic: their power > our power + 2

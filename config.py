@@ -59,7 +59,7 @@ class Config:
     # Network rate limiting (matching web client behavior)
     # These delays make the bot behave more like a human player
     NETWORK_DELAY_QUICK: float = 1.0       # Delay when noLongDelay=true (quick response expected)
-    NETWORK_DELAY_NORMAL: float = 3.0      # Delay when noLongDelay=false (bot should "think")
+    NETWORK_DELAY_NORMAL: float = 2.0      # Delay when noLongDelay=false (bot should "think")
     NETWORK_DELAY_BACKGROUND: float = 30.0 # Delay for background requests (hall, cardInfo)
     NETWORK_DELAY_MIN: float = 0.25        # Absolute minimum between any requests
 

@@ -67,29 +67,40 @@ class DrawEvaluator(ActionEvaluator):
         return None
 
     def can_evaluate(self, context: DecisionContext) -> bool:
-        """Handle CARD_ACTION_CHOICE with draw actions during OUR turn only"""
+        """
+        Handle CARD_ACTION_CHOICE with draw actions.
+
+        STRICT REQUIREMENT: Only evaluate during OUR turn AND Draw phase.
+        "Draw destiny" is NOT drawing cards - it's a random number mechanic.
+        This evaluator is ONLY for the Draw phase decision to draw cards from deck.
+        """
         if context.decision_type not in ['CARD_ACTION_CHOICE', 'ACTION_CHOICE']:
             return False
 
-        # CRITICAL: Only evaluate draw decisions during OUR turn
-        # During opponent's turn, "Choose Draw action" means "do you want to interrupt?"
-        # not "should you draw a card?" - let other evaluators handle interrupts
+        # CRITICAL: Only evaluate during OUR turn
         if context.board_state and not context.board_state.is_my_turn:
             logger.debug(f"🎴 DrawEvaluator skipping - not our turn")
             return False
 
-        # Check if decision text mentions "Draw" - this is the primary trigger
+        # CRITICAL: Only evaluate during Draw phase
+        # "Draw destiny" happens in other phases and is NOT drawing cards!
+        phase = context.phase or ""
+        if "draw" not in phase.lower():
+            logger.debug(f"🎴 DrawEvaluator skipping - not draw phase (phase={phase})")
+            return False
+
+        # Must be our turn AND draw phase - now check for draw actions
         decision_lower = (context.decision_text or "").lower()
         if "draw" in decision_lower and "action" in decision_lower:
-            logger.info(f"🎴 DrawEvaluator triggered by decision text: '{context.decision_text}'")
-            logger.info(f"   Action texts available: {context.action_texts}")
+            logger.info(f"🎴 DrawEvaluator triggered (our turn, draw phase): '{context.decision_text}'")
             return True
 
-        # Also check if any action is a draw action (case-insensitive, flexible matching)
+        # Also check if any action is a draw action
         for action_text in context.action_texts:
             action_lower = action_text.lower()
-            if "draw" in action_lower:
-                logger.info(f"🎴 DrawEvaluator triggered by action text: '{action_text}'")
+            # Match "Draw" but not "Draw destiny" (destiny is random number, not card draw)
+            if "draw" in action_lower and "destiny" not in action_lower:
+                logger.info(f"🎴 DrawEvaluator triggered by action: '{action_text}'")
                 return True
 
         return False

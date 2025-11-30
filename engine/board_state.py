@@ -172,6 +172,10 @@ class BoardState:
         self.light_attrition_remaining: int = 0 # Attrition Light side must satisfy
         self.light_damage_remaining: int = 0    # Battle damage Light side must satisfy
 
+        # Weapons segment tracking - cards that have been "hit" this battle
+        # Cleared at battle end. Hit cards shouldn't be targeted again.
+        self.hit_cards: Set[str] = set()
+
         # Game result tracking (from message events)
         self.game_winner: Optional[str] = None  # Player name who won, or None if game ongoing
         self.game_win_reason: Optional[str] = None  # "Conceded", "Life Force depleted", etc.
@@ -194,6 +198,7 @@ class BoardState:
         self.activation = 0
         self.force_activated_this_turn = 0
         self.in_battle = False
+        self.hit_cards.clear()
         self.game_winner = None
         self.game_win_reason = None
         logger.info("🗑️  Board state cleared")
@@ -691,6 +696,26 @@ class BoardState:
     def is_my_turn(self) -> bool:
         """Check if it's my turn"""
         return self.current_turn_player == self.my_player_name
+
+    # ========== Weapons Segment Hit Tracking ==========
+
+    def mark_card_hit(self, card_id: str) -> None:
+        """
+        Mark a card as 'hit' during the weapons segment.
+        Hit cards shouldn't be targeted again - it's wasteful.
+        """
+        self.hit_cards.add(card_id)
+        logger.info(f"🎯 Marked card {card_id} as HIT")
+
+    def is_card_hit(self, card_id: str) -> bool:
+        """Check if a card has already been hit this battle."""
+        return card_id in self.hit_cards
+
+    def clear_hit_cards(self) -> None:
+        """Clear hit tracking at battle end."""
+        if self.hit_cards:
+            logger.debug(f"Clearing {len(self.hit_cards)} hit cards")
+            self.hit_cards.clear()
 
     @property
     def phase(self) -> str:

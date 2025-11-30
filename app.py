@@ -926,7 +926,9 @@ def bot_worker():
                                         logger.info(f"First event type: {game_events[0].get('type', 'unknown')}")
 
                                         # Process all events iteratively (handles decisions and their responses)
+                                        # Set catching_up flag to skip chat-related callbacks for historical events
                                         logger.info(f"🔄 Processing initial events... (starting cn={bot_state.channel_number})")
+                                        bot_state.event_processor.catching_up = True
                                         new_cn = process_events_iteratively(
                                             game_events,
                                             bot_state.game_id,
@@ -934,6 +936,7 @@ def bot_worker():
                                             bot_state.client,
                                             bot_state.event_processor
                                         )
+                                        bot_state.event_processor.catching_up = False
                                         logger.info(f"✅ Initial events processed, cn: {bot_state.channel_number} -> {new_cn}")
                                         bot_state.channel_number = new_cn
                                     else:
@@ -960,6 +963,12 @@ def bot_worker():
                                 if bot_state.table_manager:
                                     bot_state.table_manager.on_game_ended()
 
+                                # Rotate log file BEFORE clearing state
+                                rotate_game_log(
+                                    opponent_name=bot_state.opponent_name,
+                                    won=bot_won
+                                )
+
                                 # Clear game state and return to lobby
                                 bot_state.current_table_id = None
                                 bot_state.opponent_name = None
@@ -968,12 +977,6 @@ def bot_worker():
                                 bot_state.state = GameState.IN_LOBBY
                                 socketio.emit('state_update', bot_state.to_dict(), namespace='/')
                                 socketio.emit('log_message', {'message': f'🏁 Game already finished - returning to lobby', 'level': 'info'}, namespace='/')
-
-                                # Rotate log file
-                                rotate_game_log(
-                                    opponent_name=bot_state.opponent_name,
-                                    won=bot_won
-                                )
                             else:
                                 # Game is active - enter PLAYING state
                                 bot_state.state = GameState.PLAYING

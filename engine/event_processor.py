@@ -27,6 +27,9 @@ class EventProcessor:
         self._on_card_placed_callbacks = []
         # Callbacks for battle damage events
         self._on_battle_damage_callbacks = []
+        # Flag to indicate we're processing historical events (catching up)
+        # When True, skip chat-related callbacks to avoid re-posting old messages
+        self.catching_up = False
 
     def register_card_placed_callback(self, callback):
         """
@@ -46,6 +49,10 @@ class EventProcessor:
 
     def _notify_battle_damage(self, damage: int):
         """Notify all registered callbacks that battle damage occurred"""
+        # Skip chat-related callbacks when catching up on historical events
+        if self.catching_up:
+            logger.debug(f"💥 Skipping battle damage callback (catching up): {damage}")
+            return
         for callback in self._on_battle_damage_callbacks:
             try:
                 callback(damage)
@@ -54,6 +61,9 @@ class EventProcessor:
 
     def _notify_card_placed(self, card_title: str, blueprint_id: str, zone: str, owner: str):
         """Notify all registered callbacks that a card was placed"""
+        # Skip chat-related callbacks when catching up on historical events
+        if self.catching_up:
+            return
         for callback in self._on_card_placed_callbacks:
             try:
                 callback(card_title, blueprint_id, zone, owner)
@@ -565,6 +575,7 @@ class EventProcessor:
         event_type = event.get('type', '')
         self.board_state.in_battle = False
         self.board_state.current_battle_location = -1  # Clear battle location
+        self.board_state.clear_hit_cards()  # Clear hit tracking for new battle
 
         battle_types = {
             'EB': 'Battle',

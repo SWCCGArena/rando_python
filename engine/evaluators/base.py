@@ -28,6 +28,7 @@ class ActionType(Enum):
     DRAW_DESTINY = "draw_destiny"
     SELECT_CARD = "select_card"
     ARBITRARY = "arbitrary"
+    PLAY_CARD = "play_card"  # Generic "play a card" action
 
     # Combat related
     FIRE_WEAPON = "fire_weapon"
@@ -205,9 +206,14 @@ class PassEvaluator(ActionEvaluator):
             # - BATTLE: We just deployed, we WANT to battle! Don't discourage it.
             # - FOLLOW-THROUGH: "Choose where to move/deploy" - we already committed!
             decision_text_lower = (context.decision_text or "").lower()
+            phase_lower = (context.phase or "").lower()
             is_activate_decision = "activate" in decision_text_lower
             is_draw_decision = "draw" in decision_text_lower and "action" in decision_text_lower
-            is_battle_decision = "battle action" in decision_text_lower or "initiate battle" in decision_text_lower
+            # Detect battle-related decisions:
+            # - "Initiate battle" = explicit battle initiation
+            # - "Battle action" during Battle phase = also battle initiation (GEMP phrasing varies)
+            is_initiate_battle_decision = "initiate battle" in decision_text_lower
+            is_battle_phase_action = "battle" in phase_lower and "battle action" in decision_text_lower
 
             # Follow-through decisions: We already decided to move/deploy, now just picking target
             # Cancelling here wastes the decision we already made - don't encourage it!
@@ -216,10 +222,11 @@ class PassEvaluator(ActionEvaluator):
                 "choose where to deploy" in decision_text_lower
             )
 
-            # For battle decisions, pass should have VERY low score
+            # For battle initiation decisions, pass should have VERY low score
             # We deployed for a reason - we want to fight!
-            if is_battle_decision:
-                action.add_reasoning("Battle decision - should fight, not pass", -10.0)
+            # This includes both "Initiate battle" and "Choose Battle action" during Battle phase
+            if is_initiate_battle_decision or is_battle_phase_action:
+                action.add_reasoning("Battle phase - should fight, not pass", -10.0)
                 return [action]  # Don't add any other bonuses for pass during battle
 
             # For follow-through decisions, pass should also have low score

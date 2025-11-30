@@ -1114,6 +1114,13 @@ class CardSelectionEvaluator(ActionEvaluator):
                     if card.owner != my_name:
                         action.add_reasoning("ENEMY target - good!", +50.0)
 
+                        # Check if this card has already been hit this battle
+                        # Hit cards shouldn't be targeted again - it's wasteful
+                        if bs.is_card_hit(card_id):
+                            action.add_reasoning("ALREADY HIT - don't waste fire!", -500.0)
+                            actions.append(action)
+                            continue  # Skip further evaluation
+
                         # Prefer high-value enemy cards
                         card_meta = get_card(card.blueprint_id) if card.blueprint_id else None
                         if card_meta:

@@ -328,6 +328,26 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.score = VERY_GOOD_DELTA
                 action.add_reasoning("Race destiny always high priority", VERY_GOOD_DELTA)
 
+            # ========== Play a Card (generic) ==========
+            # This action leads to choosing which card to play
+            # Penalize if we have little/no Force (most cards cost 2+ Force)
+            elif action_text == "Play a card":
+                action.action_type = ActionType.PLAY_CARD
+                if bs and bs.force_pile == 0:
+                    action.score = VERY_BAD_DELTA
+                    action.add_reasoning("No Force available - can't play cards!", VERY_BAD_DELTA)
+                elif bs and bs.force_pile <= 1:
+                    # Very low force - most cards cost 2+, unlikely to play anything
+                    action.score = BAD_DELTA
+                    action.add_reasoning(f"Very low Force ({bs.force_pile}) - unlikely to afford cards", BAD_DELTA)
+                else:
+                    # No strong preference - randomize to avoid loops
+                    # Sometimes try playing, sometimes pass. Range: -15 to +15
+                    import random
+                    random_delta = random.uniform(-15.0, 15.0)
+                    action.score = random_delta
+                    action.add_reasoning(f"Generic play card - randomized ({random_delta:+.1f})", random_delta)
+
             # ========== Battle ==========
             elif action_text == "Initiate battle":
                 action.action_type = ActionType.BATTLE
@@ -339,8 +359,26 @@ class ActionTextEvaluator(ActionEvaluator):
             # ========== Fire Weapons ==========
             elif "Fire" in action_text:
                 action.action_type = ActionType.FIRE_WEAPON
-                action.score = VERY_GOOD_DELTA
-                action.add_reasoning("Firing weapons always high priority", VERY_GOOD_DELTA)
+
+                # Check if there are any valid (non-hit) targets at battle location
+                # If all enemies are already hit, don't waste fire
+                has_valid_target = True
+                if bs and bs.in_battle and bs.current_battle_location >= 0:
+                    battle_loc = bs.get_location_by_index(bs.current_battle_location)
+                    if battle_loc and battle_loc.their_cards:
+                        # Check if ANY enemy card at this location is NOT hit
+                        has_valid_target = False
+                        for enemy_card in battle_loc.their_cards:
+                            if not bs.is_card_hit(enemy_card.card_id):
+                                has_valid_target = True
+                                break
+
+                if has_valid_target:
+                    action.score = VERY_GOOD_DELTA
+                    action.add_reasoning("Firing weapons always high priority", VERY_GOOD_DELTA)
+                else:
+                    action.score = VERY_BAD_DELTA
+                    action.add_reasoning("All targets already HIT - don't waste fire!", VERY_BAD_DELTA)
 
             # ========== Force Lightning / Reduce Defense ==========
             elif "Reduce target's defense value" in action_text or "reduce target's defense" in text_lower:

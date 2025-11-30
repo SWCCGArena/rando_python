@@ -293,6 +293,20 @@ class DeployEvaluator(ActionEvaluator):
         deploy_plan = None
         if bs:
             deploy_plan = self.planner.create_plan(bs)
+
+            # === AUTO-CLEANUP: Detect deployed cards ===
+            # Check if any planned cards are no longer in hand - they were deployed!
+            # This fixes the STALE PLAN bug where record_deployment() was never called
+            if deploy_plan and deploy_plan.instructions:
+                hand_blueprints = {c.blueprint_id for c in bs.cards_in_hand if c.blueprint_id}
+                deployed_cards = []
+                for instruction in deploy_plan.instructions:
+                    if instruction.card_blueprint_id not in hand_blueprints:
+                        deployed_cards.append(instruction)
+
+                for instruction in deployed_cards:
+                    logger.info(f"📋 Auto-detected deployment: {instruction.card_name} left hand")
+                    self.planner.record_deployment(instruction.card_blueprint_id)
             # Show plan status - useful for debugging
             if deploy_plan.is_plan_complete():
                 logger.info(f"📋 Deploy plan: COMPLETE ({deploy_plan.deployments_made} deployed)")
@@ -349,10 +363,28 @@ class DeployEvaluator(ActionEvaluator):
                         break
 
             if not plan_cards_available and deploy_action_count > 0 and not deploy_plan.is_plan_complete():
-                logger.warning(f"⚠️  STALE PLAN: Plan has {len(deploy_plan.instructions)} cards but NONE are in available actions!")
-                logger.warning(f"   Plan cards: {[i.card_name for i in deploy_plan.instructions]}")
-                # Mark plan as allowing extra actions since planned cards aren't available
-                deploy_plan.force_allow_extras = True
+                # Check if ALL remaining instructions are weapons
+                # Weapons have complex deployment restrictions (matching characters, etc.)
+                # that the planner can't fully model, so don't treat weapon-only as stale
+                all_weapons = True
+                for instr in deploy_plan.instructions:
+                    card_meta = get_card(instr.card_blueprint_id)
+                    if not card_meta or not card_meta.is_weapon:
+                        all_weapons = False
+                        break
+
+                if all_weapons:
+                    # Weapon-only plan - weapons not deployable due to restrictions
+                    # Mark plan complete (can't deploy these weapons) and allow extras
+                    logger.info(f"📋 Weapon plan not deployable (no valid targets) - marking complete")
+                    for instr in deploy_plan.instructions:
+                        self.planner.record_deployment(instr.card_blueprint_id)
+                    deploy_plan.force_allow_extras = True
+                else:
+                    logger.warning(f"⚠️  STALE PLAN: Plan has {len(deploy_plan.instructions)} cards but NONE are in available actions!")
+                    logger.warning(f"   Plan cards: {[i.card_name for i in deploy_plan.instructions]}")
+                    # Mark plan as allowing extra actions since planned cards aren't available
+                    deploy_plan.force_allow_extras = True
 
         for i, action_id in enumerate(context.action_ids):
             action_text = context.action_texts[i] if i < len(context.action_texts) else "Unknown"
