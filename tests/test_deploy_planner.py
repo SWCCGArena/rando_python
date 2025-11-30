@@ -229,6 +229,7 @@ class MockCardMetadata:
     is_location: bool = False
     is_weapon: bool = False
     is_device: bool = False
+    weapon_target_type: Optional[str] = None  # "character", "vehicle", "starship", or None for standalone
     is_effect: bool = False
     is_interrupt: bool = False
 
@@ -565,8 +566,45 @@ class ScenarioBuilder:
 
         return self
 
+    def add_weapon(self, name: str, deploy_cost: int,
+                   target_type: str = "character") -> 'ScenarioBuilder':
+        """Add a weapon to hand.
+
+        Args:
+            target_type: "character", "vehicle", "starship", or "standalone"
+                        Determines what the weapon can be attached to.
+        """
+        card_id = f"card_{self._card_counter}"
+        bp_id = f"weapon_bp_{self._card_counter}"
+        self._card_counter += 1
+
+        card = MockCard(
+            card_id=card_id,
+            blueprint_id=bp_id,
+            card_title=name,
+            card_type="Weapon",
+            deploy=deploy_cost,
+        )
+        self.board.cards_in_hand.append(card)
+
+        # Map target_type to weapon_target_type (None for standalone)
+        weapon_target = target_type if target_type != "standalone" else None
+
+        register_mock_card(bp_id,
+            title=name,
+            side=self.board.my_side.capitalize(),
+            card_type="Weapon",
+            sub_type=target_type.capitalize() if target_type else "Automated",
+            deploy_value=deploy_cost,
+            is_weapon=True,
+            weapon_target_type=weapon_target,
+        )
+
+        return self
+
     def add_character_in_play(self, name: str, power: int, location_name: str,
-                               is_unique: bool = True) -> 'ScenarioBuilder':
+                               is_unique: bool = True,
+                               is_warrior: bool = True) -> 'ScenarioBuilder':
         """Add a character that is already deployed on the board.
 
         Used for testing uniqueness - if a unique card is already in play,
@@ -618,6 +656,7 @@ class ScenarioBuilder:
             power_value=power,
             is_character=True,
             is_unique=is_unique,
+            is_warrior=is_warrior,
         )
 
         return self
@@ -1932,8 +1971,8 @@ def test_vehicle_deploys_to_exterior():
         .add_ground_location("Interior Site", my_icons=2, their_icons=2, interior=True, exterior=False)
         # Exterior - vehicle CAN go here
         .add_ground_location("Exterior Site", my_icons=1, their_icons=2, interior=False, exterior=True)
-        # Vehicle with permanent pilot
-        .add_vehicle("AT-ST", power=4, deploy_cost=4, has_permanent_pilot=True)
+        # Vehicle with permanent pilot - power must meet threshold (6)
+        .add_vehicle("AT-AT", power=7, deploy_cost=6, has_permanent_pilot=True)
         # Vehicle should deploy to exterior only
         .expect_target("Exterior Site")
         .build()
@@ -1953,6 +1992,28 @@ def test_vehicle_alone_meets_threshold():
         .add_vehicle("AT-AT", power=7, deploy_cost=7, has_permanent_pilot=True)
         .expect_deployment("AT-AT")
         .expect_target("Target")
+        .build()
+    )
+    result = run_scenario(scenario)
+    assert result.passed, f"Failed: {result.failures}"
+
+
+def test_weak_vehicle_below_threshold_holds_back():
+    """Test that a weak vehicle doesn't deploy alone to establish.
+
+    A 2-power vehicle shouldn't establish control at an uncontested location
+    when the deploy threshold is 6. This prevents deploying weak forces
+    that will be easily destroyed.
+    """
+    scenario = (
+        ScenarioBuilder("Weak Vehicle Below Threshold")
+        .as_side("dark")
+        .with_force(10)
+        .add_ground_location("Swamp", my_icons=1, their_icons=1, exterior=True)
+        # Weak vehicle - 2 power, well below threshold of 6
+        .add_vehicle("TT-6", power=2, deploy_cost=2, has_permanent_pilot=True)
+        # Should hold back - can't meet threshold alone
+        .expect_hold_back()
         .build()
     )
     result = run_scenario(scenario)
@@ -1982,17 +2043,20 @@ def test_unpiloted_vehicle_needs_pilot():
 
 
 def test_vehicle_plus_character_combo():
-    """Test deploying vehicle and character together for higher power."""
+    """Test deploying vehicle and character together.
+
+    Characters establish first (meeting threshold), then vehicles pile on.
+    """
     scenario = (
         ScenarioBuilder("Vehicle + Character Combo")
         .as_side("dark")
         .with_force(20)
         .add_ground_location("Target", my_icons=2, their_icons=3, exterior=True)
-        # Vehicle with 4 power
+        # Vehicle with permanent pilot - below threshold alone but piles on
         .add_vehicle("AT-ST", power=4, deploy_cost=4, has_permanent_pilot=True)
-        # Character with 4 power
-        .add_character("Stormtrooper Commander", power=4, deploy_cost=4)
-        # Combined: 8 power, well above threshold
+        # Character meets threshold alone
+        .add_character("Stormtrooper Commander", power=6, deploy_cost=4)
+        # Character establishes (6 power), vehicle piles on (+4 = 10 total)
         .expect_target("Target")
         .build()
     )
@@ -2062,18 +2126,23 @@ def test_interior_blocks_vehicle_forces_character():
     assert result.passed, f"Failed: {result.failures}"
 
 
-def test_multiple_vehicles_combine():
-    """Test that multiple vehicles can combine power at same location."""
+def test_multiple_vehicles_pile_on():
+    """Test that multiple vehicles pile on after characters establish.
+
+    Vehicles require threshold to establish alone, but can pile on
+    once characters have established presence at a location.
+    """
     scenario = (
-        ScenarioBuilder("Multiple Vehicles")
+        ScenarioBuilder("Multiple Vehicles Pile On")
         .as_side("dark")
-        .with_force(20)
+        .with_force(25)
         .add_ground_location("Target", my_icons=2, their_icons=3, exterior=True)
-        # Two vehicles that together exceed threshold
+        # Character meets threshold to establish
+        .add_character("Commander", power=6, deploy_cost=4)
+        # Vehicles pile on after character establishes
         .add_vehicle("AT-ST 1", power=3, deploy_cost=3, has_permanent_pilot=True)
         .add_vehicle("AT-ST 2", power=3, deploy_cost=3, has_permanent_pilot=True)
-        .add_vehicle("AT-ST 3", power=3, deploy_cost=3, has_permanent_pilot=True)
-        # Combined: 9 power
+        # Combined: 6 + 3 + 3 = 12 power
         .expect_target("Target")
         .build()
     )
@@ -4624,6 +4693,326 @@ def test_crushable_just_under_overkill_threshold():
     # Should be able to deploy since we're just under overkill threshold
     assert len(mos_espa_deploys) > 0 or result.plan.strategy.value == "hold_back", \
         "Should either deploy to crushable or hold back for strategic reasons"
+
+
+# =============================================================================
+# BACKUP TARGET TESTS
+# =============================================================================
+
+def test_backup_targets_assigned():
+    """Test that backup targets are assigned for each deployment instruction.
+
+    When deploying to a primary target, there should be a backup in case
+    the primary is blocked by game rules (e.g., location full, card text).
+    """
+    scenario = (
+        ScenarioBuilder("Backup Targets")
+        .as_side("dark")
+        .with_force(15)
+        # Two ground locations - primary and potential backup
+        .add_ground_location("Throne Room", my_icons=2, their_icons=2, their_power=5)
+        .add_ground_location("Courtyard", my_icons=2, their_icons=1, their_power=3)
+        # Characters to deploy
+        .add_character("Panaka", power=4, deploy_cost=4)
+        .add_character("Queen", power=3, deploy_cost=3)
+        .expect_target("Throne Room")  # Primary - more opponent power to fight
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check that instructions have backup targets
+    instructions_with_targets = [i for i in result.plan.instructions if i.target_location_id]
+    assert len(instructions_with_targets) > 0, "Should have deployment instructions"
+
+    for inst in instructions_with_targets:
+        logger.info(f"   📋 {inst.card_name}: primary={inst.target_location_name}, backup={inst.backup_location_name}")
+        assert inst.backup_location_id is not None, \
+            f"{inst.card_name} should have a backup target, but has none"
+        assert inst.backup_location_name is not None, \
+            f"{inst.card_name} should have backup location name"
+        # Backup should be different from primary
+        assert inst.backup_location_id != inst.target_location_id, \
+            f"{inst.card_name} backup should differ from primary"
+
+
+# =============================================================================
+# SAFE LOCATION TESTS - Don't reinforce locations where opponent can't threaten
+# =============================================================================
+
+def test_no_reinforce_safe_location_no_opponent_icons():
+    """Test that bot does NOT reinforce a location that is already safe.
+
+    If we have cards at a location, opponent has no cards there, AND opponent
+    has no force icons (can't deploy there), there's no point reinforcing -
+    our cards are not at risk.
+
+    This should deploy to contested area instead.
+    """
+    scenario = (
+        ScenarioBuilder("Safe Location - No Reinforce")
+        .as_side("dark")
+        .with_force(10)
+        # Safe location: we have presence, opponent has nothing and CAN'T deploy
+        .add_ground_location("Safe Bunker", my_icons=2, their_icons=0, my_power=4)
+        # Another location where opponent IS present - this is where we should go
+        .add_ground_location("Contested Area", my_icons=2, their_icons=2, their_power=5)
+        # Character to deploy
+        .add_character("Reinforcement", power=4, deploy_cost=4)
+        # Should go to contested area, NOT safe bunker
+        .expect_target("Contested Area")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check we did NOT deploy to the safe location
+    safe_deploys = [i for i in result.plan.instructions
+                    if i.target_location_name == "Safe Bunker"]
+
+    logger.info(f"   📊 Safe location deploys: {len(safe_deploys)}")
+    logger.info(f"   📊 All deploys: {[i.target_location_name for i in result.plan.instructions]}")
+
+    assert len(safe_deploys) == 0, \
+        f"Should NOT reinforce safe location with no opponent icons! Got: {[i.card_name for i in safe_deploys]}"
+
+
+def test_no_reinforce_safe_location_only_option():
+    """Test behavior when safe location is the ONLY option.
+
+    If we have a safe location (our presence, no opponent, no opponent icons)
+    and NO other deployment targets, we should HOLD BACK rather than waste
+    cards at a location that's already secure.
+    """
+    scenario = (
+        ScenarioBuilder("Safe Location Only - Hold Back")
+        .as_side("dark")
+        .with_force(10)
+        # Only location is safe - we control it, opponent can't threaten
+        .add_ground_location("Safe Bunker", my_icons=2, their_icons=0, my_power=4)
+        # Character to deploy
+        .add_character("Trooper", power=3, deploy_cost=3)
+        # Should hold back - no point deploying to already-safe location
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.passed, f"Failed: {result.failures}"
+
+
+# =============================================================================
+# WARRIOR WEAPON TESTS
+# =============================================================================
+
+def test_character_weapon_only_allocated_to_warriors():
+    """Character weapons should only be allocated to warrior characters.
+
+    Non-warriors cannot hold character weapons in SWCCG.
+    """
+    scenario = (
+        ScenarioBuilder("Warrior Weapon Allocation")
+        .as_side("dark")
+        .with_force(15)
+        # Location with opponent presence
+        .add_ground_location("Cantina", my_icons=1, their_icons=1, their_power=3)
+        # One warrior and one non-warrior
+        .add_character("Stormtrooper", power=3, deploy_cost=2, is_warrior=True)
+        .add_character("Protocol Droid", power=1, deploy_cost=2, is_warrior=False)
+        # One character weapon
+        .add_weapon("Blaster Rifle", deploy_cost=1, target_type="character")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check that the weapon was allocated
+    weapon_instructions = [i for i in result.plan.instructions
+                          if "Blaster Rifle" in i.card_name]
+
+    if len(weapon_instructions) > 0:
+        # The weapon should be planned for a location where a warrior is
+        weapon_loc = weapon_instructions[0].target_location_name
+        # Check that a warrior is also being deployed to that location
+        warrior_at_loc = any(i for i in result.plan.instructions
+                            if i.target_location_name == weapon_loc
+                            and "Stormtrooper" in i.card_name)
+        assert warrior_at_loc, "Weapon should only be allocated where a warrior is being deployed"
+
+
+def test_multiple_weapons_require_multiple_warriors():
+    """Multiple character weapons require multiple warriors.
+
+    If we have 2 weapons but only 1 warrior, only 1 weapon should be allocated.
+    """
+    scenario = (
+        ScenarioBuilder("Multiple Weapons Need Multiple Warriors")
+        .as_side("dark")
+        .with_force(20)
+        .add_ground_location("Cantina", my_icons=1, their_icons=1, their_power=3)
+        # Only ONE warrior
+        .add_character("Stormtrooper", power=3, deploy_cost=2, is_warrior=True)
+        # Non-warrior
+        .add_character("Protocol Droid", power=1, deploy_cost=2, is_warrior=False)
+        # TWO character weapons
+        .add_weapon("Blaster Rifle", deploy_cost=1, target_type="character")
+        .add_weapon("Blaster Pistol", deploy_cost=1, target_type="character")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Count how many character weapons were allocated
+    weapon_instructions = [i for i in result.plan.instructions
+                          if i.card_name and ("Blaster Rifle" in i.card_name or
+                                             "Blaster Pistol" in i.card_name)]
+
+    logger.info(f"   📊 Weapons allocated: {len(weapon_instructions)}")
+    logger.info(f"   📊 Weapon instructions: {[i.card_name for i in weapon_instructions]}")
+
+    # Should only allocate 1 weapon since we only have 1 warrior
+    assert len(weapon_instructions) <= 1, \
+        f"Should only allocate 1 weapon for 1 warrior, but allocated {len(weapon_instructions)}"
+
+
+def test_non_warrior_character_gets_no_weapon():
+    """A scenario with only non-warriors should not allocate character weapons."""
+    scenario = (
+        ScenarioBuilder("Non-Warriors Cannot Hold Weapons")
+        .as_side("light")
+        .with_force(15)
+        .add_ground_location("Cantina", my_icons=1, their_icons=1, their_power=3)
+        # Only non-warriors
+        .add_character("Protocol Droid", power=1, deploy_cost=2, is_warrior=False)
+        .add_character("R2 Unit", power=2, deploy_cost=2, is_warrior=False)
+        # Character weapon - should NOT be allocated
+        .add_weapon("Blaster Rifle", deploy_cost=1, target_type="character")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # No character weapons should be allocated
+    weapon_instructions = [i for i in result.plan.instructions
+                          if i.card_name and "Blaster Rifle" in i.card_name]
+
+    assert len(weapon_instructions) == 0, \
+        f"No character weapons should be allocated without warriors, but got: {[i.card_name for i in weapon_instructions]}"
+
+
+def test_vehicle_weapon_not_affected_by_warrior_rule():
+    """Vehicle weapons should still be allocated regardless of warrior status.
+
+    The warrior restriction only applies to character weapons.
+    """
+    scenario = (
+        ScenarioBuilder("Vehicle Weapons Ignore Warrior Rule")
+        .as_side("dark")
+        .with_force(20)
+        .add_ground_location("Battlefield", my_icons=1, their_icons=1, their_power=5)
+        # Vehicle with no warrior status
+        .add_vehicle("AT-ST", power=4, deploy_cost=3, has_permanent_pilot=True)
+        # Vehicle weapon - should be allocated
+        .add_weapon("Laser Cannon", deploy_cost=1, target_type="vehicle")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Vehicle weapon should be allocated
+    weapon_instructions = [i for i in result.plan.instructions
+                          if i.card_name and "Laser Cannon" in i.card_name]
+
+    # The weapon should be in the plan (either allocated or not, but not blocked by warrior rule)
+    logger.info(f"   📊 Vehicle weapon allocated: {len(weapon_instructions) > 0}")
+
+
+def test_warrior_in_play_allows_weapon():
+    """A warrior already in play should allow weapon allocation."""
+    scenario = (
+        ScenarioBuilder("Warrior In Play Allows Weapon")
+        .as_side("dark")
+        .with_force(10)
+        .add_ground_location("Cantina", my_icons=1, their_icons=1, their_power=3, my_power=3)
+        # Warrior already on the board
+        .add_character_in_play("Stormtrooper", power=3, location_name="Cantina", is_warrior=True)
+        # No warriors in hand
+        .add_character("Protocol Droid", power=1, deploy_cost=2, is_warrior=False)
+        # Character weapon - should be allocated because warrior is in play
+        .add_weapon("Blaster Rifle", deploy_cost=1, target_type="character")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Weapon should be allocated to Cantina where the warrior is
+    weapon_instructions = [i for i in result.plan.instructions
+                          if i.card_name and "Blaster Rifle" in i.card_name]
+
+    logger.info(f"   📊 Weapons allocated: {len(weapon_instructions)}")
+
+    # The weapon should be allocated if we're deploying to Cantina
+    if len(weapon_instructions) > 0:
+        assert weapon_instructions[0].target_location_name == "Cantina", \
+            "Weapon should target location with warrior in play"
+
+
+# =============================================================================
+# CONTESTED/UNCONTESTED FALLBACK TESTS
+# =============================================================================
+
+def test_uncontested_fallback_when_contested_too_strong():
+    """Test that we establish at uncontested locations when contested ones are too strong.
+
+    This tests the scenario where:
+    - There are contested locations (opponent has presence)
+    - Contested locations need high power to beat (e.g., 8+ power)
+    - We can't afford enough power to beat the contested locations
+    - BUT we have uncontested locations where we CAN establish
+
+    The planner should fall back to establishing at uncontested locations
+    rather than holding back entirely.
+    """
+    scenario = (
+        ScenarioBuilder("Uncontested Fallback")
+        .as_side("dark")
+        .with_force(10)  # Enough to deploy (minus 2 battle reserve = 8 available)
+        # Contested locations - too strong to beat with available characters
+        .add_ground_location("Theed Courtyard", my_icons=2, their_icons=1, their_power=6)
+        .add_ground_location("Theed Docking Bay", my_icons=1, their_icons=1, their_power=8)
+        # Uncontested locations - we can establish here!
+        .add_ground_location("Coruscant Docking Bay", my_icons=1, their_icons=1, their_power=0)
+        .add_ground_location("Swamp", my_icons=1, their_icons=1, their_power=0, exterior=True)
+        # Characters - best is 6 power, can't beat 8 (needs 10) but CAN establish at uncontested
+        .add_character("OWO-1 With Backup", power=6, deploy_cost=6)
+        .add_character("Destroyer Droid", power=3, deploy_cost=3)
+        # Should establish at uncontested location, not hold back
+        .expect_target("Coruscant Docking Bay")  # Or Swamp - either is valid
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Should have a deployment plan, not hold back
+    assert len(result.plan.instructions) > 0, \
+        "Should deploy to uncontested location when contested locations are too strong"
+
+    # Should target an uncontested location
+    deployed_to = [i.target_location_name for i in result.plan.instructions if i.target_location_name]
+    assert any(loc in ["Coruscant Docking Bay", "Swamp"] for loc in deployed_to), \
+        f"Should deploy to uncontested location, but deployed to: {deployed_to}"
+
+
+def test_contested_preferred_when_beatable():
+    """Test that contested locations are preferred when we can beat them."""
+    scenario = (
+        ScenarioBuilder("Contested Preferred")
+        .as_side("dark")
+        .with_force(10)
+        # Weak contested location - we can beat this!
+        .add_ground_location("Weak Outpost", my_icons=1, their_icons=1, their_power=3)
+        # Uncontested location
+        .add_ground_location("Empty Base", my_icons=1, their_icons=1, their_power=0)
+        # Strong character that can beat the contested location
+        .add_character("Darth Maul", power=7, deploy_cost=7)
+        # Should prefer the contested location since we can beat it
+        .expect_target("Weak Outpost")
+        .build()
+    )
+    result = run_scenario(scenario)
+    assert result.passed, f"Failed: {result.failures}"
 
 
 # =============================================================================

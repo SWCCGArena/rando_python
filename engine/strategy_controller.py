@@ -22,8 +22,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Max location checks per turn (network optimization)
-MAX_LOCATION_CHECKS_PER_TURN = 5
+# Default max location checks per turn (network optimization)
+# Can be overridden via config.MAX_LOCATION_CHECKS_PER_TURN
+DEFAULT_MAX_LOCATION_CHECKS_PER_TURN = 5
 
 
 @dataclass
@@ -63,6 +64,19 @@ class StrategyController:
         self._locations_checked_ever: Set[str] = set()
         self._checks_this_turn = 0
 
+        # Optimization: Don't check locations until first Control phase
+        self._first_control_phase_seen = False
+
+        # Optimization: Track deployments to know when to re-check locations
+        self._last_deployment_count = 0  # Total deployments to side_of_table
+        self._location_deployment_version: dict = {}  # card_id -> deployment count when last checked
+
+        # Max location checks per turn (from config or default)
+        self._max_location_checks = (
+            getattr(config, 'MAX_LOCATION_CHECKS_PER_TURN', DEFAULT_MAX_LOCATION_CHECKS_PER_TURN)
+            if config else DEFAULT_MAX_LOCATION_CHECKS_PER_TURN
+        )
+
         # Strategy tracking
         self.last_decision_reason = "I haven't made any decisions yet."
 
@@ -80,6 +94,11 @@ class StrategyController:
         self._locations_checked_ever.clear()
         self._checks_this_turn = 0
 
+        # Reset optimization state
+        self._first_control_phase_seen = False
+        self._last_deployment_count = 0
+        self._location_deployment_version.clear()
+
         # Reset game strategy
         self.game_strategy.reset()
 
@@ -95,6 +114,37 @@ class StrategyController:
 
         logger.debug(f"Strategy controller: turn {turn_number} started")
 
+    def on_phase_change(self, phase: str):
+        """
+        Called when game phase changes.
+
+        Used to detect first Control phase - we don't start location checks
+        until then because cards need to be deployed first.
+
+        Args:
+            phase: The new phase string (e.g., "Control (turn #2)")
+        """
+        if 'Control' in phase and not self._first_control_phase_seen:
+            self._first_control_phase_seen = True
+            logger.info("📊 First Control phase - location checks now enabled")
+
+    def on_card_deployed(self, location_card_id: str):
+        """
+        Called when a card is deployed to side_of_table at a location.
+
+        Increments deployment counter and invalidates the location's cached
+        check result so it will be re-checked on next Control phase.
+
+        Args:
+            location_card_id: The card_id of the location where deployment occurred
+        """
+        self._last_deployment_count += 1
+
+        # Invalidate this location's check so it will be re-checked
+        if location_card_id in self._location_deployment_version:
+            del self._location_deployment_version[location_card_id]
+            logger.debug(f"📊 Location {location_card_id} invalidated for re-check due to deployment")
+
     def get_locations_to_check(self, board_state: 'BoardState') -> List['LocationInPlay']:
         """
         Get list of locations that should be checked this turn.
@@ -102,6 +152,11 @@ class StrategyController:
         Returns up to MAX_LOCATION_CHECKS_PER_TURN locations, prioritizing:
         1. Locations with cards present (either player)
         2. Locations not yet checked this game
+        3. Locations that have had new deployments since last check
+
+        Optimizations:
+        - Don't check until first Control phase (cards need to deploy first)
+        - Skip locations that haven't had new deployments since last check
 
         Args:
             board_state: Current board state
@@ -109,12 +164,17 @@ class StrategyController:
         Returns:
             List of LocationInPlay to check
         """
-        if self._checks_this_turn >= MAX_LOCATION_CHECKS_PER_TURN:
+        # Optimization: Don't check until first Control phase is seen
+        if not self._first_control_phase_seen:
+            logger.debug("📊 Skipping location checks - first Control phase not seen yet")
+            return []
+
+        if self._checks_this_turn >= self._max_location_checks:
             logger.debug("Already at max location checks for this turn")
             return []
 
         locations_to_check = []
-        remaining_checks = MAX_LOCATION_CHECKS_PER_TURN - self._checks_this_turn
+        remaining_checks = self._max_location_checks - self._checks_this_turn
 
         # Prioritize locations with cards present
         for loc in board_state.locations:
@@ -124,6 +184,14 @@ class StrategyController:
             # Skip locations already checked this turn
             if loc.card_id in self._locations_checked_this_turn:
                 continue
+
+            # Optimization: Skip locations that have been checked and haven't
+            # had any new deployments since then
+            if loc.card_id in self._location_deployment_version:
+                last_check_deployment = self._location_deployment_version[loc.card_id]
+                if last_check_deployment >= self._last_deployment_count:
+                    logger.debug(f"📊 Skipping {loc.site_name} - no new deployments since last check")
+                    continue
 
             # Check if any cards are at this location
             has_cards = len(loc.my_cards) > 0 or len(loc.their_cards) > 0
@@ -234,6 +302,9 @@ class StrategyController:
         """
         Update a LocationInPlay with data from a cardInfo check.
 
+        Also records the current deployment count so we know when this location
+        needs to be re-checked (only after new deployments).
+
         Args:
             location: The location to update
             result: The check result
@@ -241,6 +312,9 @@ class StrategyController:
         location.my_drain_amount = result.my_drain_amount
         location.my_icons = result.my_icons
         location.their_icons = result.their_icons
+
+        # Record deployment version so we don't re-check until new deployments
+        self._location_deployment_version[location.card_id] = self._last_deployment_count
 
         logger.debug(f"Updated location {location.site_name}: drain={result.my_drain_amount}, icons={result.my_icons}")
 

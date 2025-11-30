@@ -100,6 +100,10 @@ class DeploymentInstruction:
     reason: str
     power_contribution: int = 0
     deploy_cost: int = 0
+    # Backup target if primary is unavailable (e.g., blocked by game rules)
+    backup_location_id: Optional[str] = None
+    backup_location_name: Optional[str] = None
+    backup_reason: Optional[str] = None
 
 
 @dataclass
@@ -125,6 +129,9 @@ class DeploymentPlan:
     # Phase state
     phase_started: bool = False
     deployments_made: int = 0
+
+    # Flag set by evaluator when planned cards aren't available
+    force_allow_extras: bool = False
 
     # Original plan cost (before any deployments)
     original_plan_cost: int = 0
@@ -1339,6 +1346,7 @@ class DeployPhasePlanner:
             and loc.my_power < MIN_ESTABLISH_POWER  # Below threshold
             and loc.is_ground  # Ground location
             and loc.my_icons > 0  # Skip 0-icon locations (low value to reinforce)
+            and loc.their_icons > 0  # Skip if opponent can't deploy here (safe location!)
         ]
         weak_presence_space = [
             loc for loc in locations
@@ -1347,6 +1355,7 @@ class DeployPhasePlanner:
             and loc.my_power < MIN_ESTABLISH_POWER  # Below threshold
             and loc.is_space  # Space location
             and loc.my_icons > 0  # Skip 0-icon locations (low value to reinforce)
+            and loc.their_icons > 0  # Skip if opponent can't deploy here (safe location!)
         ]
 
         # Sort by icons (higher value locations first), then by how close to threshold
@@ -1585,7 +1594,16 @@ class DeployPhasePlanner:
             key=lambda x: (x.their_power > 0, x.their_icons),  # Contested first, then icons
             reverse=True
         )
-        char_ground_targets = char_ground_targets[:MAX_ESTABLISH_LOCATIONS]
+
+        # IMPORTANT: Don't discard uncontested locations entirely!
+        # If we have contested locations that need high power, we may not be able to beat them
+        # but we should still be able to establish at uncontested locations.
+        # Keep at least 1 uncontested location if available
+        contested_targets = [loc for loc in char_ground_targets if loc.their_power > 0]
+        uncontested_targets = [loc for loc in char_ground_targets if loc.their_power == 0]
+
+        # Take up to 2 contested (high priority) and at least 1 uncontested (fallback)
+        char_ground_targets = contested_targets[:2] + uncontested_targets[:2]
 
         # Log why locations were excluded
         excluded_space = [loc.name for loc in locations if loc.is_space and not loc.is_ground]
@@ -1902,13 +1920,17 @@ class DeployPhasePlanner:
 
         logger.info(f"   🎯 Ground targets for vehicles (exterior): {[loc.name for loc in ground_targets]}")
 
+        # Apply deploy threshold to vehicles too
+        MIN_ESTABLISH_POWER = self.deploy_threshold
+
         # Deploy piloted combos (vehicle + pilot together)
         for loc in ground_targets:
             if not piloted_combos or force_remaining <= 0:
                 break
 
-            # Find best combo that can beat opponent's power
-            power_needed = loc.their_power + 1
+            # At contested locations: just beat opponent
+            # At uncontested locations: must meet threshold to establish
+            power_needed = loc.their_power + 1 if loc.their_power > 0 else MIN_ESTABLISH_POWER
             affordable_combos = [c for c in piloted_combos if c['cost'] <= force_remaining]
 
             if not affordable_combos:
@@ -1960,7 +1982,9 @@ class DeployPhasePlanner:
             if not piloted_vehicles or force_remaining <= 0:
                 break
 
-            power_needed = loc.their_power + 1
+            # At contested locations: just beat opponent
+            # At uncontested locations: must meet threshold to establish
+            power_needed = loc.their_power + 1 if loc.their_power > 0 else MIN_ESTABLISH_POWER
 
             for vehicle in piloted_vehicles[:]:  # Copy to allow removal
                 if vehicle['cost'] > force_remaining:
@@ -2085,10 +2109,45 @@ class DeployPhasePlanner:
             # Combine in priority order - attack locations first!
             weapon_target_locs = attack_locs_for_weapons + existing_presence
 
+            # =================================================================
+            # WARRIOR TRACKING for character weapons
+            # Character weapons can ONLY be held by warriors!
+            # Track available warriors at each location (from plan + existing)
+            # =================================================================
+            warriors_at_location: Dict[str, int] = {}  # loc_id -> count of available warriors
+
+            # Count warriors being deployed in this plan
+            for inst in plan.instructions:
+                if inst.target_location_id:
+                    # Find the character in our hand list
+                    char_info = next((c for c in characters if c['blueprint_id'] == inst.card_blueprint_id), None)
+                    if char_info and char_info.get('is_warrior'):
+                        loc_id = inst.target_location_id
+                        warriors_at_location[loc_id] = warriors_at_location.get(loc_id, 0) + 1
+                        logger.debug(f"      Warrior in plan: {inst.card_name} -> {inst.target_location_name}")
+
+            # Count existing warriors at locations (from board state)
+            if board_state and hasattr(board_state, 'cards_in_play'):
+                from .card_loader import get_card
+                for card_id, card in board_state.cards_in_play.items():
+                    if card.owner == board_state.my_player_name and card.zone == "AT_LOCATION":
+                        loc_idx = getattr(card, 'location_index', -1)
+                        if loc_idx >= 0 and loc_idx < len(locations):
+                            metadata = get_card(card.blueprint_id)
+                            if metadata and metadata.is_warrior:
+                                loc_id = locations[loc_idx].card_id
+                                warriors_at_location[loc_id] = warriors_at_location.get(loc_id, 0) + 1
+                                logger.debug(f"      Existing warrior: {card.card_title} at loc {loc_idx}")
+
+            if warriors_at_location:
+                logger.info(f"      Warriors available: {warriors_at_location}")
+
             if weapon_target_locs:
                 # Track which targets already have a weapon in the plan
                 # (to enforce 1 weapon max per target)
                 targets_with_planned_weapons: Set[str] = set()
+                # Track weapons allocated per location (for character weapons)
+                weapons_at_location: Dict[str, int] = {}
 
                 for weapon in targeted_weapons:
                     if force_remaining < weapon['cost']:
@@ -2103,8 +2162,15 @@ class DeployPhasePlanner:
                         # Ground locations: can have characters and vehicles
                         # Space locations: can have starships
                         if weapon_type == 'character' and loc.is_ground:
-                            target_loc = loc
-                            break
+                            # CRITICAL: Character weapons require WARRIORS!
+                            # Check if there's an available warrior at this location
+                            available_warriors = warriors_at_location.get(loc.card_id, 0)
+                            allocated_weapons = weapons_at_location.get(loc.card_id, 0)
+                            if available_warriors > allocated_weapons:
+                                target_loc = loc
+                                break
+                            else:
+                                logger.debug(f"      Skip {loc.name}: no available warriors ({available_warriors} warriors, {allocated_weapons} weapons allocated)")
                         elif weapon_type == 'vehicle' and loc.is_ground and loc.is_exterior:
                             target_loc = loc
                             break
@@ -2131,6 +2197,11 @@ class DeployPhasePlanner:
                         deploy_cost=weapon['cost'],
                     ))
                     force_remaining -= weapon['cost']
+
+                    # Track character weapons allocated (for warrior limit)
+                    if weapon_type == 'character':
+                        weapons_at_location[target_loc.card_id] = weapons_at_location.get(target_loc.card_id, 0) + 1
+
                     logger.info(f"   🗡️ Plan: Deploy {weapon['name']} ({weapon_type} weapon, cost {weapon['cost']}) to {target_loc.name}")
             else:
                 logger.info("   🗡️ No locations with our presence for weapon targets")
@@ -2162,7 +2233,8 @@ class DeployPhasePlanner:
 
             logger.info(f"📋 FINAL PLAN: {plan.strategy.value} - {len(plan.instructions)} deployments")
             for i, inst in enumerate(plan.instructions):
-                logger.info(f"   {i+1}. {inst.card_name} -> {inst.target_location_name or 'table'}: {inst.reason}")
+                backup_info = f" (backup: {inst.backup_location_name})" if inst.backup_location_id else ""
+                logger.info(f"   {i+1}. {inst.card_name} -> {inst.target_location_name or 'table'}: {inst.reason}{backup_info}")
         else:
             plan.strategy = DeployStrategy.HOLD_BACK
             # Build detailed reason why we're holding back
@@ -2186,8 +2258,67 @@ class DeployPhasePlanner:
 
         plan.phase_started = True
         plan.target_locations = locations
+
+        # Assign backup targets for each instruction
+        self._assign_backup_targets(plan, locations)
+
         self.current_plan = plan
         return plan
+
+    def _assign_backup_targets(self, plan: DeploymentPlan, locations: List[LocationAnalysis]):
+        """
+        For each instruction, find a backup location in case the primary is unavailable.
+
+        This handles cases where game rules block deployment to the primary target
+        (e.g., location is full, character can't deploy there due to card text).
+        """
+        if not locations or not plan.instructions:
+            return
+
+        # Separate ground and space locations
+        ground_locs = [loc for loc in locations if loc.is_ground and loc.my_icons > 0]
+        space_locs = [loc for loc in locations if loc.is_space and loc.my_icons > 0]
+
+        # Sort by strategic value (uncontested opponent locations first, then reinforcement opportunities)
+        def location_value(loc: LocationAnalysis) -> tuple:
+            """Higher value = better backup target"""
+            has_opponent = loc.their_power > 0
+            is_contested = has_opponent and loc.my_power > 0
+            can_win = loc.my_power > loc.their_power if is_contested else True
+            return (
+                has_opponent and not is_contested,  # Uncontested opponent location (best)
+                is_contested and can_win,            # Winning contested (good)
+                loc.their_icons,                     # More opponent icons = more drain potential
+                -loc.my_power,                       # Less of our power = more room to help
+            )
+
+        ground_locs.sort(key=location_value, reverse=True)
+        space_locs.sort(key=location_value, reverse=True)
+
+        for inst in plan.instructions:
+            if not inst.target_location_id:
+                continue  # Location cards don't need backups
+
+            # Find backup from same type (ground or space)
+            primary_loc = next((loc for loc in locations if loc.card_id == inst.target_location_id), None)
+            if not primary_loc:
+                continue
+
+            backup_candidates = ground_locs if primary_loc.is_ground else space_locs
+
+            # Find first candidate that isn't the primary
+            for loc in backup_candidates:
+                if loc.card_id != inst.target_location_id:
+                    inst.backup_location_id = loc.card_id
+                    inst.backup_location_name = loc.name
+                    # Describe why this is the backup
+                    if loc.their_power > 0 and loc.my_power == 0:
+                        inst.backup_reason = f"establish against opponent ({loc.their_power} power)"
+                    elif loc.their_power > 0:
+                        inst.backup_reason = f"reinforce ({loc.my_power} vs {loc.their_power})"
+                    else:
+                        inst.backup_reason = f"establish presence ({loc.my_icons} icons)"
+                    break
 
     def _get_all_deployable_cards(self, board_state) -> List[Dict]:
         """Get all cards we can deploy with their metadata.
@@ -2493,12 +2624,17 @@ class DeployPhasePlanner:
 
             # Check if we can take extra actions
             # Plan complete + have force above reserve = allow extra actions
+            # OR: Plan is stale (planned cards not available) - force_allow_extras flag
             if self.current_plan.allows_extra_actions(current_force):
                 extra_budget = self.current_plan.get_extra_force_budget(current_force)
                 logger.info(f"🎁 Plan complete, allowing extra actions (budget: {extra_budget} force)")
                 # Give a small positive score for extra actions
                 # (not as good as planned actions, but not penalized)
                 return (25.0, f"EXTRA ACTION (plan done, {extra_budget} force available)")
+            elif getattr(self.current_plan, 'force_allow_extras', False):
+                # Plan is stale - planned cards aren't available anymore
+                logger.info(f"🎁 Stale plan, allowing extra actions")
+                return (25.0, "EXTRA ACTION (planned cards unavailable)")
             else:
                 return (-100.0, "Not in deployment plan")
 

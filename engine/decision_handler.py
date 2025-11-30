@@ -13,12 +13,30 @@ The game will continue with a bad decision, but hang forever with no decision.
 
 import logging
 import random
+from dataclasses import dataclass
 from typing import Optional, Tuple, List, Set
 import xml.etree.ElementTree as ET
 
 from .decision_safety import DecisionSafety, DecisionTracker
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DecisionResult:
+    """
+    Result of processing a decision.
+
+    Attributes:
+        decision_id: The decision ID to respond to
+        value: The response value to send
+        no_long_delay: If True, respond quickly (1s). If False, "think" longer (3s).
+                       Based on GEMP's noLongDelay parameter which indicates
+                       whether a quick response is expected.
+    """
+    decision_id: str
+    value: str
+    no_long_delay: bool = False
 
 # Global decision tracker for loop detection
 _decision_tracker = DecisionTracker()
@@ -37,11 +55,11 @@ class DecisionHandler:
         self.brain = brain
 
     @staticmethod
-    def handle_decision(decision_element: ET.Element, phase_count: int = 0, board_state=None, brain=None) -> Tuple[str, str]:
+    def handle_decision(decision_element: ET.Element, phase_count: int = 0, board_state=None, brain=None) -> DecisionResult:
         """
         Process a decision event and return the response.
 
-        GUARANTEE: This method ALWAYS returns a valid (decision_id, value) tuple.
+        GUARANTEE: This method ALWAYS returns a valid DecisionResult.
         It will NEVER return None. If all handlers fail, emergency fallback is used.
 
         Args:
@@ -51,11 +69,19 @@ class DecisionHandler:
             brain: Optional Brain instance for AI decisions
 
         Returns:
-            Tuple of (decision_id, decision_value) - ALWAYS returns a value
+            DecisionResult with decision_id, value, and no_long_delay flag
         """
         decision_type = decision_element.get('decisionType', '')
         decision_id = decision_element.get('id', '0')
         decision_text = decision_element.get('text', '')
+
+        # Parse noLongDelay from decision parameters
+        # This flag indicates if a quick response is expected
+        no_long_delay = False
+        for param in decision_element.findall('.//parameter'):
+            if param.get('name') == 'noLongDelay':
+                no_long_delay = param.get('value', '').lower() == 'true'
+                break
 
         logger.info(f"🤔 Processing decision: type={decision_type}, text='{decision_text}'")
 
@@ -167,7 +193,12 @@ class DecisionHandler:
         # Track this decision
         _decision_tracker.record_decision(decision_type, decision_text, decision_id, result[1])
 
-        return result
+        # Return DecisionResult with noLongDelay info for NetworkCoordinator
+        return DecisionResult(
+            decision_id=result[0],
+            value=result[1],
+            no_long_delay=no_long_delay
+        )
 
     @staticmethod
     def reset_tracker():

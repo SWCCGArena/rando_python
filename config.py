@@ -56,6 +56,20 @@ class Config:
     DEPLOY_COMFORTABLE_THRESHOLD: int = 4 # Power advantage where reinforcing is low priority
     BATTLE_FORCE_RESERVE: int = 1         # Force to reserve for initiating battle after deploy
 
+    # Network rate limiting (matching web client behavior)
+    # These delays make the bot behave more like a human player
+    NETWORK_DELAY_QUICK: float = 1.0       # Delay when noLongDelay=true (quick response expected)
+    NETWORK_DELAY_NORMAL: float = 3.0      # Delay when noLongDelay=false (bot should "think")
+    NETWORK_DELAY_BACKGROUND: float = 30.0 # Delay for background requests (hall, cardInfo)
+    NETWORK_DELAY_MIN: float = 0.25        # Absolute minimum between any requests
+
+    # Hall polling optimization
+    HALL_CHECK_INTERVAL_DURING_GAME: int = 60  # Only check hall every N seconds during game
+
+    # Location checks (cardInfo) optimization
+    LOCATION_CHECK_ENABLED: bool = True    # Can disable location checks for testing
+    MAX_LOCATION_CHECKS_PER_TURN: int = 5  # Maximum cardInfo calls per turn
+
     # Paths
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
     DATA_DIR: str = os.path.join(BASE_DIR, 'data')

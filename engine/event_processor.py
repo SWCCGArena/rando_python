@@ -180,6 +180,14 @@ class EventProcessor:
         card_title = card.card_title if card else blueprint_id
         logger.debug(f"🃏 Card added: {card_title} ({blueprint_id}) to {zone}")
 
+        # Notify strategy controller of deployments at locations (for optimization)
+        # This invalidates the location's cached cardInfo check so it will be re-checked
+        if zone == "AT_LOCATION" and location_index >= 0:
+            if self.board_state.strategy_controller and location_index < len(self.board_state.locations):
+                loc = self.board_state.locations[location_index]
+                if loc:
+                    self.board_state.strategy_controller.on_card_deployed(loc.card_id)
+
         # === SIDE DETECTION ===
         # Log zone for ALL cards to diagnose the issue
         logger.info(f"🎭 PCIP zone check: zone='{zone}' blueprint='{blueprint_id}' owner='{owner}'")
@@ -513,6 +521,10 @@ class EventProcessor:
                     # Update game strategy with current board state
                     self.board_state.strategy_controller.update_strategy(self.board_state)
                     logger.info(f"📊 Strategy updated for turn {new_turn}")
+
+        # Notify strategy controller of phase change (for location check optimization)
+        if self.board_state.strategy_controller:
+            self.board_state.strategy_controller.on_phase_change(phase)
 
         # Control phase - update my_side on strategy controller if needed
         if 'Control' in phase and self.board_state.strategy_controller:

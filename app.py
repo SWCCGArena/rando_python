@@ -10,12 +10,14 @@ from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 import logging
 import os
+import time
 import requests
 import xml.etree.ElementTree as ET
 from config import config
 from engine.state import GameState
 from engine.client import GEMPClient
-from engine.decision_handler import DecisionHandler
+from engine.decision_handler import DecisionHandler, DecisionResult
+from engine.network_coordinator import NetworkCoordinator
 from engine.board_state import BoardState
 from engine.event_processor import EventProcessor
 from engine.strategy_controller import StrategyController
@@ -200,6 +202,17 @@ class BotState:
         self.game_id = None
         self.channel_number = 0
 
+        # NetworkCoordinator for rate-limited requests
+        self.coordinator = None  # Initialized after client is created
+
+        # Hall polling state (for incremental updates)
+        self.hall_channel_number = 0
+        self._last_hall_check_during_game = 0.0
+        # Use config value for hall check interval during game
+        self.HALL_CHECK_INTERVAL_DURING_GAME = getattr(
+            self.config, 'HALL_CHECK_INTERVAL_DURING_GAME', 60
+        )
+
     def initialize_table_manager(self):
         """Initialize table manager after client is ready"""
         if self.client and not self.table_manager:
@@ -232,6 +245,12 @@ class BotState:
                 bot_username=config.GEMP_USERNAME
             )
             logger.info("🎮 CommandHandler initialized")
+
+    def initialize_coordinator(self):
+        """Initialize NetworkCoordinator after client is ready"""
+        if self.client and not self.coordinator:
+            self.coordinator = NetworkCoordinator(self.client, config=self.config)
+            logger.info("📡 NetworkCoordinator initialized")
 
     def to_dict(self):
         """Convert state to dictionary for JSON serialization"""
@@ -463,15 +482,26 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
 
                 logger.info(f"  [Iter {iteration}] Event {i+1}: DECISION {decision_type} - '{decision_text[:80]}...'")
 
-                # Get decision response - GUARANTEED to return a value (never None)
-                resp_id, resp_value = DecisionHandler.handle_decision(
+                # Get decision response - GUARANTEED to return a DecisionResult (never None)
+                decision_result = DecisionHandler.handle_decision(
                     event,
                     board_state=board_state_for_decision,
                     brain=bot_state.brain
                 )
 
-                # Post the decision (handle_decision guarantees a response)
-                response_xml = client.post_decision(game_id, current_cn, resp_id, resp_value)
+                # Post the decision using coordinator (applies delay based on noLongDelay)
+                # If coordinator not available, fall back to direct client call
+                if bot_state.coordinator:
+                    response_xml = bot_state.coordinator.post_decision(
+                        game_id, current_cn,
+                        decision_result.decision_id, decision_result.value,
+                        no_long_delay=decision_result.no_long_delay
+                    )
+                else:
+                    response_xml = client.post_decision(
+                        game_id, current_cn,
+                        decision_result.decision_id, decision_result.value
+                    )
                 if response_xml:
                     logger.info(f"  [Iter {iteration}] 📦 Decision response: {len(response_xml)} bytes")
                     # Log the XML for debugging
@@ -529,7 +559,7 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
     return current_cn
 
 
-def do_location_checks(game_id: str, client, board_state, strategy_controller):
+def do_location_checks(game_id: str, client, board_state, strategy_controller, coordinator=None):
     """
     Perform location checks during Control phase.
 
@@ -539,6 +569,13 @@ def do_location_checks(game_id: str, client, board_state, strategy_controller):
     - Battle Order rules
 
     Ported from C# AIStrategyController.StartNewPhase() + ContinuePendingChecks()
+
+    Args:
+        game_id: Current game ID
+        client: GEMPClient (fallback if no coordinator)
+        board_state: Current BoardState
+        strategy_controller: StrategyController
+        coordinator: Optional NetworkCoordinator for rate-limited calls
     """
     if not strategy_controller or not board_state:
         return
@@ -548,6 +585,7 @@ def do_location_checks(game_id: str, client, board_state, strategy_controller):
         return
 
     # Get locations to check (smart selection, max 5 per turn)
+    # Note: This now also checks _first_control_phase_seen flag
     locations_to_check = strategy_controller.get_locations_to_check(board_state)
 
     if not locations_to_check:
@@ -558,7 +596,12 @@ def do_location_checks(game_id: str, client, board_state, strategy_controller):
 
     for loc in locations_to_check:
         try:
-            html = client.get_card_info(game_id, loc.card_id)
+            # Use coordinator for rate-limited cardInfo calls (30s delay between)
+            if coordinator:
+                html = coordinator.get_card_info(game_id, loc.card_id)
+            else:
+                html = client.get_card_info(game_id, loc.card_id)
+
             if html:
                 result = strategy_controller.process_location_check(loc.card_id, html)
                 strategy_controller.update_location_with_check(loc, result)
@@ -617,6 +660,9 @@ def bot_worker():
 
                     # Initialize command handler
                     bot_state.initialize_command_handler()
+
+                    # Initialize network coordinator for rate-limited requests
+                    bot_state.initialize_coordinator()
 
                     # Emit updated state with decks
                     socketio.emit('state_update', bot_state.to_dict(), namespace='/')
@@ -1013,7 +1059,8 @@ def bot_worker():
                                         bot_state.game_id,
                                         bot_state.client,
                                         bot_state.board_state,
-                                        bot_state.strategy_controller
+                                        bot_state.strategy_controller,
+                                        coordinator=bot_state.coordinator
                                     )
 
                                     # Check for turn change and notify chat manager
@@ -1065,20 +1112,41 @@ def bot_worker():
                             logger.error("❌ Forced recovery failed")
                             socketio.emit('log_message', {'message': '❌ Recovery failed', 'level': 'error'}, namespace='/')
 
-                # Only check hall if connection is stable
+                # Only check hall if connection is stable AND enough time has passed
+                # During game, only check hall every HALL_CHECK_INTERVAL_DURING_GAME seconds
+                # This prevents excessive requests (was checking every 1 second!)
                 tables = []
                 my_table = None
-                if not skip_hall_check:
-                    tables = bot_state.client.get_hall_tables()
+                time_since_last_hall = time.time() - bot_state._last_hall_check_during_game
+                should_check_hall = (not skip_hall_check and
+                                    time_since_last_hall >= bot_state.HALL_CHECK_INTERVAL_DURING_GAME)
+
+                if should_check_hall:
+                    # Use coordinator for rate-limited hall update
+                    if bot_state.coordinator:
+                        tables, bot_state.hall_channel_number = bot_state.coordinator.update_hall(
+                            bot_state.hall_channel_number
+                        )
+                    else:
+                        tables = bot_state.client.get_hall_tables()
                     bot_state.current_tables = tables
+                    bot_state._last_hall_check_during_game = time.time()
+                    logger.debug(f"📊 Hall check during game: {len(tables)} tables")
 
                     # Check if our table still exists
                     for table in tables:
                         if table.table_id == bot_state.current_table_id:
                             my_table = table
                             break
+                else:
+                    # Use cached tables
+                    tables = bot_state.current_tables
+                    for table in tables:
+                        if table.table_id == bot_state.current_table_id:
+                            my_table = table
+                            break
 
-                if not skip_hall_check and (not my_table or my_table.status == 'finished'):
+                if should_check_hall and (not my_table or my_table.status == 'finished'):
                     # Game ended!
                     logger.info("🏁 Game ended!")
                     socketio.emit('log_message', {'message': '🏁 Game ended', 'level': 'info'}, namespace='/')

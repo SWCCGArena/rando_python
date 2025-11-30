@@ -296,6 +296,47 @@ class DeployEvaluator(ActionEvaluator):
             # Store plan summary on board_state for admin UI display
             bs.deploy_plan_summary = self.planner.get_plan_summary()
 
+        # DEBUG: Log what actions are available
+        deploy_action_count = 0
+        for i, action_id in enumerate(context.action_ids):
+            action_text = context.action_texts[i] if i < len(context.action_texts) else "Unknown"
+            has_deploy = "Deploy" in action_text or "Reserve Deck" in action_text
+            if has_deploy:
+                deploy_action_count += 1
+            logger.debug(f"   Action {i}: id={action_id}, has_deploy={has_deploy}, text={action_text[:80]}...")
+
+        if deploy_action_count == 0 and deploy_plan and deploy_plan.instructions:
+            logger.warning(f"⚠️  Plan has {len(deploy_plan.instructions)} deployments but NO deploy actions in decision!")
+            logger.warning(f"   Available actions: {context.action_texts}")
+
+        # Check if any of the available deploy actions match the plan
+        # If NONE match, the plan is stale and we should allow extra actions
+        plan_cards_available = False
+        if deploy_plan and deploy_plan.instructions:
+            for i, action_id in enumerate(context.action_ids):
+                action_text = context.action_texts[i] if i < len(context.action_texts) else ""
+                if "Deploy" not in action_text:
+                    continue
+                # Try to get blueprint for this action
+                bp = self._extract_blueprint_from_action(action_text)
+                if not bp:
+                    card_id = context.card_ids[i] if i < len(context.card_ids) else None
+                    if card_id and bs:
+                        tracked = bs.cards_in_play.get(card_id)
+                        if tracked and tracked.blueprint_id:
+                            bp = tracked.blueprint_id
+                if bp:
+                    instruction = deploy_plan.get_instruction_for_card(bp)
+                    if instruction:
+                        plan_cards_available = True
+                        break
+
+            if not plan_cards_available and deploy_action_count > 0:
+                logger.warning(f"⚠️  STALE PLAN: Plan has {len(deploy_plan.instructions)} cards but NONE are in available actions!")
+                logger.warning(f"   Plan cards: {[i.card_name for i in deploy_plan.instructions]}")
+                # Mark plan as allowing extra actions since planned cards aren't available
+                deploy_plan.force_allow_extras = True
+
         for i, action_id in enumerate(context.action_ids):
             action_text = context.action_texts[i] if i < len(context.action_texts) else "Unknown"
 
@@ -337,6 +378,8 @@ class DeployEvaluator(ActionEvaluator):
                 blueprint_id = self._extract_blueprint_from_action(action_text)
                 card_metadata = None
 
+                logger.debug(f"   Deploy action found: blueprint_id={blueprint_id}, card_id={card_id}")
+
                 if blueprint_id:
                     card_metadata = get_card(blueprint_id)
 
@@ -346,6 +389,9 @@ class DeployEvaluator(ActionEvaluator):
                     if tracked_card and tracked_card.blueprint_id:
                         blueprint_id = tracked_card.blueprint_id
                         card_metadata = get_card(blueprint_id)
+                        logger.debug(f"   Used fallback: blueprint_id={blueprint_id}")
+                    else:
+                        logger.warning(f"   ⚠️ Fallback failed: card_id={card_id} not in cards_in_play or has no blueprint")
 
                 if card_metadata:
                     action.card_name = card_metadata.title
@@ -418,12 +464,15 @@ class DeployEvaluator(ActionEvaluator):
         # =====================================================
         planned_target_id = None
         planned_target_name = None
+        instruction = None  # The deployment instruction for this card (if any)
         if bs and hasattr(bs, 'current_deploy_plan') and bs.current_deploy_plan and deploying_card_blueprint:
             instruction = bs.current_deploy_plan.get_instruction_for_card(deploying_card_blueprint)
             if instruction and instruction.target_location_id:
                 planned_target_id = instruction.target_location_id
                 planned_target_name = instruction.target_location_name
                 logger.info(f"📋 Deploy plan says: {deploying_card.title if deploying_card else deploying_card_blueprint} -> {planned_target_name}")
+                if instruction.backup_location_id:
+                    logger.info(f"   Backup: {instruction.backup_location_name}")
 
         # Check card type being deployed
         is_starship = deploying_card and deploying_card.is_starship
@@ -449,13 +498,34 @@ class DeployEvaluator(ActionEvaluator):
             # =====================================================
             # FOLLOW THE DEPLOY PLAN!
             # If planner specified a target, give big bonus to it
+            # If primary unavailable but backup is, use backup
+            # If neither available, hold back (don't deploy randomly)
             # =====================================================
             if planned_target_id:
                 if card_id == planned_target_id:
                     action.add_reasoning(f"PLANNED TARGET: {planned_target_name}", +200.0)
                     logger.info(f"✅ Card {card_id} is the PLANNED target (+200)")
-                else:
+                elif planned_target_id in context.card_ids:
+                    # Planned target IS available, so penalize this non-planned option
                     action.add_reasoning(f"Not planned target (want {planned_target_name})", -100.0)
+                else:
+                    # Planned target is NOT available - check for backup
+                    backup_id = instruction.backup_location_id if instruction else None
+                    backup_name = instruction.backup_location_name if instruction else None
+                    backup_reason = instruction.backup_reason if instruction else None
+
+                    if backup_id and card_id == backup_id:
+                        # This IS the backup target
+                        action.add_reasoning(f"BACKUP TARGET: {backup_name} ({backup_reason})", +150.0)
+                        logger.info(f"✅ Card {card_id} is the BACKUP target (+150) - primary {planned_target_name} unavailable")
+                    elif backup_id and backup_id in context.card_ids:
+                        # Backup is available but this isn't it - penalize
+                        action.add_reasoning(f"Not backup target (want {backup_name})", -100.0)
+                    else:
+                        # Neither primary nor backup available - HOLD BACK
+                        # Don't deploy randomly, wait for a better opportunity
+                        logger.warning(f"⚠️ Neither primary ({planned_target_name}) nor backup ({backup_name}) available - holding back")
+                        action.add_reasoning(f"No valid target available - hold back", -200.0)
 
             if bs:
                 # For weapons/devices, target is a card (character, starship, vehicle)

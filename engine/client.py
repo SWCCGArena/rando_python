@@ -121,6 +121,89 @@ class GEMPClient:
             logger.error(f"Unexpected error fetching hall: {e}")
             return []
 
+    def update_hall(self, channel_number: int) -> tuple:
+        """
+        Poll for hall updates using incremental endpoint.
+
+        This is the proper way to poll the hall - using POST to /hall/update
+        with a channel number, rather than GET /hall which fetches full state.
+
+        Matches web client's updateHall() in communication.js
+
+        Args:
+            channel_number: Last known hall channel number
+
+        Returns:
+            Tuple of (List[GameTable], new_channel_number)
+        """
+        if not self.logged_in:
+            logger.warning("Not logged in, cannot update hall")
+            return [], channel_number
+
+        try:
+            logger.debug(f"Polling hall with channel number {channel_number}")
+
+            response = self.session.post(
+                f"{self.server_url}/hall/update",
+                data={
+                    'participantId': 'null',
+                    'channelNumber': str(channel_number)
+                },
+                timeout=20  # Match web client timeout
+            )
+
+            if response.status_code == 200:
+                logger.debug(f"Hall update response (first 1000 chars): {response.text[:1000]}")
+                tables = self.parser.parse_hall_tables(response.text)
+
+                # Extract new channel number from response
+                new_cn = self._parse_hall_channel_number(response.text, channel_number)
+
+                logger.debug(f"Hall update: {len(tables)} tables, channel {channel_number} -> {new_cn}")
+                return tables, new_cn
+            else:
+                logger.error(f"Failed to update hall: HTTP {response.status_code}")
+                return [], channel_number
+
+        except requests.RequestException as e:
+            logger.error(f"Hall update request failed: {e}")
+            return [], channel_number
+        except Exception as e:
+            logger.error(f"Unexpected error updating hall: {e}")
+            return [], channel_number
+
+    def _parse_hall_channel_number(self, xml_text: str, default: int) -> int:
+        """
+        Parse channel number from hall update XML response.
+
+        The channel number is in the root element attribute.
+
+        Args:
+            xml_text: Hall XML response
+            default: Default value if parsing fails
+
+        Returns:
+            Channel number from response, or default
+        """
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(xml_text)
+            # Channel number is typically in root element or hall element
+            cn_str = root.get('channelNumber', '')
+            if cn_str:
+                return int(cn_str)
+
+            # Also try looking for it in hall element
+            hall_elem = root.find('.//hall')
+            if hall_elem is not None:
+                cn_str = hall_elem.get('channelNumber', '')
+                if cn_str:
+                    return int(cn_str)
+
+            return default
+        except Exception:
+            return default
+
     def create_table(self, deck_name: str, table_name: str,
                      game_format: str = "open", is_library: bool = True) -> Optional[str]:
         """
