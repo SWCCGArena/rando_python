@@ -231,7 +231,13 @@ class DeployEvaluator(ActionEvaluator):
         return self._find_unpiloted_ship_on_board(bs) is not None
 
     def can_evaluate(self, context: DecisionContext) -> bool:
-        """Applies to Deploy phase decisions"""
+        """Applies to Deploy phase decisions during OUR turn only"""
+        # CRITICAL: Only evaluate deploy decisions during OUR turn
+        # During opponent's turn, deploy-related decisions are reactions, not deploys
+        if context.board_state and not context.board_state.is_my_turn:
+            logger.debug(f"🚀 DeployEvaluator skipping - not our turn")
+            return False
+
         # For CARD_SELECTION, only evaluate if decision text mentions deploying
         # (avoids incorrectly handling sabacc, forfeit, etc. as deploy decisions)
         if context.decision_type == "CARD_SELECTION":
@@ -287,7 +293,13 @@ class DeployEvaluator(ActionEvaluator):
         deploy_plan = None
         if bs:
             deploy_plan = self.planner.create_plan(bs)
-            logger.info(f"📋 Deploy plan: {deploy_plan.strategy.value} - {deploy_plan.reason}")
+            # Show plan status - useful for debugging
+            if deploy_plan.is_plan_complete():
+                logger.info(f"📋 Deploy plan: COMPLETE ({deploy_plan.deployments_made} deployed)")
+            else:
+                remaining = len(deploy_plan.instructions)
+                done = deploy_plan.deployments_made
+                logger.info(f"📋 Deploy plan: {deploy_plan.strategy.value} - {deploy_plan.reason} ({remaining} remaining, {done} done)")
 
             # Store plan on board_state so other evaluators can access it
             # (e.g., card_selection_evaluator needs to know target locations)
@@ -305,9 +317,14 @@ class DeployEvaluator(ActionEvaluator):
                 deploy_action_count += 1
             logger.debug(f"   Action {i}: id={action_id}, has_deploy={has_deploy}, text={action_text[:80]}...")
 
-        if deploy_action_count == 0 and deploy_plan and deploy_plan.instructions:
-            logger.warning(f"⚠️  Plan has {len(deploy_plan.instructions)} deployments but NO deploy actions in decision!")
-            logger.warning(f"   Available actions: {context.action_texts}")
+        if deploy_action_count == 0 and deploy_plan:
+            if deploy_plan.is_plan_complete():
+                # Plan was completed - all deployments done, this is expected
+                logger.debug(f"📋 Deploy plan complete ({deploy_plan.deployments_made} deployed), no more deploy actions needed")
+            elif deploy_plan.instructions:
+                # Plan has remaining instructions but no deploy actions available - may be stale
+                logger.warning(f"⚠️  Plan has {len(deploy_plan.instructions)} deployments but NO deploy actions in decision!")
+                logger.warning(f"   Available actions: {context.action_texts}")
 
         # Check if any of the available deploy actions match the plan
         # If NONE match, the plan is stale and we should allow extra actions
@@ -331,7 +348,7 @@ class DeployEvaluator(ActionEvaluator):
                         plan_cards_available = True
                         break
 
-            if not plan_cards_available and deploy_action_count > 0:
+            if not plan_cards_available and deploy_action_count > 0 and not deploy_plan.is_plan_complete():
                 logger.warning(f"⚠️  STALE PLAN: Plan has {len(deploy_plan.instructions)} cards but NONE are in available actions!")
                 logger.warning(f"   Plan cards: {[i.card_name for i in deploy_plan.instructions]}")
                 # Mark plan as allowing extra actions since planned cards aren't available
@@ -381,6 +398,7 @@ class DeployEvaluator(ActionEvaluator):
                 logger.debug(f"   Deploy action found: blueprint_id={blueprint_id}, card_id={card_id}")
 
                 if blueprint_id:
+                    action.blueprint_id = blueprint_id  # Track for planner notification
                     card_metadata = get_card(blueprint_id)
 
                 # Fallback: Use cardId to look up card
@@ -388,6 +406,7 @@ class DeployEvaluator(ActionEvaluator):
                     tracked_card = bs.cards_in_play.get(card_id)
                     if tracked_card and tracked_card.blueprint_id:
                         blueprint_id = tracked_card.blueprint_id
+                        action.blueprint_id = blueprint_id  # Track for planner notification
                         card_metadata = get_card(blueprint_id)
                         logger.debug(f"   Used fallback: blueprint_id={blueprint_id}")
                     else:

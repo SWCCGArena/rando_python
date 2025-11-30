@@ -27,16 +27,16 @@ class NetworkCoordinator:
 
     Uses noLongDelay flag to determine appropriate response timing:
     - noLongDelay=true: Quick response expected (1 second delay)
-    - noLongDelay=false: Player should "think" (3 second delay)
+    - noLongDelay=false: Player should "think" (2 second delay)
     - Background requests: Longer delays (30 seconds for hall/cardInfo)
     """
 
     # Default delay settings (matching web client behavior)
     # Can be overridden by config
     DEFAULT_DELAY_QUICK = 1.0        # When noLongDelay=true (quick response expected)
-    DEFAULT_DELAY_NORMAL = 3.0       # When noLongDelay=false (player should "think")
+    DEFAULT_DELAY_NORMAL = 2.0       # When noLongDelay=false (player should "think")
     DEFAULT_DELAY_BACKGROUND = 30.0  # For background requests (hall, cardInfo)
-    DEFAULT_DELAY_MIN = 0.25         # Absolute minimum between any requests
+    DEFAULT_DELAY_MIN = 1.0          # Absolute minimum between any requests (server sensitive)
 
     def __init__(self, client: 'GEMPClient', config=None):
         """
@@ -65,7 +65,14 @@ class NetworkCoordinator:
         # Metrics tracking
         self.total_requests = 0
         self.total_response_time = 0.0
+        self.total_gap_time = 0.0  # Total time between requests
+        self.start_time = time.time()  # When coordinator was initialized
         self.request_history = deque(maxlen=100)  # Last 100 requests
+
+        # Rate limit failsafe
+        self.MAX_REQUESTS_PER_MINUTE = 40
+        self.rate_limit_exceeded = False
+        self.current_game_id: Optional[str] = None
 
         logger.info(f"NetworkCoordinator initialized (delays: quick={self.DELAY_QUICK}s, normal={self.DELAY_NORMAL}s, bg={self.DELAY_BACKGROUND}s)")
 
@@ -88,7 +95,7 @@ class NetworkCoordinator:
         elapsed = time.time() - self.last_request_time
         if elapsed < delay:
             wait_time = delay - elapsed
-            logger.debug(f"⏳ Delay ({delay_type}): waiting {wait_time:.2f}s")
+            logger.info(f"⏳ Waiting {wait_time:.1f}s ({delay_type} delay, need {delay}s, only {elapsed:.1f}s elapsed)")
             time.sleep(wait_time)
 
     def _record_request(self, endpoint: str, duration: float, success: bool):
@@ -100,19 +107,58 @@ class NetworkCoordinator:
             duration: How long the request took in seconds
             success: Whether the request succeeded
         """
+        now = time.time()
+        time_since_last = now - self.last_request_time if self.last_request_time > 0 else 0
+
         self.total_requests += 1
         self.total_response_time += duration
+        if time_since_last > 0:
+            self.total_gap_time += time_since_last
         self.request_history.append({
-            'time': time.time(),
+            'time': now,
             'endpoint': endpoint,
             'duration': duration,
-            'success': success
+            'success': success,
+            'gap': time_since_last
         })
+
+        # Log EVERY request with timing details
+        status = "✅" if success else "❌"
+        logger.info(f"📡 [{self.total_requests}] {status} {endpoint} "
+                   f"took {duration:.3f}s, gap {time_since_last:.1f}s since last request")
 
         # Log summary every 20 requests
         if self.total_requests % 20 == 0:
-            avg = self.total_response_time / self.total_requests
-            logger.info(f"📊 Network: {self.total_requests} requests, avg {avg:.3f}s")
+            avg_response = self.total_response_time / self.total_requests
+            avg_gap = self.total_gap_time / max(1, self.total_requests - 1)
+            elapsed_minutes = (now - self.start_time) / 60.0
+            calls_per_min = self.total_requests / max(0.1, elapsed_minutes)
+            logger.info(f"📊 Network summary: {self.total_requests} requests, "
+                       f"avg response {avg_response:.3f}s, avg gap {avg_gap:.1f}s, "
+                       f"{calls_per_min:.1f} calls/min")
+
+            # Rate limit failsafe - check after 60+ requests to avoid false positives at startup
+            if self.total_requests >= 60 and calls_per_min > self.MAX_REQUESTS_PER_MINUTE:
+                self._trigger_rate_limit_failsafe(calls_per_min)
+
+    def _trigger_rate_limit_failsafe(self, calls_per_min: float):
+        """
+        Emergency failsafe when request rate exceeds safe limits.
+
+        Concedes current game and sets flag to stop the bot.
+        """
+        logger.error(f"🚨 RATE LIMIT EXCEEDED: {calls_per_min:.1f} calls/min > {self.MAX_REQUESTS_PER_MINUTE} max!")
+        logger.error("🚨 Triggering emergency failsafe - conceding game and stopping bot")
+
+        self.rate_limit_exceeded = True
+
+        # Try to concede the current game
+        if self.current_game_id:
+            try:
+                logger.error(f"🚨 Conceding game {self.current_game_id}")
+                self.client.concede_game(self.current_game_id)
+            except Exception as e:
+                logger.error(f"🚨 Failed to concede game: {e}")
 
     def get_metrics(self) -> dict:
         """
@@ -121,9 +167,14 @@ class NetworkCoordinator:
         Returns:
             Dict with request counts and response times
         """
+        now = time.time()
+        elapsed_minutes = (now - self.start_time) / 60.0
         return {
             'total_requests': self.total_requests,
             'avg_response_time': self.total_response_time / max(1, self.total_requests),
+            'avg_gap': self.total_gap_time / max(1, self.total_requests - 1) if self.total_requests > 1 else 0,
+            'calls_per_minute': self.total_requests / max(0.1, elapsed_minutes),
+            'elapsed_minutes': elapsed_minutes,
             'recent_requests': list(self.request_history)[-10:]
         }
 
@@ -131,7 +182,8 @@ class NetworkCoordinator:
     # Wrapped client methods
     # =========================================================================
 
-    def get_game_update(self, game_id: str, channel_number: int) -> Optional[str]:
+    def get_game_update(self, game_id: str, channel_number: int,
+                        fast_phase: bool = False) -> Optional[str]:
         """
         Get game update from server.
 
@@ -140,11 +192,13 @@ class NetworkCoordinator:
         Args:
             game_id: The game ID
             channel_number: Current channel number
+            fast_phase: If True, skip delay (for draw/activate phases)
 
         Returns:
             Update XML or None on error
         """
-        self._apply_delay('minimal')
+        if not fast_phase:
+            self._apply_delay('minimal')
         start = time.time()
         result = self.client.get_game_update(game_id, channel_number)
         self._record_request('game/update', time.time() - start, result is not None)
@@ -181,7 +235,7 @@ class NetworkCoordinator:
         """
         Get card info from server.
 
-        cardInfo is a background request so uses longer delay.
+        Used for location checks during Control phase - uses minimal delay.
 
         Args:
             game_id: The game ID
@@ -190,7 +244,7 @@ class NetworkCoordinator:
         Returns:
             HTML response or None on error
         """
-        self._apply_delay('background')
+        self._apply_delay('minimal')
         start = time.time()
         result = self.client.get_card_info(game_id, card_id)
         self._record_request('game/cardInfo', time.time() - start, result is not None)
@@ -274,62 +328,115 @@ class NetworkCoordinator:
         self.last_request_time = time.time()
         return result
 
-    def get_hall_initial(self) -> List:
+    def get_hall_initial(self, return_channel_number: bool = False):
         """
         Get initial hall state (full state, not incremental).
 
         Only used on login, not for polling.
 
+        Args:
+            return_channel_number: If True, return tuple of (tables, channel_number)
+
         Returns:
-            List of GameTable objects
+            List of GameTable objects, or tuple of (tables, channel_number) if return_channel_number=True
         """
         self._apply_delay('minimal')
         start = time.time()
-        result = self.client.get_hall_tables()
-        self._record_request('hall/initial', time.time() - start, len(result) >= 0)
+        result = self.client.get_hall_tables(return_channel_number=return_channel_number)
+        # Result is either List or tuple depending on return_channel_number
+        success = (len(result) >= 0) if not return_channel_number else (len(result[0]) >= 0 if result else False)
+        self._record_request('hall/initial', time.time() - start, success)
         self.last_request_time = time.time()
         return result
 
     # =========================================================================
-    # Pass-through methods (no delay needed)
+    # Pass-through methods (minimum 1s delay enforced for server health)
     # =========================================================================
 
     def login(self, username: str, password: str) -> bool:
-        """Login to server (no delay needed)"""
-        return self.client.login(username, password)
+        """Login to server"""
+        self._apply_delay('minimal')
+        start = time.time()
+        result = self.client.login(username, password)
+        self._record_request('login', time.time() - start, result)
+        self.last_request_time = time.time()
+        return result
 
     def logout(self):
         """Logout from server"""
-        return self.client.logout()
+        self._apply_delay('minimal')
+        start = time.time()
+        result = self.client.logout()
+        self._record_request('logout', time.time() - start, True)
+        self.last_request_time = time.time()
+        return result
 
     def join_game(self, game_id: str) -> Optional[str]:
-        """Join a game (no delay needed)"""
-        return self.client.join_game(game_id)
+        """Join a game"""
+        self._apply_delay('minimal')
+        start = time.time()
+        result = self.client.join_game(game_id)
+        self._record_request('game/join', time.time() - start, result is not None)
+        self.last_request_time = time.time()
+        if result:
+            self.current_game_id = game_id
+        return result
 
     def concede_game(self, game_id: str) -> bool:
-        """Concede the game (no delay needed)"""
-        return self.client.concede_game(game_id)
+        """Concede the game"""
+        self._apply_delay('minimal')
+        start = time.time()
+        result = self.client.concede_game(game_id)
+        self._record_request('game/concede', time.time() - start, result)
+        self.last_request_time = time.time()
+        self.current_game_id = None
+        return result
 
     def create_table(self, deck_name: str, table_name: str,
                      game_format: str = "open", is_library: bool = True) -> Optional[str]:
-        """Create a table (no delay needed)"""
-        return self.client.create_table(deck_name, table_name, game_format, is_library)
+        """Create a table"""
+        self._apply_delay('minimal')
+        start = time.time()
+        result = self.client.create_table(deck_name, table_name, game_format, is_library)
+        self._record_request('hall/createTable', time.time() - start, result is not None)
+        self.last_request_time = time.time()
+        return result
 
     def leave_table(self, table_id: str) -> bool:
-        """Leave a table (no delay needed)"""
-        return self.client.leave_table(table_id)
+        """Leave a table"""
+        self._apply_delay('minimal')
+        start = time.time()
+        result = self.client.leave_table(table_id)
+        self._record_request('hall/leaveTable', time.time() - start, result)
+        self.last_request_time = time.time()
+        return result
 
     def leave_chat(self, game_id: str) -> bool:
-        """Leave chat (no delay needed)"""
-        return self.client.leave_chat(game_id)
+        """Leave chat"""
+        self._apply_delay('minimal')
+        start = time.time()
+        result = self.client.leave_chat(game_id)
+        self._record_request('chat/leave', time.time() - start, result)
+        self.last_request_time = time.time()
+        return result
 
     def get_library_decks(self) -> List:
-        """Get library decks (no delay needed)"""
-        return self.client.get_library_decks()
+        """Get library decks"""
+        self._apply_delay('minimal')
+        start = time.time()
+        result = self.client.get_library_decks()
+        self._record_request('deck/listLibrary', time.time() - start, len(result) >= 0)
+        self.last_request_time = time.time()
+        return result
 
     def get_user_decks(self) -> List:
-        """Get user decks (no delay needed)"""
-        return self.client.get_user_decks()
+        """Get user decks"""
+        self._apply_delay('minimal')
+        start = time.time()
+        result = self.client.get_user_decks()
+        self._record_request('deck/list', time.time() - start, len(result) >= 0)
+        self.last_request_time = time.time()
+        return result
 
     @property
     def logged_in(self) -> bool:

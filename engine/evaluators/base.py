@@ -104,6 +104,7 @@ class EvaluatedAction:
     # Optional metadata
     display_text: str = ""  # Human-readable action
     card_name: str = ""  # If deploying/selecting a card
+    blueprint_id: str = ""  # Card blueprint ID (for deploy tracking)
     deploy_cost: int = 0
     expected_value: float = 0.0  # Expected strategic value
 
@@ -202,16 +203,30 @@ class PassEvaluator(ActionEvaluator):
             # - ACTIVATE: Costs nothing, just moves cards from reserve to force pile
             # - DRAW: Drawing IS what we want to do
             # - BATTLE: We just deployed, we WANT to battle! Don't discourage it.
+            # - FOLLOW-THROUGH: "Choose where to move/deploy" - we already committed!
             decision_text_lower = (context.decision_text or "").lower()
             is_activate_decision = "activate" in decision_text_lower
             is_draw_decision = "draw" in decision_text_lower and "action" in decision_text_lower
             is_battle_decision = "battle action" in decision_text_lower or "initiate battle" in decision_text_lower
+
+            # Follow-through decisions: We already decided to move/deploy, now just picking target
+            # Cancelling here wastes the decision we already made - don't encourage it!
+            is_followthrough_decision = (
+                "choose where to move" in decision_text_lower or
+                "choose where to deploy" in decision_text_lower
+            )
 
             # For battle decisions, pass should have VERY low score
             # We deployed for a reason - we want to fight!
             if is_battle_decision:
                 action.add_reasoning("Battle decision - should fight, not pass", -10.0)
                 return [action]  # Don't add any other bonuses for pass during battle
+
+            # For follow-through decisions, pass should also have low score
+            # We already decided to move/deploy, cancelling now wastes that decision
+            if is_followthrough_decision:
+                action.add_reasoning("Already committed to action - follow through", -15.0)
+                return [action]  # Don't add resource-based bonuses
 
             if bs.force_pile < 3 and not is_activate_decision and not is_draw_decision:
                 action.add_reasoning("Low on Force - prefer to pass", +5.0)
@@ -266,6 +281,14 @@ class CombinedEvaluator:
                 if hasattr(evaluator, 'track_deploy'):
                     evaluator.track_deploy(card_id)
                     self.logger.debug(f"📝 Tracked deploy of card {card_id}")
+
+                # NOTE: We do NOT call record_deployment() here because:
+                # CARD_ACTION_CHOICE ("Deploy Yularen") is followed by
+                # CARD_SELECTION ("Choose where to deploy Yularen").
+                # The instruction must remain in the plan so CARD_SELECTION
+                # knows the planned target location.
+                # The instruction will be naturally replaced when the next
+                # plan is created on the next CARD_ACTION_CHOICE decision.
 
         # Track moves
         if action.action_type == ActionType.MOVE and card_id:

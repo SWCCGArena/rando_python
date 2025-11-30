@@ -84,9 +84,9 @@ class EventProcessor:
         """
         event_type = event.get('type', '')
 
-        # Log all events at INFO level for debugging
-        if event_type not in ['GS', 'M', 'IP', 'CAC']:  # Skip verbose events
-            logger.info(f"📬 Event type={event_type}: {dict(event.attrib)}")
+        # Log events at DEBUG level (app.py already logs important ones at INFO)
+        if event_type not in ['GS', 'M', 'IP', 'CAC']:  # Skip very verbose events
+            logger.debug(f"📬 Event type={event_type}: {dict(event.attrib)}")
 
         # === Card Placement Events (C# treats PCIP, RCIP, PCIPAR the same) ===
         if event_type in ['PCIP', 'RCIP', 'PCIPAR']:
@@ -141,8 +141,8 @@ class EventProcessor:
         Adds a card to play at a location, in hand, attached, etc.
         Ported from C# GameCommsHelper - PCIP, RCIP, PCIPAR all handled the same way.
         """
-        # Log all attributes for debugging
-        logger.info(f"📥 PCIP event: {dict(event.attrib)}")
+        # Log at DEBUG level (main event already logged)
+        logger.debug(f"📥 PCIP event: {dict(event.attrib)}")
 
         card_id = event.get('cardId', '')
         blueprint_id = event.get('blueprintId', '')
@@ -189,14 +189,10 @@ class EventProcessor:
                     self.board_state.strategy_controller.on_card_deployed(loc.card_id)
 
         # === SIDE DETECTION ===
-        # Log zone for ALL cards to diagnose the issue
-        logger.info(f"🎭 PCIP zone check: zone='{zone}' blueprint='{blueprint_id}' owner='{owner}'")
-
         # If we haven't detected our side yet, check from cards in our HAND
         # HAND cards are reliable - other zones can have cards swapped by game effects
         # Skip hidden cards (-1_X) which don't have side info
         if zone == "HAND" and not blueprint_id.startswith('-1_'):
-            logger.info(f"🎭 HAND card found! blueprint={blueprint_id}, owner={owner}, my_player={self.board_state.my_player_name}, current_side={self.board_state.my_side}")
             if not self.board_state.my_side and owner == self.board_state.my_player_name:
                 card_metadata = get_card(blueprint_id)
                 if card_metadata and card_metadata.side:
@@ -207,9 +203,6 @@ class EventProcessor:
                         self.board_state.strategy_controller.my_side = self.board_state.my_side
                         if self.board_state.strategy_controller.game_strategy:
                             self.board_state.strategy_controller.game_strategy.my_side = self.board_state.my_side
-                        logger.info(f"🎭 Updated strategy controller to {self.board_state.my_side}")
-                else:
-                    logger.info(f"🎭 Card {blueprint_id} has no side info: {card_metadata.side if card_metadata else 'no metadata'}")
 
         # Notify callbacks (for achievements, etc.)
         self._notify_card_placed(card_title, blueprint_id, zone, owner)
@@ -445,9 +438,11 @@ class EventProcessor:
             logger.info(f"⚔️ Battle damage: Dark attrition={dark_attrition}, damage={dark_damage} | "
                        f"Light attrition={light_attrition}, damage={light_damage}")
 
-        logger.info(f"📊 Game state updated: Force={self.board_state.force_pile}, "
-                   f"Power={self.board_state.total_my_power()}, "
-                   f"Reserve={self.board_state.reserve_deck}")
+        # Only log game state if values changed (avoid spam from multiple GS events per response)
+        new_state = (self.board_state.force_pile, self.board_state.total_my_power(), self.board_state.reserve_deck)
+        if not hasattr(self, '_last_gs_state') or self._last_gs_state != new_state:
+            self._last_gs_state = new_state
+            logger.info(f"📊 Game state updated: Force={new_state[0]}, Power={new_state[1]}, Reserve={new_state[2]}")
 
     def _handle_participant(self, event: ET.Element):
         """

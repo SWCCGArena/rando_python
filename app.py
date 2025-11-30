@@ -415,9 +415,11 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
         for i, event in enumerate(current_events):
             event_type = event.get('type', 'unknown')
 
-            # Log all event types for debugging
-            if i < 5 or event_type in ['D', 'PCIP', 'TC', 'GPC']:
-                logger.info(f"  [Iter {iteration}] Event {i+1}/{len(current_events)}: type={event_type}, attrs={dict(event.attrib)}")
+            # Log important events at INFO, others at DEBUG
+            if event_type in ['D', 'TC', 'GPC']:
+                logger.info(f"  [Iter {iteration}] Event {i+1}/{len(current_events)}: type={event_type}")
+            elif i < 3:
+                logger.debug(f"  [Iter {iteration}] Event {i+1}/{len(current_events)}: type={event_type}")
 
             if event_type == 'D':
                 # Decision event - handle it
@@ -433,11 +435,14 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
                     if should_concede:
                         logger.info(f"🏳️ Concede triggered: {concede_reason}")
 
-                        # Send farewell message
+                        # Send farewell message (through coordinator for logging)
                         if bot_state.chat_manager:
                             farewell = "Good game! I can no longer meaningfully act, so I'll concede. Until next time!"
                             try:
-                                client.post_chat_message(game_id, farewell)
+                                if bot_state.coordinator:
+                                    bot_state.coordinator.post_chat_message(game_id, farewell)
+                                else:
+                                    client.post_chat_message(game_id, farewell)
                             except Exception as e:
                                 logger.warning(f"Failed to send concede message: {e}")
 
@@ -445,8 +450,10 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
                         # handler will be triggered when server confirms concede,
                         # avoiding double-recording of stats
 
-                        # Execute concede
-                        if client.concede_game(game_id):
+                        # Execute concede (through coordinator for logging)
+                        concede_success = (bot_state.coordinator.concede_game(game_id)
+                                          if bot_state.coordinator else client.concede_game(game_id))
+                        if concede_success:
                             logger.info("✅ Game conceded successfully")
                             return current_cn
                         else:
@@ -459,16 +466,21 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
                     loop_severity, loop_count = DecisionHandler.get_loop_status()
                     logger.error(f"🚨 CRITICAL DECISION LOOP ({loop_count} repeats) - conceding to avoid hang!")
 
-                    # Send farewell message
+                    # Send farewell message (through coordinator for logging)
                     if bot_state.chat_manager:
                         farewell = "I appear to be stuck in a decision loop. Conceding to avoid hanging the game. GG!"
                         try:
-                            client.post_chat_message(game_id, farewell)
+                            if bot_state.coordinator:
+                                bot_state.coordinator.post_chat_message(game_id, farewell)
+                            else:
+                                client.post_chat_message(game_id, farewell)
                         except Exception as e:
                             logger.warning(f"Failed to send loop-concede message: {e}")
 
-                    # Execute concede
-                    if client.concede_game(game_id):
+                    # Execute concede (through coordinator for logging)
+                    concede_success = (bot_state.coordinator.concede_game(game_id)
+                                      if bot_state.coordinator else client.concede_game(game_id))
+                    if concede_success:
                         logger.info("✅ Game conceded due to loop")
                         return current_cn
                     else:
@@ -503,8 +515,8 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
                         decision_result.decision_id, decision_result.value
                     )
                 if response_xml:
-                    logger.info(f"  [Iter {iteration}] 📦 Decision response: {len(response_xml)} bytes")
-                    # Log the XML for debugging
+                    logger.debug(f"  [Iter {iteration}] 📦 Decision response: {len(response_xml)} bytes")
+                    # Log the XML for debugging when there might be issues
                     if repeat_count > 0 or iteration > 3:
                         logger.warning(f"  [Iter {iteration}] XML Response (first 500 chars): {response_xml[:500]}")
                     try:
@@ -521,7 +533,7 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
                             # Get new events from response - add to queue for next iteration
                             resp_events = resp_root.findall('.//ge')
                             if len(resp_events) > 0:
-                                logger.info(f"  [Iter {iteration}] 🔄 Adding {len(resp_events)} events to queue...")
+                                logger.debug(f"  [Iter {iteration}] 🔄 Adding {len(resp_events)} events to queue...")
                                 events_to_process.extend(resp_events)
                     except Exception as e:
                         logger.error(f"  [Iter {iteration}] Error parsing decision response: {e}")
@@ -542,16 +554,21 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
         # Concede the game to avoid hanging forever.
         logger.error(f"🚨 CRITICAL: Max iterations reached - conceding game to avoid hang!")
 
-        # Send farewell message
+        # Send farewell message (through coordinator for logging)
         if bot_state.chat_manager:
             farewell = "I appear to be stuck in an unbreakable loop. Conceding to avoid hanging the game. GG!"
             try:
-                client.post_chat_message(game_id, farewell)
+                if bot_state.coordinator:
+                    bot_state.coordinator.post_chat_message(game_id, farewell)
+                else:
+                    client.post_chat_message(game_id, farewell)
             except Exception as e:
                 logger.warning(f"Failed to send max-iterations concede message: {e}")
 
-        # Execute concede
-        if client.concede_game(game_id):
+        # Execute concede (through coordinator for logging)
+        concede_success = (bot_state.coordinator.concede_game(game_id)
+                          if bot_state.coordinator else client.concede_game(game_id))
+        if concede_success:
             logger.info("✅ Game conceded due to max iterations")
         else:
             logger.error("Failed to concede! Game may be stuck.")
@@ -592,9 +609,12 @@ def do_location_checks(game_id: str, client, board_state, strategy_controller, c
         logger.debug("📊 No locations to check this turn")
         return
 
-    logger.info(f"📊 Checking {len(locations_to_check)} locations for Battle Order rules...")
+    # Log what we're about to check
+    loc_names = [loc.site_name or loc.card_id for loc in locations_to_check]
+    logger.info(f"📊 Checking {len(locations_to_check)} location(s) for Battle Order rules: {loc_names}")
 
     for loc in locations_to_check:
+        loc_name = loc.site_name or loc.card_id
         try:
             # Use coordinator for rate-limited cardInfo calls (30s delay between)
             if coordinator:
@@ -605,8 +625,11 @@ def do_location_checks(game_id: str, client, board_state, strategy_controller, c
             if html:
                 result = strategy_controller.process_location_check(loc.card_id, html)
                 strategy_controller.update_location_with_check(loc, result)
+                logger.info(f"   📍 Checked '{loc_name}': drain={result.my_drain_amount or 'N/A'}, "
+                           f"battle_order={result.has_battle_order} "
+                           f"(total checks this game: {strategy_controller._total_checks_this_game})")
         except Exception as e:
-            logger.error(f"Error checking location {loc.card_id}: {e}")
+            logger.error(f"Error checking location '{loc_name}' ({loc.card_id}): {e}")
 
     if strategy_controller.under_battle_order_rules:
         logger.info("⚠️  Under Battle Order rules - force drains cost extra!")
@@ -627,6 +650,19 @@ def bot_worker():
 
     while bot_state.running:
         try:
+            # Check rate limit failsafe
+            if bot_state.coordinator and bot_state.coordinator.rate_limit_exceeded:
+                logger.error("🚨 Rate limit failsafe triggered - stopping bot")
+                bot_state.state = GameState.ERROR
+                bot_state.last_error = "Rate limit exceeded - bot stopped for safety"
+                bot_state.running = False
+                socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                socketio.emit('log_message', {
+                    'message': '🚨 RATE LIMIT EXCEEDED - Bot stopped for safety. Check logs.',
+                    'level': 'error'
+                }, namespace='/')
+                break
+
             logger.debug(f"🔄 Worker loop iteration, state={bot_state.state.value}")
             if bot_state.state == GameState.CONNECTING:
                 # Attempt login
@@ -644,10 +680,17 @@ def bot_worker():
                     socketio.emit('state_update', bot_state.to_dict(), namespace='/')
                     socketio.emit('log_message', {'message': '✅ Connected to GEMP server', 'level': 'success'}, namespace='/')
 
-                    # Load deck lists (this can take a moment)
+                    # Initialize network coordinator FIRST so all requests are logged
+                    bot_state.initialize_coordinator()
+
+                    # Load deck lists through coordinator (this can take a moment)
                     logger.info("Loading deck lists...")
-                    bot_state.library_decks = bot_state.client.get_library_decks()
-                    bot_state.user_decks = bot_state.client.get_user_decks()
+                    if bot_state.coordinator:
+                        bot_state.library_decks = bot_state.coordinator.get_library_decks()
+                        bot_state.user_decks = bot_state.coordinator.get_user_decks()
+                    else:
+                        bot_state.library_decks = bot_state.client.get_library_decks()
+                        bot_state.user_decks = bot_state.client.get_user_decks()
                     logger.info(f"Loaded {len(bot_state.library_decks)} library decks, {len(bot_state.user_decks)} user decks")
 
                     # Initialize table manager with decks
@@ -661,9 +704,6 @@ def bot_worker():
                     # Initialize command handler
                     bot_state.initialize_command_handler()
 
-                    # Initialize network coordinator for rate-limited requests
-                    bot_state.initialize_coordinator()
-
                     # Emit updated state with decks
                     socketio.emit('state_update', bot_state.to_dict(), namespace='/')
                     socketio.emit('log_message', {'message': f'📚 Loaded {len(bot_state.library_decks)} library decks, {len(bot_state.user_decks)} user decks', 'level': 'info'}, namespace='/')
@@ -676,9 +716,17 @@ def bot_worker():
                     bot_state.running = False
 
             elif bot_state.state == GameState.IN_LOBBY:
-                # Poll for tables
-                tables = bot_state.client.get_hall_tables()
+                # Poll for tables and get channel number for incremental updates
+                # Use coordinator for rate-limited hall fetches
+                if bot_state.coordinator:
+                    tables, channel_number = bot_state.coordinator.get_hall_initial(return_channel_number=True)
+                else:
+                    tables, channel_number = bot_state.client.get_hall_tables(return_channel_number=True)
                 bot_state.current_tables = tables
+                if channel_number > 0:
+                    if bot_state.hall_channel_number != channel_number:
+                        logger.info(f"📡 Hall channel number: {bot_state.hall_channel_number} -> {channel_number}")
+                    bot_state.hall_channel_number = channel_number
                 socketio.emit('state_update', bot_state.to_dict(), namespace='/')
 
                 # Log table count periodically (every 5 polls = 15 seconds)
@@ -775,7 +823,11 @@ def bot_worker():
 
             elif bot_state.state == GameState.WAITING_FOR_OPPONENT:
                 # Poll hall to check if opponent joined
-                tables = bot_state.client.get_hall_tables()
+                # Use coordinator for rate-limited hall fetches
+                if bot_state.coordinator:
+                    tables = bot_state.coordinator.get_hall_initial()
+                else:
+                    tables = bot_state.client.get_hall_tables()
                 bot_state.current_tables = tables
 
                 # Find our table
@@ -801,8 +853,11 @@ def bot_worker():
                         logger.info(f"🎲 Game started! Game ID: {my_table.game_id}")
                         socketio.emit('log_message', {'message': f'🎲 Game started vs {bot_state.opponent_name}!', 'level': 'success'}, namespace='/')
 
-                        # Join the game
-                        game_state_xml = bot_state.client.join_game(my_table.game_id)
+                        # Join the game (through coordinator for logging)
+                        if bot_state.coordinator:
+                            game_state_xml = bot_state.coordinator.join_game(my_table.game_id)
+                        else:
+                            game_state_xml = bot_state.client.join_game(my_table.game_id)
                         if game_state_xml:
                             bot_state.game_id = my_table.game_id
 
@@ -823,7 +878,18 @@ def bot_worker():
                                 for evaluator in bot_state.brain.evaluators:
                                     if hasattr(evaluator, 'reset_for_new_game'):
                                         evaluator.reset_for_new_game()
-                            logger.info(f"🧠 Brain evaluators reset for new game")
+
+                            # Reset decision tracker (clears loop detection history)
+                            DecisionHandler.reset_tracker()
+                            logger.info(f"🧠 Brain evaluators and decision tracker reset for new game")
+
+                            # Set opponent_name EARLY so achievements work for initial cards
+                            # The full reset_for_game will be called later with correct side info
+                            # We only set the fields needed for achievement checking here
+                            if bot_state.chat_manager:
+                                bot_state.chat_manager.game_id = bot_state.game_id
+                                bot_state.chat_manager.opponent_name = bot_state.opponent_name or "Unknown"
+                                logger.info(f"💬 Chat manager early init for achievements (opponent: {bot_state.opponent_name})")
 
                             # Register callback for card placements (achievements)
                             if bot_state.chat_manager:
@@ -880,51 +946,84 @@ def bot_worker():
                                 logger.info(f"XML content: {game_state_xml[:500]}")
                                 bot_state.channel_number = 0
 
-                            bot_state.state = GameState.PLAYING
-                            socketio.emit('state_update', bot_state.to_dict(), namespace='/')
-                            logger.info("✅ In game session")
+                            # CRITICAL: Check if game is already finished from initial events
+                            # (e.g., opponent timed out before we joined)
+                            if bot_state.board_state and bot_state.board_state.game_winner:
+                                logger.info(f"🏁 Game already finished when joined! Winner: {bot_state.board_state.game_winner}")
+                                logger.info(f"   Reason: {bot_state.board_state.game_win_reason}")
 
-                            # Register with chat system for this game
-                            chat_registered, initial_chat_msg_id = bot_state.client.register_chat(bot_state.game_id)
-                            if chat_registered:
-                                logger.info(f"💬 Registered with chat system (last_msg_id={initial_chat_msg_id})")
+                                # Determine if we won
+                                bot_won = (bot_state.board_state.game_winner == config.GEMP_USERNAME or
+                                          bot_state.board_state.game_winner == bot_state.board_state.my_player_name)
+
+                                # Notify table manager
+                                if bot_state.table_manager:
+                                    bot_state.table_manager.on_game_ended()
+
+                                # Clear game state and return to lobby
+                                bot_state.current_table_id = None
+                                bot_state.opponent_name = None
+                                bot_state.game_id = None
+                                bot_state.channel_number = 0
+                                bot_state.state = GameState.IN_LOBBY
+                                socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                                socketio.emit('log_message', {'message': f'🏁 Game already finished - returning to lobby', 'level': 'info'}, namespace='/')
+
+                                # Rotate log file
+                                rotate_game_log(
+                                    opponent_name=bot_state.opponent_name,
+                                    won=bot_won
+                                )
                             else:
-                                logger.warning("⚠️ Failed to register with chat system - commands won't work")
-                                initial_chat_msg_id = 0
+                                # Game is active - enter PLAYING state
+                                bot_state.state = GameState.PLAYING
+                                socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                                logger.info("✅ In game session")
 
-                            # Initialize chat manager for this game
-                            if bot_state.chat_manager:
-                                deck_name = "Unknown"
-                                if bot_state.table_manager and bot_state.table_manager.state:
-                                    deck_name = bot_state.table_manager.state.current_deck_name or "Unknown"
+                                # Register with chat system for this game (through coordinator for logging)
+                                if bot_state.coordinator:
+                                    chat_registered, initial_chat_msg_id = bot_state.coordinator.register_chat(bot_state.game_id)
+                                else:
+                                    chat_registered, initial_chat_msg_id = bot_state.client.register_chat(bot_state.game_id)
+                                if chat_registered:
+                                    logger.info(f"💬 Registered with chat system (last_msg_id={initial_chat_msg_id})")
+                                else:
+                                    logger.warning("⚠️ Failed to register with chat system - commands won't work")
+                                    initial_chat_msg_id = 0
 
-                                    # Backup: save table state at game start (in case table was created before persistence fix)
-                                    if deck_name != "Unknown" and bot_state.current_table_id:
-                                        from engine.table_manager import _save_table_state
-                                        _save_table_state(bot_state.current_table_id, deck_name)
-                                        logger.debug(f"📝 Saved table state at game start: {deck_name}")
+                                # Initialize chat manager for this game
+                                if bot_state.chat_manager:
+                                    deck_name = "Unknown"
+                                    if bot_state.table_manager and bot_state.table_manager.state:
+                                        deck_name = bot_state.table_manager.state.current_deck_name or "Unknown"
 
-                                my_side = bot_state.board_state.my_side or "unknown"
-                                opponent_side = "Light" if my_side == "Dark" else "Dark"
+                                        # Backup: save table state at game start (in case table was created before persistence fix)
+                                        if deck_name != "Unknown" and bot_state.current_table_id:
+                                            from engine.table_manager import _save_table_state
+                                            _save_table_state(bot_state.current_table_id, deck_name)
+                                            logger.debug(f"📝 Saved table state at game start: {deck_name}")
 
-                                bot_state.chat_manager.reset_for_game(
-                                    game_id=bot_state.game_id,
-                                    opponent_name=bot_state.opponent_name or "Unknown",
-                                    deck_name=deck_name,
-                                    my_side=my_side,
-                                    opponent_side=opponent_side
-                                )
-                                bot_state.chat_manager.on_game_start()
-                                logger.info(f"💬 Chat manager initialized for game vs {bot_state.opponent_name} (deck: {deck_name})")
+                                    my_side = bot_state.board_state.my_side or "unknown"
+                                    opponent_side = "Light" if my_side == "Dark" else "Dark"
 
-                            # Initialize command handler for this game
-                            if bot_state.command_handler:
-                                bot_state.command_handler.reset_for_game(
-                                    game_id=bot_state.game_id,
-                                    opponent_name=bot_state.opponent_name or "Unknown",
-                                    initial_msg_id=initial_chat_msg_id
-                                )
-                                logger.info(f"🎮 Command handler initialized for game")
+                                    bot_state.chat_manager.reset_for_game(
+                                        game_id=bot_state.game_id,
+                                        opponent_name=bot_state.opponent_name or "Unknown",
+                                        deck_name=deck_name,
+                                        my_side=my_side,
+                                        opponent_side=opponent_side
+                                    )
+                                    bot_state.chat_manager.on_game_start()
+                                    logger.info(f"💬 Chat manager initialized for game vs {bot_state.opponent_name} (deck: {deck_name})")
+
+                                # Initialize command handler for this game
+                                if bot_state.command_handler:
+                                    bot_state.command_handler.reset_for_game(
+                                        game_id=bot_state.game_id,
+                                        opponent_name=bot_state.opponent_name or "Unknown",
+                                        initial_msg_id=initial_chat_msg_id
+                                    )
+                                    logger.info(f"🎮 Command handler initialized for game")
                 else:
                     # Table disappeared - back to lobby
                     logger.info("Table no longer exists - returning to lobby")
@@ -937,13 +1036,29 @@ def bot_worker():
                 socketio.sleep(config.HALL_POLL_INTERVAL)
 
             elif bot_state.state == GameState.PLAYING:
+                # Flag to detect game end from XML
+                game_finished = False
+
                 # Poll for game updates
                 if bot_state.game_id:
                     logger.debug(f"⏱️  Polling game update (cn={bot_state.channel_number})")
-                    update_xml = bot_state.client.get_game_update(
-                        bot_state.game_id,
-                        bot_state.channel_number
-                    )
+
+                    # Skip delay during fast action phases (draw/activate)
+                    phase = bot_state.board_state.current_phase if bot_state.board_state else ""
+                    fast_phase = any(p in phase.lower() for p in ['draw', 'activate'])
+
+                    # Use coordinator for rate-limited game updates
+                    if bot_state.coordinator:
+                        update_xml = bot_state.coordinator.get_game_update(
+                            bot_state.game_id,
+                            bot_state.channel_number,
+                            fast_phase=fast_phase
+                        )
+                    else:
+                        update_xml = bot_state.client.get_game_update(
+                            bot_state.game_id,
+                            bot_state.channel_number
+                        )
 
                     if update_xml == "SESSION_EXPIRED":
                         # Session expired - track failure and attempt recovery
@@ -953,13 +1068,19 @@ def bot_worker():
                         logger.warning("🔄 Session expired, re-logging in...")
                         socketio.emit('log_message', {'message': '🔄 Session expired, re-logging in...', 'level': 'warning'}, namespace='/')
 
-                        if bot_state.client.login(config.GEMP_USERNAME, config.GEMP_PASSWORD):
+                        # Re-login through coordinator for proper delay
+                        login_success = (bot_state.coordinator.login(config.GEMP_USERNAME, config.GEMP_PASSWORD)
+                                        if bot_state.coordinator else bot_state.client.login(config.GEMP_USERNAME, config.GEMP_PASSWORD))
+                        if login_success:
                             logger.info("✅ Re-login successful, re-joining game...")
                             if bot_state.connection_monitor:
                                 bot_state.connection_monitor.record_success()
 
-                            # Re-join the game
-                            game_state_xml = bot_state.client.join_game(bot_state.game_id)
+                            # Re-join the game (through coordinator for logging)
+                            if bot_state.coordinator:
+                                game_state_xml = bot_state.coordinator.join_game(bot_state.game_id)
+                            else:
+                                game_state_xml = bot_state.client.join_game(bot_state.game_id)
                             if game_state_xml:
                                 # Re-parse channel number
                                 try:
@@ -987,29 +1108,55 @@ def bot_worker():
                                 bot_state.last_error = "Session expired and re-login failed"
 
                     elif update_xml is None:
-                        # Request failed completely - track failure with actual error
-                        if bot_state.connection_monitor:
-                            # Get actual error from client (timeout, connection refused, etc.)
-                            error_reason = bot_state.client.last_error or "Request returned None"
-                            should_recover = bot_state.connection_monitor.record_failure(error_reason)
+                        # Request failed completely
+                        error_reason = bot_state.client.last_error or "Request returned None"
 
-                            if should_recover:
-                                logger.warning("🔄 Multiple failures detected, attempting recovery...")
-                                socketio.emit('log_message', {'message': '🔄 Connection issues, attempting recovery...', 'level': 'warning'}, namespace='/')
+                        # HTTP 404 means game doesn't exist anymore - treat as game ended, NOT connection failure
+                        if "404" in error_reason:
+                            logger.info(f"🏁 Game no longer exists (HTTP 404) - returning to lobby")
+                            socketio.emit('log_message', {'message': '🏁 Game ended (no longer on server)', 'level': 'info'}, namespace='/')
 
-                                # Use exponential backoff delay from monitor
-                                delay = bot_state.connection_monitor.get_recovery_delay()
-                                logger.info(f"⏳ Waiting {delay:.1f}s before recovery attempt...")
-                                socketio.sleep(delay)
+                            # Notify table manager
+                            if bot_state.table_manager:
+                                bot_state.table_manager.on_game_ended()
 
-                                if bot_state.connection_monitor.attempt_recovery(config.GEMP_USERNAME, config.GEMP_PASSWORD):
-                                    logger.info("✅ Connection recovered")
-                                    socketio.emit('log_message', {'message': '✅ Connection recovered', 'level': 'success'}, namespace='/')
-                                else:
-                                    logger.error("❌ Recovery failed")
-                                    socketio.emit('log_message', {'message': '❌ Recovery failed', 'level': 'error'}, namespace='/')
+                            # Leave chat system
+                            if bot_state.game_id:
+                                if bot_state.coordinator:
+                                    bot_state.coordinator.leave_chat(bot_state.game_id)
+                                elif bot_state.client:
+                                    bot_state.client.leave_chat(bot_state.game_id)
+
+                            # Clear game state and return to lobby
+                            game_finished = True  # Skip normal game end processing below
+                            bot_state.current_table_id = None
+                            bot_state.opponent_name = None
+                            bot_state.game_id = None
+                            bot_state.channel_number = 0
+                            bot_state.state = GameState.IN_LOBBY
+                            socketio.emit('state_update', bot_state.to_dict(), namespace='/')
                         else:
-                            logger.warning("⚠️  Game update returned None (request failed)")
+                            # Other failures - track and attempt recovery
+                            if bot_state.connection_monitor:
+                                should_recover = bot_state.connection_monitor.record_failure(error_reason)
+
+                                if should_recover:
+                                    logger.warning("🔄 Multiple failures detected, attempting recovery...")
+                                    socketio.emit('log_message', {'message': '🔄 Connection issues, attempting recovery...', 'level': 'warning'}, namespace='/')
+
+                                    # Use exponential backoff delay from monitor
+                                    delay = bot_state.connection_monitor.get_recovery_delay()
+                                    logger.info(f"⏳ Waiting {delay:.1f}s before recovery attempt...")
+                                    socketio.sleep(delay)
+
+                                    if bot_state.connection_monitor.attempt_recovery(config.GEMP_USERNAME, config.GEMP_PASSWORD):
+                                        logger.info("✅ Connection recovered")
+                                        socketio.emit('log_message', {'message': '✅ Connection recovered', 'level': 'success'}, namespace='/')
+                                    else:
+                                        logger.error("❌ Recovery failed")
+                                        socketio.emit('log_message', {'message': '❌ Recovery failed', 'level': 'error'}, namespace='/')
+                            else:
+                                logger.warning(f"⚠️  Game update failed: {error_reason}")
 
                     elif update_xml:
                         # Successful request - track it
@@ -1073,17 +1220,25 @@ def bot_worker():
                                 else:
                                     logger.debug("No new game events")
 
-                                # Poll for chat commands
-                                if bot_state.command_handler:
+                                # Poll for chat commands (but not during fast action phases)
+                                # Chat poll can take 2-3s due to long-polling, skip during draw/activate
+                                phase = bot_state.board_state.current_phase if bot_state.board_state else ""
+                                skip_chat_poll = any(p in phase.lower() for p in ['draw', 'activate'])
+                                if bot_state.command_handler and not skip_chat_poll:
                                     try:
                                         bot_state.command_handler.poll_and_handle_commands()
                                     except Exception as e:
                                         logger.error(f"Error polling chat commands: {e}")
 
-                                # Check if game ended
+                                # Check if game ended (set flag for cleanup below)
+                                # Check both XML finished attribute AND board_state.game_winner
+                                # (game_winner is set from message events, e.g., after concede)
                                 if root.get('finished') == 'true':
+                                    game_finished = True
                                     logger.info("🏁 Game finished (from game state)")
-                                    # Will trigger cleanup below
+                                elif bot_state.board_state and bot_state.board_state.game_winner:
+                                    game_finished = True
+                                    logger.info(f"🏁 Game finished (winner detected: {bot_state.board_state.game_winner})")
                             else:
                                 logger.warning(f"Unexpected root element: {root.tag}")
 
@@ -1112,42 +1267,14 @@ def bot_worker():
                             logger.error("❌ Forced recovery failed")
                             socketio.emit('log_message', {'message': '❌ Recovery failed', 'level': 'error'}, namespace='/')
 
-                # Only check hall if connection is stable AND enough time has passed
-                # During game, only check hall every HALL_CHECK_INTERVAL_DURING_GAME seconds
-                # This prevents excessive requests (was checking every 1 second!)
-                tables = []
-                my_table = None
-                time_since_last_hall = time.time() - bot_state._last_hall_check_during_game
-                should_check_hall = (not skip_hall_check and
-                                    time_since_last_hall >= bot_state.HALL_CHECK_INTERVAL_DURING_GAME)
+                # NOTE: Web client opens a new browser tab for games and does NOT poll
+                # the hall during gameplay. Game end is detected from:
+                # 1. Game update XML having finished="true" (handled above)
+                # 2. Game update returning error (connection lost)
+                # We no longer poll the hall during games to match web client behavior.
 
-                if should_check_hall:
-                    # Use coordinator for rate-limited hall update
-                    if bot_state.coordinator:
-                        tables, bot_state.hall_channel_number = bot_state.coordinator.update_hall(
-                            bot_state.hall_channel_number
-                        )
-                    else:
-                        tables = bot_state.client.get_hall_tables()
-                    bot_state.current_tables = tables
-                    bot_state._last_hall_check_during_game = time.time()
-                    logger.debug(f"📊 Hall check during game: {len(tables)} tables")
-
-                    # Check if our table still exists
-                    for table in tables:
-                        if table.table_id == bot_state.current_table_id:
-                            my_table = table
-                            break
-                else:
-                    # Use cached tables
-                    tables = bot_state.current_tables
-                    for table in tables:
-                        if table.table_id == bot_state.current_table_id:
-                            my_table = table
-                            break
-
-                if should_check_hall and (not my_table or my_table.status == 'finished'):
-                    # Game ended!
+                # Handle game end cleanup
+                if game_finished:
                     logger.info("🏁 Game ended!")
                     socketio.emit('log_message', {'message': '🏁 Game ended', 'level': 'info'}, namespace='/')
 
@@ -1187,9 +1314,12 @@ def bot_worker():
                     if bot_state.table_manager:
                         bot_state.table_manager.on_game_ended()
 
-                    # Leave chat system (must be before clearing game_id)
-                    if bot_state.game_id and bot_state.client:
-                        bot_state.client.leave_chat(bot_state.game_id)
+                    # Leave chat system (must be before clearing game_id) - through coordinator for logging
+                    if bot_state.game_id:
+                        if bot_state.coordinator:
+                            bot_state.coordinator.leave_chat(bot_state.game_id)
+                        elif bot_state.client:
+                            bot_state.client.leave_chat(bot_state.game_id)
                         logger.info(f"💬 Left chat system for game {bot_state.game_id}")
 
                     # Rotate log file (preserve game log with timestamp)
@@ -1207,7 +1337,11 @@ def bot_worker():
                     socketio.emit('state_update', bot_state.to_dict(), namespace='/')
                     # Note: Table will be auto-created by IN_LOBBY state handler
 
-                socketio.sleep(config.GAME_POLL_INTERVAL)
+                # Use shorter poll interval during fast action phases (draw/activate)
+                phase = bot_state.board_state.current_phase if bot_state.board_state else ""
+                fast_phase = any(p in phase.lower() for p in ['draw', 'activate'])
+                poll_interval = 0.25 if fast_phase else config.GAME_POLL_INTERVAL
+                socketio.sleep(poll_interval)
 
             else:
                 # Unknown state or not ready yet
@@ -1423,7 +1557,10 @@ def handle_stop_bot():
         bot_state.table_manager.reset()
         logger.info("🔄 TableManager reset")
 
-    if bot_state.client:
+    # Logout through coordinator for logging
+    if bot_state.coordinator:
+        bot_state.coordinator.logout()
+    elif bot_state.client:
         bot_state.client.logout()
 
     emit('state_update', bot_state.to_dict())
@@ -1553,12 +1690,15 @@ def handle_create_table(data):
         emit('log_message', {'message': 'Bot must be in lobby to create table', 'level': 'warning'})
         return
 
-    if not bot_state.client:
+    if not bot_state.client and not bot_state.coordinator:
         emit('log_message', {'message': 'No GEMP client available', 'level': 'error'})
         return
 
-    # Create table
-    table_id = bot_state.client.create_table(deck_name, table_name, is_library=is_library)
+    # Create table through coordinator for logging
+    if bot_state.coordinator:
+        table_id = bot_state.coordinator.create_table(deck_name, table_name, is_library=is_library)
+    else:
+        table_id = bot_state.client.create_table(deck_name, table_name, is_library=is_library)
 
     if table_id:
         bot_state.current_table_id = table_id
@@ -1588,12 +1728,15 @@ def handle_leave_table():
         emit('log_message', {'message': '⚠️ Not at any table', 'level': 'warning'})
         return
 
-    if not bot_state.client:
+    if not bot_state.client and not bot_state.coordinator:
         emit('log_message', {'message': '❌ No GEMP client available', 'level': 'error'})
         return
 
-    # Drop from the table
-    success = bot_state.client.leave_table(bot_state.current_table_id)
+    # Drop from the table through coordinator for logging
+    if bot_state.coordinator:
+        success = bot_state.coordinator.leave_table(bot_state.current_table_id)
+    else:
+        success = bot_state.client.leave_table(bot_state.current_table_id)
 
     if success:
         logger.info(f'✅ Left table {bot_state.current_table_id}')

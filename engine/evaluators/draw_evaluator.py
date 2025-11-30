@@ -67,8 +67,15 @@ class DrawEvaluator(ActionEvaluator):
         return None
 
     def can_evaluate(self, context: DecisionContext) -> bool:
-        """Handle CARD_ACTION_CHOICE with draw actions"""
+        """Handle CARD_ACTION_CHOICE with draw actions during OUR turn only"""
         if context.decision_type not in ['CARD_ACTION_CHOICE', 'ACTION_CHOICE']:
+            return False
+
+        # CRITICAL: Only evaluate draw decisions during OUR turn
+        # During opponent's turn, "Choose Draw action" means "do you want to interrupt?"
+        # not "should you draw a card?" - let other evaluators handle interrupts
+        if context.board_state and not context.board_state.is_my_turn:
+            logger.debug(f"🎴 DrawEvaluator skipping - not our turn")
             return False
 
         # Check if decision text mentions "Draw" - this is the primary trigger

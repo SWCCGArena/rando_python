@@ -192,8 +192,46 @@ class ChatManager:
         Called at start of each turn.
 
         Generates route score commentary.
+
+        IMPORTANT: Only report route score at the START of OPPONENT'S turn:
+        - Not during our turn (we report at start of their turn)
+        - Not during battle (phase changes during battle include turn number)
+        - Not after loading into a game (turn jumped, not incremented)
+        - Not after a revert (same reason)
         """
         if turn_number in self.reported_turns:
+            return
+
+        # Guard 1: Only report at start of opponent's turn, not ours
+        # Route score commentary should happen when opponent starts their turn
+        if board_state and board_state.is_my_turn:
+            logger.debug(f"Skipping route score for turn {turn_number} - it's our turn, not opponent's")
+            # Still update tracking to prevent repeated triggers
+            self.current_turn = turn_number
+            self.reported_turns.add(turn_number)
+            return
+
+        # Guard 2: Don't report during battle
+        if board_state and board_state.in_battle:
+            logger.debug(f"Skipping route score for turn {turn_number} - in battle")
+            # Still update tracking to prevent repeated triggers
+            self.current_turn = turn_number
+            self.reported_turns.add(turn_number)
+            return
+
+        # Guard 3: Only report if turn incremented by 1 (not a jump after load/revert)
+        # If current_turn is 0, this is first turn we've seen - don't report
+        # If turn jumped by more than 1, we probably loaded into an existing game
+        if self.current_turn == 0:
+            logger.info(f"First turn seen ({turn_number}) - skipping route score (possible game load)")
+            self.current_turn = turn_number
+            self.reported_turns.add(turn_number)
+            return
+
+        if turn_number > self.current_turn + 1:
+            logger.info(f"Turn jumped from {self.current_turn} to {turn_number} - skipping route score (possible load/revert)")
+            self.current_turn = turn_number
+            self.reported_turns.add(turn_number)
             return
 
         self.current_turn = turn_number
@@ -233,7 +271,11 @@ class ChatManager:
             board_state: Current board state
         """
         if not self.achievement_tracker or not self.opponent_name:
+            logger.debug(f"🏆 Skipping achievement check for '{card_title}' - "
+                        f"tracker={self.achievement_tracker is not None}, opponent={self.opponent_name}")
             return
+
+        logger.debug(f"🏆 Checking achievements for deployed card: '{card_title}' ({zone}, owner={owner})")
 
         # Check achievements based on current board state
         achievement_msgs = self.achievement_tracker.check_board_for_achievements(
@@ -241,7 +283,7 @@ class ChatManager:
         )
         for msg in achievement_msgs:
             self._send_chat(msg, message_type='achievement')
-            logger.info(f"🏆 Achievement triggered by {card_title}: {msg[:50]}...")
+            logger.info(f"🏆 Achievement triggered by '{card_title}': {msg[:50]}...")
 
     def on_battle_damage(self, damage: int, board_state: 'BoardState'):
         """

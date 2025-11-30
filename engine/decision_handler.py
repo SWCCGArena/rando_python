@@ -77,13 +77,34 @@ class DecisionHandler:
 
         # Parse noLongDelay from decision parameters
         # This flag indicates if a quick response is expected
-        no_long_delay = False
+        server_no_long_delay = False
         for param in decision_element.findall('.//parameter'):
             if param.get('name') == 'noLongDelay':
-                no_long_delay = param.get('value', '').lower() == 'true'
+                server_no_long_delay = param.get('value', '').lower() == 'true'
                 break
 
-        logger.info(f"🤔 Processing decision: type={decision_type}, text='{decision_text}'")
+        no_long_delay = server_no_long_delay
+        delay_reason = "server" if server_no_long_delay else ""
+
+        # Force quick delay during OUR draw phase (drawing cards should be fast)
+        # Check if we're in draw phase and it's our turn
+        if board_state:
+            phase = board_state.current_phase or ""
+            is_my_turn = board_state.is_my_turn
+            is_our_draw_phase = "draw" in phase.lower() and is_my_turn
+
+            if is_our_draw_phase and not no_long_delay:
+                no_long_delay = True
+                delay_reason = "our draw phase"
+
+            # Build turn info for logging
+            turn_info = f"phase={phase}, myTurn={is_my_turn}"
+        else:
+            turn_info = "no board state"
+
+        # Log with clear delay source
+        delay_str = f"quick ({delay_reason})" if no_long_delay else "normal"
+        logger.info(f"🤔 Decision: type={decision_type}, delay={delay_str}, {turn_info}, text='{decision_text[:60]}...'" if len(decision_text) > 60 else f"🤔 Decision: type={decision_type}, delay={delay_str}, {turn_info}, text='{decision_text}'")
 
         # Check for potential infinite loop (now detects MULTI-DECISION loops!)
         is_loop, count = _decision_tracker.check_for_loop(decision_type, decision_text)
@@ -94,6 +115,12 @@ class DecisionHandler:
         params = DecisionSafety.parse_decision_params(decision_element)
         all_options = params.get('action_ids', []) or DecisionSafety.get_selectable_options(params) or params.get('card_ids', [])
 
+        # CRITICAL FIX: Include pass option (empty string) when passing is allowed
+        # This prevents loops where all actions are blocked but we could just pass
+        can_pass = DecisionSafety.can_pass(params)
+        if can_pass and '' not in all_options:
+            all_options = list(all_options) + ['']  # Add pass as final option
+
         # === CRITICAL LOOP HANDLING ===
         if loop_severity == 'critical':
             logger.error(f"🚨 CRITICAL LOOP ({count} repeats) - this is a dead end!")
@@ -101,10 +128,15 @@ class DecisionHandler:
             if blocked_responses and all_options:
                 available = [opt for opt in all_options if opt not in blocked_responses]
                 if available:
-                    forced = available[0]
-                    logger.error(f"🚨 Forcing different choice: {forced} (blocked: {blocked_responses})")
+                    # Prefer pass (empty string) as the safest escape from loops
+                    if '' in available:
+                        forced = ''
+                        logger.error(f"🚨 CRITICAL LOOP - passing to escape (blocked: {blocked_responses})")
+                    else:
+                        forced = available[0]
+                        logger.error(f"🚨 Forcing different choice: {forced} (blocked: {blocked_responses})")
                     _decision_tracker.record_decision(decision_type, decision_text, decision_id, forced)
-                    return (decision_id, forced)
+                    return DecisionResult(decision_id=decision_id, value=forced, no_long_delay=no_long_delay)
                 else:
                     # ALL options are blocked - we're truly stuck
                     logger.error(f"🚨 ALL OPTIONS BLOCKED - signaling need to concede")
@@ -112,16 +144,21 @@ class DecisionHandler:
                     # For now, just pick random and hope
                     forced = random.choice(all_options) if all_options else ""
                     _decision_tracker.record_decision(decision_type, decision_text, decision_id, forced)
-                    return (decision_id, forced)
+                    return DecisionResult(decision_id=decision_id, value=forced, no_long_delay=no_long_delay)
 
         # === SEVERE LOOP: Force different choice ===
         if loop_severity == 'severe' and blocked_responses and all_options:
             available = [opt for opt in all_options if opt not in blocked_responses]
             if available:
-                forced = random.choice(available)
-                logger.warning(f"⚠️  SEVERE LOOP ({count}x) - forcing different: {forced}")
+                # Prefer pass (empty string) as an escape hatch from loops
+                if '' in available:
+                    forced = ''
+                    logger.warning(f"⚠️  SEVERE LOOP ({count}x) - passing to break loop")
+                else:
+                    forced = random.choice(available)
+                    logger.warning(f"⚠️  SEVERE LOOP ({count}x) - forcing different: {forced}")
                 _decision_tracker.record_decision(decision_type, decision_text, decision_id, forced)
-                return (decision_id, forced)
+                return DecisionResult(decision_id=decision_id, value=forced, no_long_delay=no_long_delay)
 
         # === MILD LOOP: Add randomness but still try brain ===
         use_random_to_break_loop = loop_severity in ['mild', 'severe']
@@ -143,8 +180,13 @@ class DecisionHandler:
                     if use_random_to_break_loop and result[1] in blocked_responses and all_options:
                         available = [opt for opt in all_options if opt not in blocked_responses]
                         if available:
-                            override = random.choice(available)
-                            logger.warning(f"🔄 Brain chose blocked response '{result[1]}', overriding to '{override}'")
+                            # Prefer pass (empty string) as escape hatch
+                            if '' in available:
+                                override = ''
+                                logger.warning(f"🔄 Brain chose blocked response '{result[1]}', passing to break loop")
+                            else:
+                                override = random.choice(available)
+                                logger.warning(f"🔄 Brain chose blocked response '{result[1]}', overriding to '{override}'")
                             result = (result[0], override)
                     logger.debug(f"Brain handled decision: {result[1]}")
 

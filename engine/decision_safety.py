@@ -438,15 +438,26 @@ class DecisionTracker:
         if len(self.history) > self.max_history:
             self.history = self.history[-self.max_history:]
 
-        # Add to sequence for loop detection
-        self.sequence.append((key, response))
+        # CRITICAL: Only track NON-PASS responses for loop detection.
+        # Passing (empty response) can't cause an infinite loop because:
+        # 1. It doesn't change game state
+        # 2. The server controls when to move on
+        # 3. Multiple "Optional responses" windows during battle are normal
+        # Only actual actions (non-empty responses) can cause loops.
+        if response != "":
+            self.sequence.append((key, response))
 
-        # Keep sequence reasonable length (enough to detect loops of 2-4 decisions)
-        if len(self.sequence) > 20:
-            self.sequence = self.sequence[-20:]
+            # Keep sequence reasonable length (enough to detect loops of 2-4 decisions)
+            if len(self.sequence) > 20:
+                self.sequence = self.sequence[-20:]
 
-        # Check for sequence repeat
-        self._check_sequence_loop()
+            # Check for sequence repeat
+            self._check_sequence_loop()
+        else:
+            # Pass response - clear any detected loop since we're not looping
+            # (we're just declining optional actions, which is normal)
+            if self.sequence_repeat_count > 0:
+                logger.debug(f"Pass response - not counting for loop detection")
 
     def _check_sequence_loop(self) -> None:
         """Check if we're in a multi-decision loop"""
@@ -525,9 +536,12 @@ class DecisionTracker:
         Get responses that should be blocked/penalized for this decision.
 
         Called by evaluators to avoid choices that caused loops.
+        Note: Empty string (pass) is never blocked since passing can't cause loops.
         """
         key = self._decision_key(decision_type, decision_text)
-        return self.blocked_responses.get(key, set())
+        blocked = self.blocked_responses.get(key, set())
+        # Never block empty response (pass) - passing can't cause loops
+        return blocked - {"", None}
 
     def get_loop_severity(self) -> str:
         """

@@ -85,16 +85,19 @@ class GEMPClient:
             logger.error(f"Unexpected error during login: {e}", exc_info=True)
             return False
 
-    def get_hall_tables(self) -> List[GameTable]:
+    def get_hall_tables(self, return_channel_number: bool = False):
         """
         Get list of current tables in the hall.
 
+        Args:
+            return_channel_number: If True, returns (tables, channel_number) tuple
+
         Returns:
-            List of GameTable objects
+            List of GameTable objects, or (tables, channel_number) if return_channel_number=True
         """
         if not self.logged_in:
             logger.warning("Not logged in, cannot get hall tables")
-            return []
+            return ([], 0) if return_channel_number else []
 
         try:
             logger.debug("Fetching hall tables")
@@ -102,6 +105,10 @@ class GEMPClient:
             response = self.session.get(
                 f"{self.server_url}/hall",
                 params={'participantId': 'null'},
+                headers={
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/xml, text/xml, */*; q=0.01'
+                },
                 timeout=self.timeout
             )
 
@@ -109,17 +116,22 @@ class GEMPClient:
                 logger.debug(f"Hall XML response (first 1000 chars): {response.text[:1000]}")
                 tables = self.parser.parse_hall_tables(response.text)
                 logger.debug(f"Found {len(tables)} tables in hall")
+
+                if return_channel_number:
+                    channel_number = self._parse_hall_channel_number(response.text, 0)
+                    logger.debug(f"Hall channel number: {channel_number}")
+                    return tables, channel_number
                 return tables
             else:
                 logger.error(f"Failed to get hall: HTTP {response.status_code}")
-                return []
+                return ([], 0) if return_channel_number else []
 
         except requests.RequestException as e:
             logger.error(f"Hall request failed: {e}")
-            return []
+            return ([], 0) if return_channel_number else []
         except Exception as e:
             logger.error(f"Unexpected error fetching hall: {e}")
-            return []
+            return ([], 0) if return_channel_number else []
 
     def update_hall(self, channel_number: int) -> tuple:
         """
@@ -141,13 +153,19 @@ class GEMPClient:
             return [], channel_number
 
         try:
-            logger.debug(f"Polling hall with channel number {channel_number}")
+            request_data = {
+                'channelNumber': str(channel_number),
+                'participantId': 'null'
+            }
+            logger.info(f"📡 Hall update request: POST /hall/update data={request_data}")
 
+            # Match exact request format from web client
             response = self.session.post(
                 f"{self.server_url}/hall/update",
-                data={
-                    'participantId': 'null',
-                    'channelNumber': str(channel_number)
+                data=request_data,
+                headers={
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/xml, text/xml, */*; q=0.01'
                 },
                 timeout=20  # Match web client timeout
             )
@@ -161,8 +179,15 @@ class GEMPClient:
 
                 logger.debug(f"Hall update: {len(tables)} tables, channel {channel_number} -> {new_cn}")
                 return tables, new_cn
+            elif response.status_code == 409:
+                # 409 Conflict - channel number is stale, fall back to full GET
+                logger.warning(f"⚠️  Hall update 409 (stale channel), falling back to GET /hall")
+                return self.get_hall_tables(return_channel_number=True)
             else:
                 logger.error(f"Failed to update hall: HTTP {response.status_code}")
+                # Log response body for debugging
+                if response.status_code in [401, 403]:
+                    logger.error(f"Response body: {response.text[:500]}")
                 return [], channel_number
 
         except requests.RequestException as e:
@@ -488,11 +513,11 @@ class GEMPClient:
             if response.status_code == 200:
                 self.last_error = None  # Clear error on success
                 logger.debug(f"✅ Game update successful (cn={channel_number}, {len(response.text)} bytes)")
-                # Log XML at INFO level for debugging
+                # Log XML at DEBUG level (coordinator already logs timing)
                 if len(response.text) < 3000:
-                    logger.info(f"📄 Game update XML: {response.text}")
+                    logger.debug(f"📄 Game update XML: {response.text}")
                 else:
-                    logger.info(f"📄 Game update XML (first 2000 chars): {response.text[:2000]}...")
+                    logger.debug(f"📄 Game update XML (first 2000 chars): {response.text[:2000]}...")
                 return response.text
             elif response.status_code == 409:
                 # 409 = session expired, need to re-login
@@ -582,12 +607,12 @@ class GEMPClient:
             )
 
             if response.status_code == 200:
-                logger.info(f"✅ Decision posted successfully ({len(response.text)} bytes)")
-                # Log XML at INFO level for debugging
+                logger.debug(f"✅ Decision posted successfully ({len(response.text)} bytes)")
+                # Log XML at DEBUG level (coordinator already logs timing)
                 if len(response.text) < 3000:
-                    logger.info(f"📄 Decision response XML: {response.text}")
+                    logger.debug(f"📄 Decision response XML: {response.text}")
                 else:
-                    logger.info(f"📄 Decision response XML (first 2000 chars): {response.text[:2000]}...")
+                    logger.debug(f"📄 Decision response XML (first 2000 chars): {response.text[:2000]}...")
                 return response.text
             else:
                 logger.error(f"Failed to post decision: HTTP {response.status_code}")

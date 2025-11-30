@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 
 # Default max location checks per turn (network optimization)
 # Can be overridden via config.MAX_LOCATION_CHECKS_PER_TURN
-DEFAULT_MAX_LOCATION_CHECKS_PER_TURN = 5
+# NOTE: We only need 1 check per turn since Battle Order is a global state
+# that can be detected from any location. We rotate through locations.
+DEFAULT_MAX_LOCATION_CHECKS_PER_TURN = 1
 
 
 @dataclass
@@ -63,6 +65,7 @@ class StrategyController:
         self._locations_checked_this_turn: Set[str] = set()
         self._locations_checked_ever: Set[str] = set()
         self._checks_this_turn = 0
+        self._total_checks_this_game = 0  # Total cardInfo calls this game
 
         # Optimization: Don't check locations until first Control phase
         self._first_control_phase_seen = False
@@ -93,6 +96,7 @@ class StrategyController:
         self._locations_checked_this_turn.clear()
         self._locations_checked_ever.clear()
         self._checks_this_turn = 0
+        self._total_checks_this_game = 0
 
         # Reset optimization state
         self._first_control_phase_seen = False
@@ -223,10 +227,11 @@ class StrategyController:
         """
         result = LocationCheckResult(card_id=card_id)
 
-        # Mark as checked
+        # Mark as checked and increment counters
         self._locations_checked_this_turn.add(card_id)
         self._locations_checked_ever.add(card_id)
         self._checks_this_turn += 1
+        self._total_checks_this_game += 1
 
         if not html_response:
             return result
@@ -358,6 +363,7 @@ class StrategyController:
         status = {
             'under_battle_order_rules': self.under_battle_order_rules,
             'locations_checked_this_turn': len(self._locations_checked_this_turn),
+            'total_location_checks_this_game': self._total_checks_this_game,
         }
         status.update(self.game_strategy.get_status())
         return status

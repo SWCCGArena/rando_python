@@ -46,6 +46,12 @@ class MoveEvaluator(ActionEvaluator):
     def __init__(self):
         super().__init__("Move")
         self.pending_move_card_ids = set()  # Track cards we already tried moving
+        self._last_turn_number = -1
+
+    def reset_for_new_game(self):
+        """Reset all state for a new game"""
+        self.pending_move_card_ids.clear()
+        self._last_turn_number = -1
 
     def _get_game_strategy(self, context: DecisionContext) -> Optional[GameStrategy]:
         """Get GameStrategy from board_state's strategy_controller"""
@@ -54,8 +60,14 @@ class MoveEvaluator(ActionEvaluator):
         return None
 
     def can_evaluate(self, context: DecisionContext) -> bool:
-        """Handle CARD_ACTION_CHOICE with move actions"""
+        """Handle CARD_ACTION_CHOICE with move actions during OUR turn only"""
         if context.decision_type not in ['CARD_ACTION_CHOICE', 'ACTION_CHOICE']:
+            return False
+
+        # CRITICAL: Only evaluate move decisions during OUR turn
+        # During opponent's turn, we can't initiate moves
+        if context.board_state and not context.board_state.is_my_turn:
+            logger.debug(f"🚶 MoveEvaluator skipping - not our turn")
             return False
 
         # Check if any action is a move action
@@ -72,6 +84,11 @@ class MoveEvaluator(ActionEvaluator):
         actions = []
         bs = context.board_state
         game_strategy = self._get_game_strategy(context)
+
+        # Reset pending move tracking at the start of each turn
+        if context.turn_number != self._last_turn_number:
+            self.reset_pending_moves()
+            self._last_turn_number = context.turn_number
 
         move_keywords = ["Move using", "Shuttle", "Docking bay transit", "Transport",
                         "Take off", "Land"]
@@ -199,104 +216,154 @@ class MoveEvaluator(ActionEvaluator):
             action.add_reasoning(f"Want to flee but no good destination: {reason}", BAD_DELTA)
             return
 
-        # Spread out logic: we have massive power advantage
-        if power_diff >= POWER_DIFF_FOR_BUILDUP and my_card_count >= 3:
-            action.add_reasoning(f"Strong presence ({my_power}) - spread out", GOOD_DELTA * power_diff / 10)
-            return
+        # Spread out / contest logic: we have power advantage
+        # BUT we must check if spreading is actually viable:
+        # - How much force do we have to move cards?
+        # - Can we move ENOUGH power to establish (6) or contest (beat enemy + margin)?
+        if power_diff >= OVERKILL_THRESHOLD and my_card_count >= 2:
+            spread_analysis = self._analyze_spread_viability(
+                board_state, loc_idx, my_power, my_card_count
+            )
 
-        # PROACTIVE CONTEST: If we have overkill here, check if we should move to contest
-        # an adjacent location where opponent has presence
-        if power_diff >= OVERKILL_THRESHOLD:
-            contest_opportunity = self._find_contest_opportunity(board_state, loc_idx, my_power)
-            if contest_opportunity:
-                adj_idx, adj_their_power, can_overpower = contest_opportunity
-                if can_overpower:
-                    # We can move and still overpower them - good move!
-                    bonus = GOOD_DELTA * 2 + (power_diff - OVERKILL_THRESHOLD) * 0.5
-                    action.add_reasoning(
-                        f"Contest adjacent loc {adj_idx} (they have {adj_their_power}, we have overkill +{power_diff})",
-                        bonus
-                    )
-                    return
-                else:
-                    # We could contest but might not overpower - still consider it
-                    action.add_reasoning(
-                        f"Could contest loc {adj_idx} (they have {adj_their_power})",
-                        GOOD_DELTA
-                    )
-                    return
-
-        # Check adjacent locations for spreading (when opponent has 0 power here)
-        if their_power == 0 and my_power >= POWER_DIFF_FOR_BUILDUP and my_card_count >= 1:
-            safe_to_spread = self._check_adjacent_locations(board_state, loc_idx)
-            if safe_to_spread:
-                action.add_reasoning("Adjacent locations clear - spread", GOOD_DELTA)
+            if spread_analysis['viable']:
+                reason = spread_analysis['reason']
+                score = spread_analysis['score']
+                action.add_reasoning(reason, score)
+                return
             else:
-                action.add_reasoning("Adjacent locations not safe", BAD_DELTA)
-            return
+                # Can't meaningfully spread - explain why
+                reason = spread_analysis['reason']
+                action.add_reasoning(f"Can't spread: {reason}", BAD_DELTA)
+                return
 
         # Default: not a good time to move
         action.add_reasoning("No good reason to move", BAD_DELTA)
 
-    def _find_contest_opportunity(self, board_state, loc_idx: int, our_power_here: int):
+    def _analyze_spread_viability(self, board_state, loc_idx: int,
+                                     our_power_here: int, our_card_count: int) -> dict:
         """
-        Find an adjacent location where opponent has presence that we could contest.
+        Analyze if spreading out from this location is viable.
 
-        Returns: (adjacent_idx, their_power, can_overpower) or None
+        A move is viable only if we can:
+        - Afford to move cards (1 force per card)
+        - Move ENOUGH power to be useful at the destination:
+          - Empty location: need 6+ power to establish
+          - Contested location: need to beat enemy + 4 power margin
+
+        Returns dict with:
+            viable: bool
+            reason: str
+            score: float (if viable)
         """
-        # Get the card we're considering moving - estimate its power contribution
-        # For simplicity, assume moving card has ~3-5 power (average character)
-        estimated_move_power = 4
+        ESTABLISH_THRESHOLD = 6  # Power needed to establish presence
+        CONTEST_MARGIN = 4  # Extra power needed to safely contest
 
+        force_available = board_state.force_pile
+        if force_available < 1:
+            return {'viable': False, 'reason': 'no force to move'}
+
+        # Estimate power per card (rough average)
+        avg_power_per_card = our_power_here / max(our_card_count, 1)
+
+        # How many cards can we afford to move?
+        max_cards_to_move = min(force_available, our_card_count - 1)  # Leave at least 1 card
+        if max_cards_to_move < 1:
+            return {'viable': False, 'reason': 'not enough force or cards'}
+
+        max_moveable_power = int(max_cards_to_move * avg_power_per_card)
+
+        # Analyze adjacent locations
         best_opportunity = None
         best_score = 0
 
-        # Check adjacent locations
         for adj_idx in [loc_idx - 1, loc_idx + 1]:
             if adj_idx < 0 or adj_idx >= len(board_state.locations):
                 continue
 
             their_power = board_state.their_power_at_location(adj_idx)
             our_power_there = board_state.my_power_at_location(adj_idx)
+            potential_power = our_power_there + max_moveable_power
 
-            # Only interested if opponent has presence there
-            if their_power <= 0:
+            # Skip if we already have good presence
+            if our_power_there >= ESTABLISH_THRESHOLD and their_power == 0:
                 continue
 
-            # Could we overpower them if we moved?
-            # We'd add our power to existing power there
-            potential_power = our_power_there + estimated_move_power
-            can_overpower = potential_power > their_power + CONTEST_POWER_MARGIN
+            if their_power == 0:
+                # Empty location - can we establish?
+                if potential_power >= ESTABLISH_THRESHOLD:
+                    # Great - can establish!
+                    score = GOOD_DELTA * 2
+                    cards_needed = max(1, int((ESTABLISH_THRESHOLD - our_power_there) / avg_power_per_card + 0.5))
+                    opportunity = {
+                        'adj_idx': adj_idx,
+                        'their_power': 0,
+                        'action': 'establish',
+                        'cards_needed': cards_needed,
+                        'score': score,
+                        'reason': f"Can establish at empty location (move {cards_needed} cards, {int(cards_needed * avg_power_per_card)} power)"
+                    }
+                    if score > best_score:
+                        best_score = score
+                        best_opportunity = opportunity
+            else:
+                # Contested - can we beat them with margin?
+                power_needed = their_power + CONTEST_MARGIN
+                if potential_power >= power_needed:
+                    # Can contest!
+                    score = GOOD_DELTA * 3 + their_power / 2  # Bonus for contesting stronger enemies
+                    cards_needed = max(1, int((power_needed - our_power_there) / avg_power_per_card + 0.5))
+                    cards_needed = min(cards_needed, max_cards_to_move)
+                    opportunity = {
+                        'adj_idx': adj_idx,
+                        'their_power': their_power,
+                        'action': 'contest',
+                        'cards_needed': cards_needed,
+                        'score': score,
+                        'reason': f"Can contest loc with {their_power} enemies (move {cards_needed}+ cards)"
+                    }
+                    if score > best_score:
+                        best_score = score
+                        best_opportunity = opportunity
 
-            # Score this opportunity - prefer locations where we can decisively win
-            score = their_power  # Higher opponent power = more valuable to contest
-            if can_overpower:
-                score += 10
-            if our_power_there == 0:
-                # We have no presence - establishing presence is valuable
-                score += 5
+        if best_opportunity:
+            return {
+                'viable': True,
+                'reason': best_opportunity['reason'],
+                'score': best_opportunity['score']
+            }
 
-            if score > best_score:
-                best_score = score
-                best_opportunity = (adj_idx, their_power, can_overpower)
+        # No viable opportunity - explain why
+        # Check what the adjacent locations have
+        adjacent_powers = []
+        for adj_idx in [loc_idx - 1, loc_idx + 1]:
+            if 0 <= adj_idx < len(board_state.locations):
+                their_power = board_state.their_power_at_location(adj_idx)
+                our_power = board_state.my_power_at_location(adj_idx)
+                adjacent_powers.append((adj_idx, their_power, our_power))
 
-        return best_opportunity
+        if not adjacent_powers:
+            return {'viable': False, 'reason': 'no adjacent locations'}
 
-    def _check_adjacent_locations(self, board_state, loc_idx: int) -> bool:
-        """Check if adjacent locations are safe to move to"""
-        # Check left
-        if loc_idx > 0:
-            left_their_power = board_state.their_power_at_location(loc_idx - 1)
-            if left_their_power == 0:
-                return True
+        # Find the issue
+        for adj_idx, their_power, our_power in adjacent_powers:
+            if their_power > 0:
+                power_needed = their_power + CONTEST_MARGIN
+                if max_moveable_power < power_needed - our_power:
+                    return {
+                        'viable': False,
+                        'reason': f"need {power_needed - our_power} power to contest {their_power} enemies, can only move {max_moveable_power}"
+                    }
+            elif our_power >= ESTABLISH_THRESHOLD:
+                # Already established there
+                continue
+            else:
+                if max_moveable_power < ESTABLISH_THRESHOLD - our_power:
+                    return {
+                        'viable': False,
+                        'reason': f"need {ESTABLISH_THRESHOLD - our_power} power to establish, can only move {max_moveable_power}"
+                    }
 
-        # Check right
-        if loc_idx < len(board_state.locations) - 1:
-            right_their_power = board_state.their_power_at_location(loc_idx + 1)
-            if right_their_power == 0:
-                return True
-
-        return False
+        return {'viable': False, 'reason': 'no good adjacent locations'}
 
     def reset_pending_moves(self):
         """Reset pending move tracking (call at turn start)"""

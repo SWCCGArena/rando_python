@@ -444,7 +444,7 @@ class AchievementTracker:
                 continue
 
             # Check if card matches
-            if ach.card_match not in card_lower:
+            if not self._card_matches(card_lower, ach.card_match, ach.card_type):
                 continue
 
             # Check ownership if required
@@ -461,6 +461,27 @@ class AchievementTracker:
                 messages.append(msg)
 
         return messages
+
+    def _card_matches(self, card_title: str, card_match: str, card_type: str) -> bool:
+        """
+        Check if a card title matches the achievement criteria.
+
+        For Location-type achievements where card_match doesn't contain ':',
+        we require the card to be a System (no ':') not a Site.
+        This ensures "kamino" matches "Kamino" but not "Kamino: Clone Birthing Center".
+        """
+        # Basic contains check
+        if card_match not in card_title:
+            return False
+
+        # For Location-type achievements, be stricter about Systems vs Sites
+        # Systems don't have ':' in the name, Sites do (e.g., "Kamino: Clone Birthing Center")
+        if card_type == "Location" and ':' not in card_match:
+            # Require the card to also be a System (no colon)
+            if ':' in card_title:
+                return False
+
+        return True
 
     def _check_card_combos(self, board_state: 'BoardState',
                           opponent_name: str) -> List[str]:

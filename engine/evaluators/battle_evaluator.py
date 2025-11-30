@@ -58,8 +58,14 @@ class BattleEvaluator(ActionEvaluator):
         return None
 
     def can_evaluate(self, context: DecisionContext) -> bool:
-        """Handle CARD_ACTION_CHOICE with battle actions"""
+        """Handle CARD_ACTION_CHOICE with battle initiation during OUR turn only"""
         if context.decision_type not in ['CARD_ACTION_CHOICE', 'ACTION_CHOICE']:
+            return False
+
+        # CRITICAL: Only evaluate battle initiation during OUR turn
+        # During opponent's turn, we can't initiate battles - we're defending
+        if context.board_state and not context.board_state.is_my_turn:
+            logger.debug(f"⚔️ BattleEvaluator skipping - not our turn")
             return False
 
         # Check if any action is a battle action (case-insensitive, includes variants)
