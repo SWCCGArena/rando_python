@@ -179,6 +179,11 @@ class DecisionHandler:
         use_random_to_break_loop = loop_severity in ['mild', 'severe']
         if use_random_to_break_loop:
             logger.warning(f"🔄 Loop detected ({count}x) - will penalize blocked responses: {blocked_responses}")
+            # In mild loops, add 50% chance to just pass if we can - this breaks many loops
+            if can_pass and loop_severity == 'mild' and random.random() < 0.5:
+                logger.warning(f"🔄 Mild loop - randomly passing to break pattern")
+                _decision_tracker.record_decision(decision_type, decision_text, decision_id, "")
+                return DecisionResult(decision_id=decision_id, value="", no_long_delay=no_long_delay)
 
         result = None
 

@@ -296,8 +296,36 @@ class CardSelectionEvaluator(ActionEvaluator):
                         if their_icons > 0:
                             action.add_reasoning(f"Deny {their_icons} opponent icons", their_icons * GOOD_DELTA * 2)
                 else:
-                    # Location not found - use neutral score
-                    action.add_reasoning("Location not found in board state", -5.0)
+                    # Location not found - might be deploying to a vehicle/starship!
+                    # Check if card_id is a vehicle/starship in play
+                    target_card = bs.cards_in_play.get(card_id)
+                    if target_card:
+                        target_meta = get_card(target_card.blueprint_id) if target_card.blueprint_id else None
+                        is_target_vehicle = target_meta and (target_meta.is_vehicle or target_meta.is_starship) if target_meta else False
+
+                        if is_target_vehicle:
+                            target_name = target_card.card_title or card_id
+                            action.display_text = f"Deploy aboard {target_name}"
+
+                            # Check if deploying card is a pilot
+                            is_pilot = deploying_card and deploying_card.is_pilot if deploying_card else False
+
+                            if is_pilot:
+                                # Pilot deploying aboard - check if vehicle needs pilot
+                                has_pilot_aboard = bool(target_card.attached_cards)
+                                if not has_pilot_aboard:
+                                    action.add_reasoning(f"Pilot aboard unpiloted {target_name} - GOOD!", VERY_GOOD_DELTA)
+                                else:
+                                    action.add_reasoning(f"Pilot aboard already-piloted {target_name}", -20.0)
+                            else:
+                                # NON-PILOT deploying aboard = PASSENGER - almost always bad!
+                                # Characters as passengers waste their power and are vulnerable
+                                action.add_reasoning(f"NON-PILOT AS PASSENGER - wastes character!", VERY_BAD_DELTA * 2)
+                                logger.warning(f"⚠️ Penalizing {deploying_card.title if deploying_card else 'character'} as passenger on {target_name}")
+                        else:
+                            action.add_reasoning("Location not found in board state", -5.0)
+                    else:
+                        action.add_reasoning("Location not found in board state", -5.0)
 
             actions.append(action)
 
@@ -816,18 +844,37 @@ class CardSelectionEvaluator(ActionEvaluator):
         """
         Choose between losing Force from reserve deck OR forfeiting a card in battle.
 
+        CRITICAL RULE: Attrition MUST be satisfied by forfeiting cards!
+        - Battle damage can ONLY be satisfied by losing Force
+        - Attrition can be satisfied by EITHER losing Force OR forfeiting cards
+        - Therefore: ALWAYS forfeit cards for attrition first, THEN lose Force for battle damage
+
         Strategic considerations:
-        1. Power differential at battle location - if we're badly losing (5+ power behind),
-           prefer to forfeit cards since they'll just get beat up again next turn
-        2. Reserve deck size - if reserve is low, prefer forfeiting to save deck
+        1. If attrition remaining > 0: STRONGLY prefer forfeiting cards
+        2. If attrition = 0 (only battle damage left): lose Force
         3. Pilots attached to ships - ALWAYS forfeit pilots before their ships
-        4. Card value - prefer losing low-value force over forfeiting high-value cards
+        4. Reserve deck size - if reserve is low, prefer forfeiting to save deck
 
         Ported from C# AICSHandler.cs battle damage assignment logic.
         """
         actions = []
         bs = context.board_state
         from ..card_loader import get_card
+
+        # Get attrition and damage remaining
+        # CRITICAL: If we have attrition remaining, we MUST forfeit cards for it
+        my_attrition_remaining = 0
+        my_damage_remaining = 0
+        if bs:
+            my_side = getattr(bs, 'my_side', 'dark').lower()
+            if my_side == 'dark':
+                my_attrition_remaining = getattr(bs, 'dark_attrition_remaining', 0)
+                my_damage_remaining = getattr(bs, 'dark_damage_remaining', 0)
+            else:
+                my_attrition_remaining = getattr(bs, 'light_attrition_remaining', 0)
+                my_damage_remaining = getattr(bs, 'light_damage_remaining', 0)
+
+        logger.debug(f"Battle damage: attrition={my_attrition_remaining}, damage={my_damage_remaining}")
 
         # Get battle location info for power differential
         power_diff = 0
@@ -844,6 +891,10 @@ class CardSelectionEvaluator(ActionEvaluator):
 
         # Get reserve deck size
         reserve_size = bs.reserve_deck if bs else 30
+
+        # CRITICAL: If attrition > 0, we MUST prefer forfeiting cards
+        # Battle damage can only be satisfied by Force loss, but attrition can be forfeited
+        has_attrition = my_attrition_remaining > 0
 
         # Separate cards into Force (from reserve) vs cards in battle vs cards from hand
         force_options = []  # Cards representing Force loss (usually -1_2 blueprint)
@@ -910,11 +961,14 @@ class CardSelectionEvaluator(ActionEvaluator):
                 display_text=f"Lose Force from reserve"
             )
 
-            # Adjust based on strategic situation
-            if prefer_forfeit:
+            # CRITICAL: If attrition remaining > 0, we should NOT lose Force!
+            # Attrition should be satisfied by forfeiting cards first
+            if has_attrition:
+                action.add_reasoning(f"ATTRITION REMAINING ({my_attrition_remaining}) - forfeit cards first!", -100.0)
+            elif prefer_forfeit:
                 action.add_reasoning("Badly losing battle - prefer forfeit", -30.0)
             else:
-                action.add_reasoning("Force loss is acceptable", 0.0)
+                action.add_reasoning("Force loss is acceptable (no attrition)", 0.0)
 
             if reserve_size <= 10:
                 action.add_reasoning(f"Low reserve ({reserve_size}) - avoid force loss", -40.0)
@@ -961,7 +1015,10 @@ class CardSelectionEvaluator(ActionEvaluator):
                 display_text=f"Forfeit {card.card_title if card else card_id}"
             )
 
-            if prefer_forfeit:
+            # CRITICAL: If attrition remaining > 0, boost forfeit score
+            if has_attrition:
+                action.add_reasoning(f"ATTRITION REMAINING ({my_attrition_remaining}) - forfeit to satisfy!", +60.0)
+            elif prefer_forfeit:
                 action.add_reasoning("Badly losing - forfeit preferred", +20.0)
 
             if card:

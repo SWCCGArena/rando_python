@@ -692,8 +692,20 @@ class ActionTextEvaluator(ActionEvaluator):
 
             # ========== Defensive Shields ==========
             elif "Play a Defensive Shield" in action_text:
-                action.score = VERY_GOOD_DELTA
-                action.add_reasoning("Defensive shield", VERY_GOOD_DELTA)
+                # During battle when it's NOT our turn, prefer to pass
+                # Playing shields during opponent's battle often just triggers
+                # a card selection that we cancel, creating loops
+                bs = context.board_state
+                in_battle = bs and getattr(bs, 'in_battle', False)
+                is_our_turn = context.is_my_turn
+
+                if in_battle and not is_our_turn:
+                    # During opponent's battle - low priority, prefer passing
+                    action.score = -10.0
+                    action.add_reasoning("Defensive shield during opponent's battle - prefer pass", -10.0)
+                else:
+                    action.score = VERY_GOOD_DELTA
+                    action.add_reasoning("Defensive shield", VERY_GOOD_DELTA)
 
             # ========== Deploy on (table/location) ==========
             elif action_text.startswith("Deploy on"):
