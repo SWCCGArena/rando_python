@@ -6169,6 +6169,98 @@ def test_no_deployable_characters_due_to_restrictions():
 
 
 # =============================================================================
+# ICON TIEBREAKER TESTS
+# =============================================================================
+
+def test_icon_tiebreaker_prefers_more_total_icons():
+    """
+    When two locations have the same opponent icons, the bot should prefer
+    the location with more bot-side icons (higher total icons).
+
+    This test is based on a real game scenario:
+    - Starkiller Base: Shield Control has their_icons=2, my_icons=1 (total 3)
+    - Naboo: Theed Palace Generator Core has their_icons=2, my_icons=3 (total 5)
+
+    Both have same opponent icons (2), but Theed Palace has more total icons,
+    so it should be preferred for establishing presence.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Icon tiebreaker - prefer more total icons")
+            .as_side("light")
+            .with_force(10)
+            # Shield Control: 1 bot icon, 2 opponent icons (total 3)
+            .add_ground_location("Shield Control", my_icons=1, their_icons=2, interior=True)
+            # Theed Palace Core: 3 bot icons, 2 opponent icons (total 5)
+            .add_ground_location("Theed Palace Core", my_icons=3, their_icons=2, interior=True)
+            # Characters to deploy
+            .add_character("Ackbar", power=2, deploy_cost=2, is_pilot=True)
+            .add_character("Leia", power=4, deploy_cost=4)
+            # Expect deployment to Theed Palace Core (more total icons)
+            .expect_target("Theed Palace Core")
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # Verify deployment went to Theed Palace Core (higher total icons)
+        theed_deploys = get_plan_cards_at_location(result.plan, "Theed Palace Core")
+        shield_deploys = get_plan_cards_at_location(result.plan, "Shield Control")
+
+        logger.info(f"   📊 Theed Palace Core deploys: {theed_deploys}")
+        logger.info(f"   📊 Shield Control deploys: {shield_deploys}")
+
+        # With same opponent icons (2), should prefer Theed Palace (3 bot icons > 1)
+        assert len(theed_deploys) > 0, \
+            f"Should deploy to Theed Palace Core (more total icons), got deploys: {theed_deploys}"
+        assert len(shield_deploys) == 0, \
+            f"Should NOT deploy to Shield Control (fewer total icons), got deploys: {shield_deploys}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_icon_tiebreaker_with_contested_locations():
+    """
+    When multiple contested locations have the same opponent icons,
+    the tiebreaker should prefer more bot-side icons.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Icon tiebreaker with contested locations")
+            .as_side("dark")
+            .with_force(15)
+            # Location A: contested, 1 bot icon, 2 opponent icons
+            .add_ground_location("Location A", my_icons=1, their_icons=2, their_power=3)
+            # Location B: contested, 3 bot icons, 2 opponent icons (same opponent icons, more total)
+            .add_ground_location("Location B", my_icons=3, their_icons=2, their_power=3)
+            # Strong character to beat the opponent
+            .add_character("Vader", power=6, deploy_cost=6)
+            # Expect deployment to Location B (more total icons)
+            .expect_target("Location B")
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # Verify deployment preference
+        loc_a_deploys = get_plan_cards_at_location(result.plan, "Location A")
+        loc_b_deploys = get_plan_cards_at_location(result.plan, "Location B")
+
+        logger.info(f"   📊 Location A deploys: {loc_a_deploys}")
+        logger.info(f"   📊 Location B deploys: {loc_b_deploys}")
+
+        # Both contested with same opponent icons (2), should prefer Location B (3 > 1 bot icons)
+        assert len(loc_b_deploys) > 0, \
+            f"Should deploy to Location B (more bot icons), got: {loc_b_deploys}"
+
+    finally:
+        unpatch_card_loader()
+
+
+# =============================================================================
 # MAIN (for standalone execution)
 # =============================================================================
 

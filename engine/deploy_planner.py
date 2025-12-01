@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict, Tuple, Set
 
+from engine.card_loader import get_card, is_matching_pilot_ship
+
 logger = logging.getLogger(__name__)
 
 # Battle threshold - power advantage needed to feel comfortable battling
@@ -38,6 +40,37 @@ DANGEROUS_THRESHOLD = -2  # Power diff <= this = dangerous, need serious reinfor
 
 # Power advantage where we stop reinforcing (overkill prevention)
 DEPLOY_OVERKILL_THRESHOLD = 8
+
+# Bonus score for matching pilot/ship combos (soft preference, not requirement)
+MATCHING_PILOT_BONUS = 10
+
+
+def _pilot_score_for_ship(pilot_dict: Dict, ship_dict: Dict) -> int:
+    """
+    Score a pilot for deployment aboard a specific ship.
+
+    Higher is better. Considers:
+    - Base power (higher = better)
+    - Matching bonus (pilot/ship from same matching field)
+
+    Args:
+        pilot_dict: Pilot info dict with 'power', 'blueprint_id', 'name' keys
+        ship_dict: Ship info dict with 'blueprint_id', 'name' keys
+
+    Returns:
+        Score for this pilot/ship combination
+    """
+    base_score = pilot_dict.get('power', 0)
+
+    # Check for matching pilot/ship bonus
+    pilot_card = get_card(pilot_dict.get('blueprint_id', ''))
+    ship_card = get_card(ship_dict.get('blueprint_id', ''))
+
+    if pilot_card and ship_card and is_matching_pilot_ship(pilot_card, ship_card):
+        base_score += MATCHING_PILOT_BONUS
+        logger.debug(f"   ⭐ Matching pilot bonus: {pilot_dict.get('name', '?')} + {ship_dict.get('name', '?')}")
+
+    return base_score
 
 
 class DeployStrategy(Enum):
@@ -1044,8 +1077,8 @@ class DeployPhasePlanner:
                     # Find affordable pure pilot
                     affordable_pilots = [p for p in available_pure_pilots if p['cost'] <= force_remaining]
                     if affordable_pilots:
-                        # Pick best pilot (highest power/ability)
-                        best_pilot = max(affordable_pilots, key=lambda p: p['power'])
+                        # Pick best pilot (highest power, with bonus for matching pilot/ship)
+                        best_pilot = max(affordable_pilots, key=lambda p: _pilot_score_for_ship(p, ship))
                         force_remaining -= best_pilot['cost']
                         available_pure_pilots.remove(best_pilot)
 
@@ -1118,7 +1151,7 @@ class DeployPhasePlanner:
         if available_pure_pilots:
             affordable_pilots = [p for p in available_pure_pilots if p['cost'] <= force_remaining]
             if affordable_pilots:
-                best_pilot = max(affordable_pilots, key=lambda p: p['power'])
+                best_pilot = max(affordable_pilots, key=lambda p: _pilot_score_for_ship(p, ship))
                 force_remaining -= best_pilot['cost']
                 available_pure_pilots.remove(best_pilot)
                 instructions.append(DeploymentInstruction(
@@ -1212,8 +1245,18 @@ class DeployPhasePlanner:
             # Try to add pilots to boost power
             if available_pilots and remaining_after_ships > 0:
                 affordable_pilots = [p for p in available_pilots if p['cost'] <= remaining_after_ships]
-                # Add pilots sorted by power (best first)
-                affordable_pilots.sort(key=lambda p: p['power'], reverse=True)
+                # Add pilots sorted by power (best first), with bonus for matching ships
+
+                def pilot_score_for_group(pilot):
+                    """Score pilot for this group of ships, bonus if matches any ship."""
+                    best_score = pilot.get('power', 0)
+                    for ship in ships_for_location:
+                        score = _pilot_score_for_ship(pilot, ship)
+                        if score > best_score:
+                            best_score = score
+                    return best_score
+
+                affordable_pilots.sort(key=pilot_score_for_group, reverse=True)
                 for pilot in affordable_pilots:
                     if pilot['cost'] <= remaining_after_ships:
                         pilots_to_add.append(pilot)
@@ -1783,8 +1826,10 @@ class DeployPhasePlanner:
             logger.info(f"   ⚔️ Attackable space: {[(loc.name, loc.their_power, loc.my_icons) for loc in attackable_space]}")
 
         # Sort by icons (most valuable first)
-        uncontested_ground.sort(key=lambda x: x.their_icons, reverse=True)
-        uncontested_space.sort(key=lambda x: x.their_icons, reverse=True)
+        # Primary: opponent icons (deny their force drain)
+        # Secondary: our icons (maximize our force generation) - tiebreaker
+        uncontested_ground.sort(key=lambda x: (x.their_icons, x.my_icons), reverse=True)
+        uncontested_space.sort(key=lambda x: (x.their_icons, x.my_icons), reverse=True)
         # Sort attackable by enemy power (easier targets first for quick wins)
         attackable_space.sort(key=lambda x: x.their_power)
 
@@ -1974,9 +2019,10 @@ class DeployPhasePlanner:
         ]
         # CRITICAL: Sort contested locations FIRST (their_power > 0), then by icons
         # Beating opponents is MORE valuable than establishing at empty locations!
-        # Sort key: (is_contested DESC, their_icons DESC)
+        # Sort key: (is_contested DESC, their_icons DESC, my_icons DESC)
+        # my_icons is tiebreaker - when opponent icons equal, prefer more total icons
         char_ground_targets.sort(
-            key=lambda x: (x.their_power > 0, x.their_icons),  # Contested first, then icons
+            key=lambda x: (x.their_power > 0, x.their_icons, x.my_icons),
             reverse=True
         )
 
@@ -2388,8 +2434,8 @@ class DeployPhasePlanner:
             for vehicle in unpiloted_vehicles[:]:  # Copy to allow modification
                 if not available_reserved:
                     break
-                # Pick best pilot (highest power)
-                best_pilot = max(available_reserved, key=lambda p: p['power'])
+                # Pick best pilot (highest power, with matching bonus)
+                best_pilot = max(available_reserved, key=lambda p: _pilot_score_for_ship(p, vehicle))
                 combined_power = vehicle['base_power'] + best_pilot['power']
                 combined_cost = vehicle['cost'] + best_pilot['cost']
 
@@ -2741,6 +2787,45 @@ class DeployPhasePlanner:
                         continue
 
                     weapon_type = weapon.get('weapon_target_type')
+                    is_char_specific = weapon.get('is_character_weapon', False)
+                    matching_chars = weapon.get('matching_weapon', [])
+
+                    # =============================================================
+                    # CHARACTER-SPECIFIC WEAPON CHECK
+                    # Weapons like "Qui-Gon Jinn's Lightsaber" can only deploy
+                    # on specific characters. Check if a matching character exists.
+                    # =============================================================
+                    if is_char_specific and matching_chars:
+                        # Build list of character names available (in plan + on board)
+                        available_char_names = set()
+
+                        # Characters being deployed in this plan
+                        for inst in plan.instructions:
+                            if inst.card_name:
+                                available_char_names.add(inst.card_name.lower())
+
+                        # Characters already in play
+                        if board_state and hasattr(board_state, 'cards_in_play'):
+                            for card_id, card in board_state.cards_in_play.items():
+                                if (card.owner == board_state.my_player_name and
+                                    card.zone == "AT_LOCATION" and card.card_title):
+                                    available_char_names.add(card.card_title.lower())
+
+                        # Check if ANY matching character is available
+                        has_matching_char = False
+                        for match_name in matching_chars:
+                            match_lower = match_name.lower() if match_name else ""
+                            for char_name in available_char_names:
+                                if match_lower in char_name:
+                                    has_matching_char = True
+                                    logger.debug(f"      {weapon['name']} matches character: {char_name}")
+                                    break
+                            if has_matching_char:
+                                break
+
+                        if not has_matching_char:
+                            logger.info(f"   ⏭️ Skip {weapon['name']}: no matching character (needs: {matching_chars[:3]}...)")
+                            continue
 
                     # Find a location with a valid target for this weapon type
                     target_loc = None
@@ -3026,6 +3111,8 @@ class DeployPhasePlanner:
                 'weapon_target_type': weapon_target_type,  # "character", "vehicle", "starship", or None
                 'is_targeted_weapon': is_targeted_weapon,  # Needs to attach to a target
                 'is_standalone_weapon': is_standalone_weapon,  # Automated/Artillery - no target needed
+                'is_character_weapon': getattr(metadata, 'is_character_weapon', False),  # Deploys only on specific characters
+                'matching_weapon': getattr(metadata, 'matching_weapon', []),  # List of character names weapon can deploy on
                 # Deploy restriction systems (empty list = can deploy anywhere)
                 'deploy_restriction_systems': deploy_restrictions,
             })

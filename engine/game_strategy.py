@@ -582,15 +582,51 @@ class GameStrategy:
     # Hand Size Management
     # =========================================================================
 
-    def get_hand_size_penalty(self, hand_size: int) -> float:
+    def get_effective_soft_cap(self, has_deployable_cards: bool = True) -> int:
+        """
+        Get dynamic soft cap based on game phase.
+
+        Real players overdraw early (up to 16 cards in turns 1-3) to find
+        their key pieces, then tighten up in late game to preserve life force.
+
+        Args:
+            has_deployable_cards: True if player has cards they can deploy
+
+        Returns:
+            Effective soft cap for hand size
+        """
+        base_soft_cap = self._get_config('HAND_SOFT_CAP', HAND_SOFT_CAP)
+        hard_cap = self._get_config('MAX_HAND_SIZE', HAND_HARD_CAP)
+
+        # Early game (turns 1-3): Allow overdrawing to find key cards
+        if self.turn_number <= 3:
+            effective_cap = base_soft_cap + 4  # 12 + 4 = 16
+        # Mid game (turns 4-6): Normal threshold
+        elif self.turn_number <= 6:
+            effective_cap = base_soft_cap  # 12
+        # Late game (turns 7+): Tighten up to preserve life force
+        else:
+            effective_cap = base_soft_cap - 4  # 12 - 4 = 8
+
+        # Exception: If no deployable cards, allow extra drawing to find them
+        if not has_deployable_cards:
+            effective_cap += 2
+            logger.debug(f"No deployable cards - allowing +2 extra draw (cap {effective_cap})")
+
+        # Clamp to hard limits
+        effective_cap = max(4, min(effective_cap, hard_cap))
+
+        return effective_cap
+
+    def get_hand_size_penalty(self, hand_size: int, has_deployable_cards: bool = True) -> float:
         """
         Get penalty for drawing more cards based on hand size.
 
+        Uses dynamic soft cap based on game phase.
         Returns negative value (penalty) if hand is getting full.
-        Uses config values for soft/hard caps if available.
         """
         hard_cap = self._get_config('MAX_HAND_SIZE', HAND_HARD_CAP)
-        soft_cap = self._get_config('HAND_SOFT_CAP', HAND_SOFT_CAP)
+        soft_cap = self.get_effective_soft_cap(has_deployable_cards)
 
         if hand_size >= hard_cap:
             return -100.0  # Strongly avoid drawing
@@ -601,7 +637,7 @@ class GameStrategy:
 
     def should_prioritize_drawing_for_locations(self, hand_size: int) -> bool:
         """Check if we should draw to find location cards"""
-        soft_cap = self._get_config('HAND_SOFT_CAP', HAND_SOFT_CAP)
+        soft_cap = self.get_effective_soft_cap(has_deployable_cards=True)
         return self.force_deficit > 3 and hand_size < soft_cap
 
     # =========================================================================

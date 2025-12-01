@@ -69,10 +69,6 @@ class Config:
     # Hall polling optimization
     HALL_CHECK_INTERVAL_DURING_GAME: int = 60  # Only check hall every N seconds during game
 
-    # Location checks (cardInfo) optimization
-    LOCATION_CHECK_ENABLED: bool = True    # Can disable location checks for testing
-    MAX_LOCATION_CHECKS_PER_TURN: int = 5  # Maximum cardInfo calls per turn
-
     # Paths
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
     DATA_DIR: str = os.path.join(BASE_DIR, 'data')

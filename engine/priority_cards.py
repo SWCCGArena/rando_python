@@ -240,7 +240,7 @@ PRIORITY_INTERRUPTS = {
         usage_notes="Combo version of Ghhhk - save for critical moments"
     ),
 
-    # ----- SENSE/ALTER (mentioned in existing is_high_value_card) -----
+    # ----- SENSE/CONTROL/ALTER -----
     "1_267": PriorityCard(
         blueprint_id="1_267",
         title="Sense",
@@ -249,7 +249,6 @@ PRIORITY_INTERRUPTS = {
         protection_score=85.0,
         usage_notes="Use to cancel opponent's Used or Lost Interrupts"
     ),
-    # Note: Sense has both dark (1_267) and light versions
     "1_108": PriorityCard(
         blueprint_id="1_108",
         title="Sense",
@@ -257,6 +256,40 @@ PRIORITY_INTERRUPTS = {
         side="light",
         protection_score=85.0,
         usage_notes="Use to cancel opponent's Used or Lost Interrupts"
+    ),
+    # Control - cancels Sense/Alter, Immediate/Mobile Effects, force drains
+    "4_139": PriorityCard(
+        blueprint_id="4_139",
+        title="Control",
+        category=CardCategory.UTILITY,
+        side="dark",
+        protection_score=80.0,
+        usage_notes="Cancel Sense/Alter, effects, or force drains"
+    ),
+    "4_62": PriorityCard(
+        blueprint_id="4_62",
+        title="Control",
+        category=CardCategory.UTILITY,
+        side="light",
+        protection_score=80.0,
+        usage_notes="Cancel Sense/Alter, effects, or force drains"
+    ),
+    # Alter - less common but still valuable
+    "1_217": PriorityCard(
+        blueprint_id="1_217",
+        title="Alter",
+        category=CardCategory.UTILITY,
+        side="dark",
+        protection_score=70.0,
+        usage_notes="Cancel opponent's Utinni Effects or Force drain modifiers"
+    ),
+    "1_69": PriorityCard(
+        blueprint_id="1_69",
+        title="Alter",
+        category=CardCategory.UTILITY,
+        side="light",
+        protection_score=70.0,
+        usage_notes="Cancel opponent's Utinni Effects or Force drain modifiers"
     ),
 }
 
@@ -301,6 +334,80 @@ ALL_PRIORITY_CARDS = {**PRIORITY_INTERRUPTS, **PRIORITY_EFFECTS}
 PRIORITY_INTERRUPT_IDS: Set[str] = set(PRIORITY_INTERRUPTS.keys())
 PRIORITY_EFFECT_IDS: Set[str] = set(PRIORITY_EFFECTS.keys())
 ALL_PRIORITY_IDS: Set[str] = set(ALL_PRIORITY_CARDS.keys())
+
+# ============================================================================
+# SENSE/CONTROL TARGET LISTS - Cards worth canceling with Sense/Control
+# ============================================================================
+
+# High-value interrupt titles to Sense (cancel) - ordered by priority
+# These are the opponent's cards that are most valuable to cancel
+HIGH_VALUE_SENSE_TARGETS = [
+    # Critical - 100 protection score
+    ("houjix", 100),          # Cancels all remaining battle damage
+    ("ghhhk", 100),           # DS version of Houjix
+
+    # Very High - 90 protection score
+    ("jedi levitation", 90),  # Destiny manipulation
+    ("sith fury", 90),        # Destiny manipulation
+
+    # High - 80-85 protection score
+    ("sense", 85),            # Cancel our Sense with their Sense
+    ("barrier", 80),          # Imperial/Rebel Barrier
+
+    # Medium-High - 70 protection score
+    ("blaster deflection", 70),  # Weapon protection
+    ("odin nesloor", 70),     # Character protection
+    ("jedi's resilience", 70),  # Duel protection
+
+    # Medium - 60-65 protection score
+    ("escape pod", 65),       # Escape mechanics
+    ("medical frigate", 65),  # Heading For The Medical Frigate
+    ("prepared defenses", 65), # Starting interrupt
+    ("rebel leadership", 65),  # Command interrupt
+    ("imperial command", 65),  # Command interrupt
+
+    # Also valuable but not in our priority list
+    ("nabrun leids", 60),     # Movement/escape
+    ("elis helrot", 60),      # Movement/escape
+    ("hyper escape", 60),     # Movement/escape
+    ("alter", 55),            # Cancels Sense
+    ("control", 55),          # Cancels Sense
+]
+
+# Convert to lowercase patterns for text matching
+SENSE_TARGET_PATTERNS = {pattern.lower(): score for pattern, score in HIGH_VALUE_SENSE_TARGETS}
+
+
+def get_sense_target_value(text: str) -> tuple[bool, int, str]:
+    """
+    Check if text contains a high-value Sense target.
+
+    Used when deciding whether to play Sense on an opponent's interrupt.
+    Parses action text like "Cancel [card name]" to identify valuable targets.
+
+    Args:
+        text: Action text or decision text to check
+
+    Returns:
+        (is_high_value, score, matched_pattern) tuple
+        - is_high_value: True if found a valuable target
+        - score: Priority score (0-100, higher = more valuable to cancel)
+        - matched_pattern: The pattern that matched (for logging)
+    """
+    text_lower = text.lower()
+
+    best_score = 0
+    best_pattern = ""
+
+    for pattern, score in SENSE_TARGET_PATTERNS.items():
+        if pattern in text_lower:
+            if score > best_score:
+                best_score = score
+                best_pattern = pattern
+
+    if best_score > 0:
+        return True, best_score, best_pattern
+    return False, 0, ""
 
 
 def is_priority_card(blueprint_id: str) -> bool:

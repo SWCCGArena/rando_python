@@ -56,8 +56,9 @@ class Card:
     icons: list = field(default_factory=list)
 
     # Relationships
-    matching: Optional[str] = None
+    matching: list = field(default_factory=list)  # Matching pilot/ship names (bidirectional preference)
     counterpart: Optional[str] = None
+    matching_weapon: list = field(default_factory=list)  # Characters this weapon deploys on (or weapons for characters)
 
     # Rarity and set info
     rarity: Optional[str] = None
@@ -127,6 +128,82 @@ class Card:
     @property
     def is_weapon(self) -> bool:
         return self.card_type == "Weapon"
+
+    @property
+    def is_character_weapon(self) -> bool:
+        """Check if this weapon can only deploy on specific characters"""
+        return self.is_weapon and len(self.matching_weapon) > 0
+
+    def can_weapon_deploy_on(self, character_title: str) -> bool:
+        """
+        Check if this weapon can deploy on a specific character.
+
+        Args:
+            character_title: The character's title (e.g., "Qui-Gon Jinn, Serene Jedi")
+
+        Returns:
+            True if the weapon can deploy on this character
+        """
+        if not self.is_weapon:
+            return False
+
+        # Non-character-specific weapons can deploy on any character
+        if not self.matching_weapon:
+            return True
+
+        # Check if character matches any of the matching_weapon entries
+        # The matching_weapon list contains partial names like "Qui-Gon Jinn"
+        # that should match "Qui-Gon Jinn, Serene Jedi"
+        char_title_lower = character_title.lower() if character_title else ""
+        for match_name in self.matching_weapon:
+            if match_name and match_name.lower() in char_title_lower:
+                return True
+
+        return False
+
+    def is_matching_pilot_for(self, ship_title: str) -> bool:
+        """
+        Check if this pilot has a matching preference for a specific ship.
+
+        This is a SOFT preference - matching pilots/ships get a small bonus
+        but any pilot can still fly any ship they're qualified for.
+
+        Args:
+            ship_title: The starship/vehicle title
+
+        Returns:
+            True if this pilot prefers this ship
+        """
+        if not self.is_pilot or not self.matching:
+            return False
+
+        ship_lower = ship_title.lower() if ship_title else ""
+        for match_name in self.matching:
+            if match_name and match_name.lower() in ship_lower:
+                return True
+        return False
+
+    def is_matching_ship_for(self, pilot_title: str) -> bool:
+        """
+        Check if this ship has a matching preference for a specific pilot.
+
+        This is a SOFT preference - matching pilots/ships get a small bonus
+        but any qualified pilot can still fly this ship.
+
+        Args:
+            pilot_title: The pilot character title
+
+        Returns:
+            True if this ship prefers this pilot
+        """
+        if not (self.is_starship or self.is_vehicle) or not self.matching:
+            return False
+
+        pilot_lower = pilot_title.lower() if pilot_title else ""
+        for match_name in self.matching:
+            if match_name and match_name.lower() in pilot_lower:
+                return True
+        return False
 
     @property
     def is_device(self) -> bool:
@@ -357,6 +434,37 @@ class Card:
         return f"Card({self.title} [{self.blueprint_id}], {self.card_type}, {self.side})"
 
 
+def is_matching_pilot_ship(pilot: Card, ship: Card) -> bool:
+    """
+    Check if a pilot and ship are a matching pair (either direction).
+
+    This is a SOFT preference used for tiebreaking - matching pairs get
+    a small bonus but any qualified pilot can fly any ship.
+
+    The match is bidirectional: either the pilot lists the ship in their
+    matching field, OR the ship lists the pilot in their matching field.
+
+    Args:
+        pilot: The pilot Card
+        ship: The starship/vehicle Card
+
+    Returns:
+        True if this is a matching pilot/ship pair
+    """
+    if not pilot or not ship:
+        return False
+
+    # Check if pilot's matching list contains ship
+    if pilot.is_matching_pilot_for(ship.title):
+        return True
+
+    # Check if ship's matching list contains pilot
+    if ship.is_matching_ship_for(pilot.title):
+        return True
+
+    return False
+
+
 class CardDatabase:
     """
     Loads and provides access to card metadata.
@@ -474,8 +582,9 @@ class CardDatabase:
                 icons=icons,
 
                 # Relationships
-                matching=card_data.get('matching'),
+                matching=card_data.get('matching') or [],
                 counterpart=card_data.get('counterpart'),
+                matching_weapon=card_data.get('matchingWeapon', []),
 
                 # Metadata
                 rarity=card_data.get('rarity'),

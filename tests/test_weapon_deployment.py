@@ -216,5 +216,185 @@ class TestWeaponSubtypeValidation:
         assert card.weapon_target_type == "starship"
 
 
+class TestCharacterSpecificWeapons:
+    """Tests for character-specific weapons (e.g., Qui-Gon's Lightsaber)"""
+
+    def test_weapon_with_matching_characters_is_character_weapon(self):
+        """Weapon with matching_weapon list should be flagged as character-specific"""
+        card = Card(
+            blueprint_id="13_40",
+            title="•Qui-Gon's Lightsaber",
+            side="Light",
+            card_type="Weapon",
+            sub_type="Character",
+            matching_weapon=["Master Qui-Gon", "Qui-Gon Jinn", "Obi-Wan Kenobi"],
+        )
+        assert card.is_weapon
+        assert card.is_character_weapon
+        assert len(card.matching_weapon) == 3
+
+    def test_weapon_without_matching_is_not_character_specific(self):
+        """Generic weapon without matching_weapon is not character-specific"""
+        card = Card(
+            blueprint_id="1_312",
+            title="Blaster Rifle",
+            side="Dark",
+            card_type="Weapon",
+            sub_type="Character",
+            matching_weapon=[],  # Empty list = deploys on any character
+        )
+        assert card.is_weapon
+        assert not card.is_character_weapon
+
+    def test_can_weapon_deploy_on_exact_match(self):
+        """Weapon should deploy on exact character name match"""
+        card = Card(
+            blueprint_id="13_40",
+            title="•Qui-Gon's Lightsaber",
+            side="Light",
+            card_type="Weapon",
+            sub_type="Character",
+            matching_weapon=["Qui-Gon Jinn"],
+        )
+        assert card.can_weapon_deploy_on("Qui-Gon Jinn")
+
+    def test_can_weapon_deploy_on_partial_match(self):
+        """Weapon should deploy on character with matching partial name"""
+        card = Card(
+            blueprint_id="13_40",
+            title="•Qui-Gon's Lightsaber",
+            side="Light",
+            card_type="Weapon",
+            sub_type="Character",
+            matching_weapon=["Qui-Gon Jinn"],
+        )
+        # "Qui-Gon Jinn" should match "Qui-Gon Jinn, Serene Jedi"
+        assert card.can_weapon_deploy_on("Qui-Gon Jinn, Serene Jedi")
+        assert card.can_weapon_deploy_on("•Qui-Gon Jinn, Serene Jedi")
+
+    def test_can_weapon_deploy_on_case_insensitive(self):
+        """Weapon matching should be case-insensitive"""
+        card = Card(
+            blueprint_id="13_40",
+            title="•Qui-Gon's Lightsaber",
+            side="Light",
+            card_type="Weapon",
+            sub_type="Character",
+            matching_weapon=["Qui-Gon Jinn"],
+        )
+        assert card.can_weapon_deploy_on("QUI-GON JINN")
+        assert card.can_weapon_deploy_on("qui-gon jinn, serene jedi")
+
+    def test_can_weapon_deploy_on_no_match(self):
+        """Weapon should NOT deploy on non-matching character"""
+        card = Card(
+            blueprint_id="13_40",
+            title="•Qui-Gon's Lightsaber",
+            side="Light",
+            card_type="Weapon",
+            sub_type="Character",
+            matching_weapon=["Qui-Gon Jinn", "Obi-Wan Kenobi"],
+        )
+        assert not card.can_weapon_deploy_on("Luke Skywalker")
+        assert not card.can_weapon_deploy_on("Mace Windu")
+        assert not card.can_weapon_deploy_on("Darth Vader")
+
+    def test_generic_weapon_deploys_on_any_character(self):
+        """Generic weapon (no matching_weapon) deploys on any character"""
+        card = Card(
+            blueprint_id="1_312",
+            title="Blaster Rifle",
+            side="Dark",
+            card_type="Weapon",
+            sub_type="Character",
+            matching_weapon=[],
+        )
+        assert card.can_weapon_deploy_on("Darth Vader")
+        assert card.can_weapon_deploy_on("Luke Skywalker")
+        assert card.can_weapon_deploy_on("Random Character")
+
+    def test_non_weapon_returns_false_for_deploy_on(self):
+        """Non-weapon card always returns False for can_weapon_deploy_on"""
+        card = Card(
+            blueprint_id="1_168",
+            title="Darth Vader",
+            side="Dark",
+            card_type="Character",
+        )
+        assert not card.can_weapon_deploy_on("Anyone")
+
+
+class TestCharacterSpecificWeaponsFromJSON:
+    """Tests using real card data from JSON files"""
+
+    @pytest.fixture(autouse=True)
+    def ensure_real_card_loader(self):
+        """
+        Ensure the real card loader is active, not a mock.
+
+        Some tests (test_deploy_planner.py) patch card_loader.get_card with mocks.
+        This fixture ensures we have the real card database for JSON tests.
+        """
+        import engine.card_loader as card_loader
+
+        # Save original function reference (test_deploy_planner patches this)
+        # We need to restore the real function
+        original_get_card = card_loader.get_card
+
+        # Check if get_card has been patched (check if it's from the right module)
+        # If patched, we need to define a real one
+        def real_get_card(blueprint_id: str):
+            return card_loader.get_card_database().get_card(blueprint_id)
+
+        # Reset database and use real get_card
+        card_loader._card_db = None
+        db = card_loader.get_card_database()
+        assert db._loaded, "Card database should be loaded"
+
+        # Store reference to use in tests
+        self._real_get_card = real_get_card
+
+        yield
+
+    def _get_card(self, blueprint_id: str):
+        """Get a card using the real card loader"""
+        return self._real_get_card(blueprint_id)
+
+    def test_quigon_lightsaber_from_json(self):
+        """Qui-Gon's Lightsaber should load correctly from JSON"""
+        card = self._get_card("13_40")  # Qui-Gon's Lightsaber
+        assert card is not None, "Card 13_40 (Qui-Gon's Lightsaber) not found in database"
+        assert "Qui-Gon" in card.title
+        assert card.is_weapon
+        assert card.is_character_weapon
+        assert len(card.matching_weapon) > 0
+
+        # Should match Qui-Gon characters
+        assert card.can_weapon_deploy_on("Qui-Gon Jinn, Serene Jedi")
+        assert card.can_weapon_deploy_on("Master Qui-Gon")
+
+        # Should NOT match unrelated characters
+        assert not card.can_weapon_deploy_on("Luke Skywalker")
+        assert not card.can_weapon_deploy_on("Mace Windu")
+
+    def test_anakins_lightsaber_from_json(self):
+        """Anakin's Lightsaber should match Anakin characters"""
+        # Find Anakin's Lightsaber (there may be multiple versions)
+        card = self._get_card("3_71")  # Anakin's Lightsaber
+        if card and card.is_weapon and card.matching_weapon:
+            assert card.is_character_weapon
+            # Should match Anakin
+            has_anakin_match = any("anakin" in m.lower() for m in card.matching_weapon)
+            assert has_anakin_match, f"Expected Anakin in matching_weapon: {card.matching_weapon}"
+
+    def test_generic_blaster_not_character_specific(self):
+        """Generic blasters should not be character-specific"""
+        # Blaster Rifle (generic weapon)
+        card = self._get_card("1_255")  # Blaster Rifle
+        if card and card.is_weapon:
+            # Generic weapons should have empty matching_weapon
+            assert not card.is_character_weapon or len(card.matching_weapon) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

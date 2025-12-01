@@ -483,32 +483,44 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.score = VERY_BAD_DELTA
                 action.add_reasoning("Never cancel own cards", VERY_BAD_DELTA)
 
-            # ========== Sense - Cancel Opponent's Interrupt ==========
+            # ========== Sense/Control - Cancel Opponent's Interrupt ==========
             # Sense: "Target one just-played Interrupt. If destiny < ability, cancel target Interrupt"
-            # This appears when opponent plays an interrupt and we can respond with Sense.
-            # Generally valuable to cancel opponent's interrupts, but save for important ones.
-            elif ("cancel" in text_lower and "interrupt" in text_lower and
+            # Control: "Cancel one Sense or Alter" / "Cancel one Immediate Effect..."
+            # This appears when opponent plays an interrupt and we can respond.
+            # Use priority_cards system to identify high-value targets.
+            elif ("cancel" in text_lower and
+                  ("interrupt" in text_lower or "sense" in text_lower or "alter" in text_lower
+                   or "effect" in text_lower or "force drain" in text_lower) and
                   "your" not in text_lower):
                 action.action_type = ActionType.CANCEL
 
-                # Check what interrupt we're canceling (might be in action text)
-                # High-value targets to cancel: Barrier, Houjix, Ghhhk, Sense itself
-                high_value_target = False
-                for target in ["barrier", "houjix", "ghhhk", "sense", "alter",
-                              "nabrun", "elis", "hyper", "escape pod"]:
-                    if target in text_lower:
-                        high_value_target = True
-                        break
+                # Use priority_cards system to check target value
+                from ..priority_cards import get_sense_target_value
+                is_high_value, target_score, matched_card = get_sense_target_value(action_text)
 
                 # Also check if during battle (canceling battle interrupts is valuable)
                 in_battle = bs and getattr(bs, 'in_battle', False)
 
-                if high_value_target:
+                if is_high_value and target_score >= 80:
+                    # Critical targets (Houjix, Ghhhk, Sense, Barrier, etc.)
+                    action.score = VERY_GOOD_DELTA + 20.0
+                    action.add_reasoning(f"Cancel CRITICAL target: {matched_card}!", VERY_GOOD_DELTA + 20.0)
+                elif is_high_value and target_score >= 60:
+                    # High-value targets
                     action.score = VERY_GOOD_DELTA
-                    action.add_reasoning("Cancel HIGH VALUE opponent interrupt!", VERY_GOOD_DELTA)
+                    action.add_reasoning(f"Cancel high-value target: {matched_card}", VERY_GOOD_DELTA)
+                elif is_high_value:
+                    # Medium-value targets
+                    action.score = GOOD_DELTA + 15.0
+                    action.add_reasoning(f"Cancel valuable target: {matched_card}", GOOD_DELTA + 15.0)
                 elif in_battle:
+                    # Any interrupt during battle is worth considering
                     action.score = GOOD_DELTA + 10.0
                     action.add_reasoning("Cancel opponent interrupt during battle", GOOD_DELTA + 10.0)
+                elif "force drain" in text_lower:
+                    # Control can cancel force drains - valuable!
+                    action.score = GOOD_DELTA + 5.0
+                    action.add_reasoning("Cancel force drain", GOOD_DELTA + 5.0)
                 elif not context.is_my_turn:
                     # During opponent's turn - their interrupts are usually important
                     action.score = GOOD_DELTA

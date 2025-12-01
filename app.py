@@ -580,65 +580,6 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
     return current_cn
 
 
-def do_location_checks(game_id: str, client, board_state, strategy_controller, coordinator=None):
-    """
-    Perform location checks during Control phase.
-
-    Queries cardInfo for locations to get:
-    - Force drain amounts
-    - Force icons
-    - Battle Order rules
-
-    Ported from C# AIStrategyController.StartNewPhase() + ContinuePendingChecks()
-
-    Args:
-        game_id: Current game ID
-        client: GEMPClient (fallback if no coordinator)
-        board_state: Current BoardState
-        strategy_controller: StrategyController
-        coordinator: Optional NetworkCoordinator for rate-limited calls
-    """
-    if not strategy_controller or not board_state:
-        return
-
-    # Only check if we're in Control phase
-    if not board_state.current_phase or 'Control' not in board_state.current_phase:
-        return
-
-    # Get locations to check (smart selection, max 5 per turn)
-    # Note: This now also checks _first_control_phase_seen flag
-    locations_to_check = strategy_controller.get_locations_to_check(board_state)
-
-    if not locations_to_check:
-        logger.debug("📊 No locations to check this turn")
-        return
-
-    # Log what we're about to check
-    loc_names = [loc.site_name or loc.card_id for loc in locations_to_check]
-    logger.info(f"📊 Checking {len(locations_to_check)} location(s) for Battle Order rules: {loc_names}")
-
-    for loc in locations_to_check:
-        loc_name = loc.site_name or loc.card_id
-        try:
-            # Use coordinator for rate-limited cardInfo calls (30s delay between)
-            if coordinator:
-                html = coordinator.get_card_info(game_id, loc.card_id)
-            else:
-                html = client.get_card_info(game_id, loc.card_id)
-
-            if html:
-                result = strategy_controller.process_location_check(loc.card_id, html)
-                strategy_controller.update_location_with_check(loc, result)
-                logger.info(f"   📍 Checked '{loc_name}': drain={result.my_drain_amount or 'N/A'}, "
-                           f"battle_order={result.has_battle_order} "
-                           f"(total checks this game: {strategy_controller._total_checks_this_game})")
-        except Exception as e:
-            logger.error(f"Error checking location '{loc_name}' ({loc.card_id}): {e}")
-
-    if strategy_controller.under_battle_order_rules:
-        logger.info("⚠️  Under Battle Order rules - force drains cost extra!")
-
-
 # Bot worker greenlet
 def bot_worker():
     """
@@ -1213,14 +1154,12 @@ def bot_worker():
                                     )
                                     logger.debug(f"✅ Events processed, channel number: {bot_state.channel_number}")
 
-                                    # Do location checks during Control phase (Battle Order rules)
-                                    do_location_checks(
-                                        bot_state.game_id,
-                                        bot_state.client,
-                                        bot_state.board_state,
-                                        bot_state.strategy_controller,
-                                        coordinator=bot_state.coordinator
-                                    )
+                                    # Update Battle Order detection from board state
+                                    # (no longer uses expensive cardInfo network calls)
+                                    if bot_state.strategy_controller and bot_state.board_state:
+                                        bot_state.strategy_controller.update_battle_order_from_board(
+                                            bot_state.board_state
+                                        )
 
                                     # Check for turn change and notify chat manager
                                     if (bot_state.chat_manager and bot_state.board_state and

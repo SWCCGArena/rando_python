@@ -17,6 +17,36 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# BATTLE ORDER / BATTLE PLAN CARD IDs
+# =============================================================================
+# When these cards are deployed to either player's side_of_table, force drains
+# cost +3 unless player occupies a battleground site AND battleground system.
+#
+# Dark Side: Battle Order (forces Light to pay +3 for drains unless occupying both)
+# Light Side: Battle Plan (forces Dark to pay +3 for drains unless occupying both)
+#
+# Either side can deploy their version to trigger these rules globally.
+# =============================================================================
+
+# Dark Side Battle Order cards
+BATTLE_ORDER_DARK = {
+    "8_118",   # Battle Order (Effect - Endor)
+    "13_54",   # Battle Order (Defensive Shield - Reflections 3)
+    "12_129",  # Battle Order & First Strike (Effect - Coruscant)
+}
+
+# Light Side Battle Plan cards (same effect as Dark's Battle Order)
+BATTLE_PLAN_LIGHT = {
+    "8_35",    # Battle Plan (Effect - Endor)
+    "13_8",    # Battle Plan (Defensive Shield - Reflections 3)
+    "12_41",   # Battle Plan & Draw Their Fire (Effect - Coruscant)
+}
+
+# All cards that trigger Battle Order rules
+ALL_BATTLE_ORDER_CARDS = BATTLE_ORDER_DARK | BATTLE_PLAN_LIGHT
+
+
 # Import card_loader lazily to avoid circular imports
 _card_loader = None
 
@@ -1325,6 +1355,44 @@ class BoardState:
                 result['reason'] = f"Can flee to location with fewer enemies ({dest_their} vs {current_their_power})"
 
         return result
+
+    # ========== Battle Order Detection ==========
+
+    def is_under_battle_order(self) -> bool:
+        """
+        Check if either player has Battle Order/Battle Plan deployed.
+
+        This directly checks cards in SIDE_OF_TABLE zone for Battle Order
+        (Dark) or Battle Plan (Light) cards, avoiding expensive cardInfo
+        network calls.
+
+        When under Battle Order rules, force drains cost +3 Force unless
+        the draining player occupies both a battleground site AND a
+        battleground system.
+
+        Returns:
+            True if Battle Order/Plan is in play (either player)
+        """
+        for card in self.cards_in_play.values():
+            if card.zone == "SIDE_OF_TABLE":
+                if card.blueprint_id in ALL_BATTLE_ORDER_CARDS:
+                    logger.debug(f"⚔️ Battle Order detected: {card.card_title or card.blueprint_id} "
+                                f"(owner: {card.owner})")
+                    return True
+        return False
+
+    def get_battle_order_card(self) -> Optional[CardInPlay]:
+        """
+        Get the Battle Order/Plan card in play, if any.
+
+        Returns:
+            The Battle Order/Plan CardInPlay, or None
+        """
+        for card in self.cards_in_play.values():
+            if card.zone == "SIDE_OF_TABLE":
+                if card.blueprint_id in ALL_BATTLE_ORDER_CARDS:
+                    return card
+        return None
 
     def __repr__(self):
         return (f"BoardState(locations={len(self.locations)}, "

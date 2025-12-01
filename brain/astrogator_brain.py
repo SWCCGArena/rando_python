@@ -200,7 +200,7 @@ class AstrogatorBrain(StaticBrain):
             "These blast points... too accurate for Sand People.",
             "Only Imperial Stormtroopers are so imprecise.",
             "You may fire when ready. Or not. Apparently not.",
-            "Truly wonderful, the mind of a child is.",
+            "Your focus determines your reality.",
             "Into the garbage chute, flyboy.",
             "Boring conversation anyway.",
         ],
@@ -370,27 +370,35 @@ class AstrogatorBrain(StaticBrain):
         """
         Generate welcome message with personality and context.
 
-        Shorter and punchier than before!
+        Explains the astrogation meta-game while making clear it's optional.
         """
-        # Side-based greeting
+        # Personalized side-based greeting
         if opponent_side == 'light':
             greeting = random.choice([
-                "Ah, rebel scum.",
-                "A rebel. How original.",
-                "Greetings, insurgent.",
+                f"Ah, {opponent_name}. Rebel scum, I see.",
+                f"{opponent_name}. A rebel. How original.",
+                f"Greetings, {opponent_name}. Insurgent detected.",
             ])
         else:
             greeting = random.choice([
-                "An Imperial. Charming.",
-                "Hello there, Imperial.",
-                "Imperial entanglement incoming.",
+                f"{opponent_name}. An Imperial. Charming.",
+                f"Hello there, {opponent_name}. Imperial entanglement incoming.",
+                f"Ah, {opponent_name}. Another Imperial.",
             ])
 
-        # Short intro - just the essential hook
+        # Intro explaining the meta-game
         intro = (
-            f"I'm rando_cal, astrogation droid. Beat me decisively "
-            f"and I can sell the route. Score 30+ to make it worth my while."
+            "I'm rando_cal, astrogation droid. I chart hyperspace routes "
+            "based on how badly you beat me: life force minus turns played. "
+            "Score 30+ to make it worth selling."
         )
+
+        # Make it clear this is optional
+        optional = random.choice([
+            "Or just play SWCCG and ignore me.",
+            "Of course, you can just play SWCCG. I'll be here either way.",
+            "But if math isn't your thing, just enjoy the game.",
+        ])
 
         # Deck context (much shorter)
         deck_context = self._get_deck_context_message(deck_name, opponent_name)
@@ -398,7 +406,7 @@ class AstrogatorBrain(StaticBrain):
         # Help reminder
         help_text = "'rando help' for commands."
 
-        return f"{greeting} {intro} {deck_context} {help_text} gl hf!"
+        return f"{greeting} {intro} {optional} {deck_context} {help_text} gl hf!"
 
     def _get_player_score_context(self, opponent_name: str) -> str:
         """Get player's cumulative astrogation score context"""
@@ -543,16 +551,16 @@ class AstrogatorBrain(StaticBrain):
             else:
                 return f"Personal best: {damage}!"
 
-        # Regular damage commentary
+        # Regular damage commentary - add battle context
         if damage > 20:
             tier = 'high'
-            prefix = f"{damage} damage!"
+            prefix = f"Battle damage: {damage}!"
         elif damage > 10:
             tier = 'medium'
-            prefix = f"{damage}."
+            prefix = f"Battle damage: {damage}."
         else:
             tier = 'low'
-            prefix = f"{damage}..."
+            prefix = f"Battle damage: {damage}..."
 
         message = self._pick_message(self.DAMAGE_MESSAGES[tier])
         return f"{prefix} {message}"
@@ -575,17 +583,23 @@ class AstrogatorBrain(StaticBrain):
         """
         power_diff = their_power - my_power  # Positive = player advantage
 
+        # Build context prefix
+        context = "Battle starting:"
+
         # Player crushing us (+8 or more)
         if power_diff >= 8:
-            return self._pick_message(self.BATTLE_PLAYER_CRUSHING)
+            message = self._pick_message(self.BATTLE_PLAYER_CRUSHING)
+            return f"{context} {message}"
 
         # We're crushing player (-8 or worse for them)
         if power_diff <= -8:
-            return self._pick_message(self.BATTLE_BOT_CRUSHING)
+            message = self._pick_message(self.BATTLE_BOT_CRUSHING)
+            return f"{context} {message}"
 
         # Close battle (within 3 either way) - only comment sometimes
         if abs(power_diff) <= 3 and random.random() < 0.30:
-            return self._pick_message(self.BATTLE_CLOSE)
+            message = self._pick_message(self.BATTLE_CLOSE)
+            return f"{context} {message}"
 
         # Normal battle - no comment to avoid spam
         return None

@@ -251,26 +251,43 @@ class DrawEvaluator(ActionEvaluator):
                 BAD_DELTA * 1.5
             )
 
-        # === BASELINE: DRAW TOWARDS SOFT CAP ===
-        # Give a baseline bonus for drawing when below soft cap (12).
-        # This ensures drawing beats Pass (default 5.0) when hand is small.
-        # CRITICAL: This bonus must be HIGH ENOUGH to beat Pass even after
-        # "save force" penalties are applied. Penalties can total -25 or more!
-        # So we need baseline to be at least 30+ for small hands.
-        if hand_size < HAND_SOFT_CAP and remaining_life_force >= LATE_GAME_LIFE_FORCE:
+        # Determine if we have deployable cards (for dynamic soft cap)
+        has_deployable_cards = affordable_cards_count > 0 or max_deployable_cost > 0
+
+        # === BASELINE: DRAW TOWARDS DYNAMIC SOFT CAP ===
+        # Real players overdraw early game (16 cards turn 1-3) to find key cards,
+        # then tighten up late game (8 cards turn 7+) to preserve life force.
+        # Determine game phase for logging
+        phase_note = "early" if turn_number <= 3 else ("mid" if turn_number <= 6 else "late")
+
+        # Get dynamic soft cap from game strategy if available
+        if game_strategy:
+            effective_soft_cap = game_strategy.get_effective_soft_cap(has_deployable_cards)
+        else:
+            # Fallback: simple turn-based adjustment
+            if turn_number <= 3:
+                effective_soft_cap = HAND_SOFT_CAP + 4  # 16
+            elif turn_number <= 6:
+                effective_soft_cap = HAND_SOFT_CAP  # 12
+            else:
+                effective_soft_cap = HAND_SOFT_CAP - 4  # 8
+            # If no deployable cards, allow extra drawing
+            if not has_deployable_cards:
+                effective_soft_cap += 2
+
+        if hand_size < effective_soft_cap and remaining_life_force >= LATE_GAME_LIFE_FORCE:
             # Bonus scales with how far below cap we are
-            cards_below_cap = HAND_SOFT_CAP - hand_size
+            cards_below_cap = effective_soft_cap - hand_size
             # Use exponential scaling: smaller hands get MUCH stronger bonus
             # This ensures drawing beats Pass even after force-saving penalties
-            # hand=8: +16, hand=6: +24, hand=4: +40, hand=2: +60
             baseline_bonus = 8.0 * cards_below_cap
             # Minimum of 30 to beat Pass (5) + typical penalties (-25)
             baseline_bonus = max(30.0, baseline_bonus)
             action.add_reasoning(
-                f"Hand {hand_size} below soft cap {HAND_SOFT_CAP} - need cards!",
+                f"Hand {hand_size} below {phase_note}-game cap {effective_soft_cap} - draw!",
                 baseline_bonus
             )
-            logger.info(f"🎴 Draw baseline bonus: hand {hand_size} < soft cap {HAND_SOFT_CAP}, +{baseline_bonus}")
+            logger.info(f"🎴 Draw baseline: hand {hand_size} < {phase_note} cap {effective_soft_cap}, +{baseline_bonus}")
 
         # === FORCE RESERVATION FOR OPPONENT'S TURN ===
         # After turn 4, keep some force for reactions/battles
@@ -316,12 +333,12 @@ class DrawEvaluator(ActionEvaluator):
         if force_pile > 5 and hand_size <= 4:
             action.add_reasoning("Weak hand - draw even on hold", GOOD_DELTA)
 
-        # Strategic hand size management (soft cap 12, hard cap 16)
+        # Strategic hand size management (dynamic soft cap based on game phase)
         if game_strategy:
-            # Apply GameStrategy hand size penalty
-            hand_penalty = game_strategy.get_hand_size_penalty(hand_size)
+            # Apply GameStrategy hand size penalty (uses dynamic cap)
+            hand_penalty = game_strategy.get_hand_size_penalty(hand_size, has_deployable_cards)
             if hand_penalty < 0:
-                action.add_reasoning(f"Hand size {hand_size} above soft cap", hand_penalty)
+                action.add_reasoning(f"Hand size {hand_size} above {phase_note}-game cap", hand_penalty)
 
             # Force generation deficit - draw to find locations
             # But only if we're not critically low on life force
@@ -329,13 +346,13 @@ class DrawEvaluator(ActionEvaluator):
                 if game_strategy.should_prioritize_drawing_for_locations(hand_size):
                     action.add_reasoning(f"Low force gen ({game_strategy.my_force_generation}) - draw for locations", GOOD_DELTA)
         else:
-            # Fallback: C# Logic 6: Penalty for hand over max size
+            # Fallback: Use local effective_soft_cap calculation
             if hand_size >= effective_max_hand:
                 overflow = hand_size - effective_max_hand
                 action.add_reasoning(f"Hand full ({hand_size}/{effective_max_hand}) - avoid drawing", BAD_DELTA * overflow)
-            elif hand_size >= HAND_SOFT_CAP:
-                overflow = hand_size - HAND_SOFT_CAP
-                action.add_reasoning(f"Hand getting full ({hand_size})", BAD_DELTA * overflow * 0.5)
+            elif hand_size >= effective_soft_cap:
+                overflow = hand_size - effective_soft_cap
+                action.add_reasoning(f"Hand above {phase_note}-game cap ({hand_size}/{effective_soft_cap})", BAD_DELTA * overflow * 0.5)
 
         # C# Logic 7: Save last force
         if force_pile == 1:
