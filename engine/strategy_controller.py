@@ -104,6 +104,18 @@ class StrategyController:
         elif was_under_battle_order and not self.under_battle_order_rules:
             logger.info("✅ No longer under Battle Order rules")
 
+    def on_phase_change(self, phase: str) -> None:
+        """
+        Handle phase change notifications.
+
+        Previously used for location check optimization, now a no-op
+        since Battle Order detection uses direct board state checks.
+
+        Args:
+            phase: The new game phase
+        """
+        pass  # No action needed - Battle Order checked via board state
+
     def is_avoid_using_card(self, card_title: str) -> bool:
         """
         Check if a card should be avoided (bad cards to play).
