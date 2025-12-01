@@ -285,6 +285,34 @@ class ChatManager:
             self._send_chat(msg, message_type='achievement')
             logger.info(f"🏆 Achievement triggered by '{card_title}': {msg[:50]}...")
 
+    def on_battle_start(self, board_state: 'BoardState'):
+        """
+        Called when a battle starts.
+
+        Generates battle commentary for extreme situations only.
+        """
+        if not self.brain or not board_state:
+            return
+
+        # Get power at battle location
+        battle_loc = board_state.current_battle_location
+        if battle_loc < 0:
+            return
+
+        my_power = board_state.my_power_at_location(battle_loc)
+        their_power = board_state.their_power_at_location(battle_loc)
+
+        # Get location name for context (optional)
+        location_name = None
+        if battle_loc < len(board_state.locations):
+            loc = board_state.locations[battle_loc]
+            location_name = loc.site_name or loc.system_name
+
+        # Get battle message (may be None for normal battles)
+        message = self.brain.get_battle_start_message(my_power, their_power, location_name)
+        if message:
+            self._send_chat(message, message_type='battle')
+
     def on_battle_damage(self, damage: int, board_state: 'BoardState'):
         """
         Called when battle damage is dealt.

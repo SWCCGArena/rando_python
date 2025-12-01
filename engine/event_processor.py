@@ -27,6 +27,8 @@ class EventProcessor:
         self._on_card_placed_callbacks = []
         # Callbacks for battle damage events
         self._on_battle_damage_callbacks = []
+        # Callbacks for battle start events
+        self._on_battle_start_callbacks = []
         # Flag to indicate we're processing historical events (catching up)
         # When True, skip chat-related callbacks to avoid re-posting old messages
         self.catching_up = False
@@ -49,6 +51,26 @@ class EventProcessor:
         Callback signature: callback(damage: int)
         """
         self._on_battle_damage_callbacks.append(callback)
+
+    def register_battle_start_callback(self, callback):
+        """
+        Register a callback to be called when a battle starts.
+
+        Callback signature: callback()
+        """
+        self._on_battle_start_callbacks.append(callback)
+
+    def _notify_battle_start(self):
+        """Notify all registered callbacks that a battle started"""
+        # Skip chat-related callbacks when catching up on historical events
+        if self.catching_up:
+            logger.debug("⚔️ Skipping battle start callback (catching up)")
+            return
+        for callback in self._on_battle_start_callbacks:
+            try:
+                callback()
+            except Exception as e:
+                logger.error(f"Error in battle start callback: {e}")
 
     def _notify_battle_damage(self, damage: int):
         """Notify all registered callbacks that battle damage occurred"""
@@ -567,6 +589,10 @@ class EventProcessor:
         }
         battle_name = battle_types.get(event_type, 'Combat')
         logger.info(f"⚔️  {battle_name} started at location {self.board_state.current_battle_location}")
+
+        # Notify callbacks for regular battles only (not duels/lightsaber combat)
+        if event_type == 'SB':
+            self._notify_battle_start()
 
     def _handle_end_battle(self, event: ET.Element):
         """

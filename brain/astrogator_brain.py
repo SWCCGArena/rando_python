@@ -4,6 +4,8 @@ Astrogator Brain - Personality Mode
 A mercenary astrogation droid that treats each game as calculating hyperspace routes.
 Players earn "route scores" that can be "sold to traders" - higher scores = better routes.
 
+Personality: K-2SO inspired - sarcastic, blunt, probability-obsessed, unexpectedly loyal.
+
 Route Score Formula: (opponent_lifeforce - my_lifeforce) - turn_number
 Where lifeforce = used_pile + force_pile + reserve_pile
 
@@ -39,112 +41,130 @@ class AstrogatorBrain(StaticBrain):
     # Message Pools
     # =========================================================================
 
-    # 15 random deck origin stories
+    # Random deck origin stories - where did the bot "find" this deck?
     DECK_ORIGINS = [
         "in the outer rim",
         "from an imperial spy on Eriadu",
-        "from an angry wookie",
-        "while exploring some old ruins",
-        "in a crashed x-wing",
-        "etched into this creepy old knife",
-        "in the memory banks of some old r2 unit",
-        "while touring the debris field of Alderaan",
+        "from a very upset Wookiee",
+        "while exploring some old Jedi ruins",
+        "in a crashed X-wing on Dagobah",
+        "etched into this creepy old Sith knife",
+        "in the memory banks of some old R2 unit",
+        "while touring the debris field of Alderaan. Too soon?",
         "from this weird guy who won't take his helmet off",
-        "from a trader on Jakku",
-        "in the dumped garbage of a star destroyer",
-        "from a bounty hunter on Tatooine",
-        "deep in the bowels of a tauntaun",
-        "in the bones of a kryat dragon",
-        "from the hands of a tiny floating green baby",
-        "from this blue guy who said he had his own star destroyer",
+        "from a scavenger on Jakku",
+        "in the dumped garbage of a Star Destroyer",
+        "from a bounty hunter who disintegrated the previous owner",
+        "deep in the bowels of a tauntaun. I thought it smelled bad on the outside.",
+        "in the bones of a krayt dragon",
+        "from a tiny green baby who kept trying to eat it",
+        "from this blue guy who said he had his own Star Destroyer",
+        "on Mustafar. I have the high ground now.",
+        "from a princess who hid it in a droid",
+        "in a trash compactor. There was something alive down there.",
+        "from a smuggler who made the Kessel Run in 12 parsecs. Allegedly.",
+        "on Endor. The Ewoks wanted to cook me.",
+        "from a moisture farmer with dreams of being a pilot",
+        "in Cloud City. The deal kept getting altered.",
+        "from a senator who turned out to be the Senate",
     ]
 
     # Route score messages by tier
     SCORE_MESSAGES = {
         # Score >= 30 (profitable)
         'profitable': [
-            "That's not too bad, keep it up and we might make some money today!",
-            "Yes! I can sell this route now, just don't start losing again.",
-            "Perfect! I can sell this to anybody.",
-            "If we can just hold this course we're going to be rich!",
-            "You've been learning, now we can make some real money.",
-            "I knew you could do it, or at least that's what I'm telling you.",
+            "Finally! A route I can actually sell.",
+            "This is acceptable. Don't ruin it.",
+            "I can work with this. Keep not failing.",
+            "We might actually make money today. I'm as surprised as you are.",
+            "The odds of you maintaining this are approximately... actually, never mind.",
+            "I knew you could do it. That's a lie, but still.",
+            "This is where the fun begins.",
+            "Impressive. Most impressive.",
         ],
         # Score 20-29 (promising)
         'promising': [
-            "That's ok, but we'll have to do better if we want to sell this route.",
-            "This is good, but nobody will buy a route scored less than 30.",
-            "The higher the score, the better the hyperspace route in the end.",
-            "Last time I followed a route this good I found a chunk of Beskar.",
-            "You show promise human, maybe we can sell this afterall.",
+            "Getting closer. Nobody buys routes under 30 though.",
+            "Last time I followed a route this promising I found beskar.",
+            "You show promise. For a human.",
+            "Almost sellable. Almost.",
+            "A surprise to be sure, but a welcome one.",
+            "The Force is somewhat with you, apparently.",
         ],
         # Score 10-19 (weak potential)
         'weak': [
-            "Well it isn't terrible, but I can't sell such a suboptimal route. Hopefully you can turn things around.",
-            "A route score like this shows promise, maybe we'll find some bantha poodoo at the end of it.",
-            "This is a great start, still not worth anything, but a great start.",
-            "Clearly you know what you are doing, keep it up.",
-            "Yes, yes, let the hate flow through you.",
-            "This is a good score, it could be better.",
+            "It's not terrible. That's the best I can say.",
+            "I've seen worse. I've also seen much better.",
+            "Let the hate flow through you. Channel it into winning.",
+            "There is another way. It involves playing better.",
+            "This route might lead to bantha poodoo.",
+            "You have potential. Unrealized potential, but still.",
         ],
         'weak_improving': [
-            "You are really turning this around, keep it up!",
-            "A good improvement from last turn!",
+            "You're improving! Against all odds.",
+            "Better than last turn. The bar was low.",
+            "Progress! I'll try to contain my excitement.",
         ],
         'weak_declining': [
-            "Hmm, I thought we were going to be rich, I guess not.",
-            "This is getting worse, it's not supposed to get worse.",
-            "No, no, you want to do better each turn, not worse.",
+            "We were doing so well. Comparatively.",
+            "I have a bad feeling about this.",
+            "That's... not the direction we wanted.",
         ],
         # Score 0-9 (breaking even)
         'even': [
-            "Hmm, remember we're trying to optimize this route, are you up to the task?",
-            "You do understand we're trying to make some money here right? We need a higher route score.",
-            "I could probably do better playing against myself.",
-            "This is depressing.",
-            "Remember your goal is to have more lifeforce than I do.",
-            "I can't sell this route unless the score is greater than 30.",
+            "You do understand we're trying to make money, right?",
+            "I could probably do better playing randomly. Oh wait.",
+            "This is depressing. For you. I'm a droid.",
+            "Your goal is to have MORE lifeforce than me. More.",
+            "Hello there, mediocrity.",
+            "The dark side clouds everything.",
         ],
         'even_improving': [
-            "At least you are improving.",
-            "This is better than last turn, keep it up and maybe this won't be a waste of time.",
-            "Your score is getting higher, so is my hope for making some money today.",
+            "At least you're improving. Marginally.",
+            "Your score is rising. So is my hope. Slightly.",
+            "Better. Still not good, but better.",
         ],
         'even_declining': [
-            "Wait this can't be right... you are doing worse than last turn?",
-            "Your score is supposed to be getting higher you know.",
-            "Route score is dropping, just like my hopes of making any money from this deck.",
+            "Your score is supposed to go UP, not down.",
+            "I find your lack of progress disturbing.",
+            "Route score dropping. Just like my expectations.",
         ],
         # Score -10 to -1 (slightly behind)
         'behind': [
-            "Wait I'm not supposed to be winning?!",
-            "I'm literally just playing random cards at this point...",
-            "Nobody ever says 'let the robots win', that's because you are supposed to win.",
-            "I'm trying to be nice, but really you should be doing better than this.",
-            "You realize I'm just a badly programmed bot right? Why are you losing?",
-            "I hope you have some tricks up your sleeve, this isn't looking good.",
+            "Wait, I'm not supposed to be winning.",
+            "I'm literally playing random cards. How are you losing?",
+            "Nobody ever says 'let the droid win.'",
+            "You have a 73.6% chance of disappointing me further.",
+            "It's a trap! The trap is your current strategy.",
+            "Perhaps you should try a different approach. Any approach.",
         ],
         'behind_improving': [
-            "At least the score is moving in the right direction.",
+            "At least it's moving in the right direction.",
+            "Still bad, but less bad. Progress?",
         ],
         'behind_declining': [
-            "And you were doing so well earlier, what went wrong?",
+            "And you were doing so well. By your standards.",
+            "This is getting worse. That shouldn't be possible.",
         ],
         # Score < -10 (heavily behind)
         'very_behind': [
-            "You do realize you are supposed to be winning right?",
-            "Well you are behind, but maybe you have a plan?",
-            "You have a 97.6% chance of failure.",
-            "This is why we never let the humans hold the blasters.",
-            "I thought you were good at this?",
-            "I'll set you up for an easy win next turn.",
-            "I was trying to make this easy for you.",
+            "You have approximately a 2.4% chance of turning this around.",
+            "This is why droids should be in charge.",
+            "I'm trying to lose. You're making it difficult.",
+            "You were the chosen one! You were supposed to beat me!",
+            "Do or do not. There is no... whatever this is.",
+            "I suggest a new strategy. Let the Wookiee win.",
+            "I've got a bad feeling about this. For you.",
+            "Search your feelings. You know you're losing.",
         ],
         'very_behind_improving': [
-            "This is better than last turn, still bad.",
+            "Better. Still terrible, but better.",
+            "A new hope? Let's not get carried away.",
         ],
         'very_behind_declining': [
-            "Route score was already bad, now it's worse.",
+            "Somehow, you're doing even worse now.",
+            "We seem to be made to suffer. It's our lot in life.",
+            "This deal is getting worse all the time.",
         ],
     }
 
@@ -152,58 +172,103 @@ class AstrogatorBrain(StaticBrain):
     DAMAGE_MESSAGES = {
         # Damage > 20 (high)
         'high': [
-            "This should really help our route score.",
-            "I'm not even mad, that's impressive.",
-            "HaHa! Yes! Now we're making some money!",
-            "This route might lead us to a sith artifact.",
-            "The more damage you do, the more money we, I mean I will make.",
-            "That's a lot of explosions.",
-            "Whoosh, Zap, BOoM! I just love making the noises.",
-            "I may be a droid, but even I felt that.",
+            "Now THIS is podracing!",
+            "I'm not even mad. That's impressive.",
+            "The Force is strong with this one.",
+            "That's no moon... that's YOUR damage total!",
+            "Great shot kid, that was one in a million!",
+            "Witness the firepower of this fully armed deck!",
+            "Everything is proceeding as I have foreseen. Mostly.",
+            "I felt a great disturbance in my cards.",
         ],
         # Damage 10-20 (medium)
         'medium': [
-            "Now we're really going to optimize this route.",
-            "I'll take this, more would be better.",
-            "I was just testing you.",
+            "Solid damage. I'll allow it.",
+            "They died for a good cause. Probably.",
+            "Some of those were just contractors, you know.",
+            "Look at the size of that damage!",
+            "Stay on target... stay on target...",
+            "You came in that thing? You're braver than I thought.",
+            "Not bad. Not great. But not bad.",
             "I thought they smelled bad on the outside.",
-            "They died for a good cause I'm sure.",
-            "This should help us find a good shortcut.",
-            "I hope all this suffering is worth it.",
-            "Some of those guys were just contractors.",
         ],
         # Damage 1-9 (low)
         'low': [
-            "I guess it's better than nothing.",
-            "No, that's really not much better than nothing.",
-            "Similar accuracy to the empire's finest I see.",
-            "The Ewoks had more kills than you.",
-            "I'm a droid, what's your excuse?",
-            "That isn't very good.",
-            "You know hearthstone needs some players, you could go try that?",
-            "Next time try pointing the blasters at my troops.",
-            "I tried to set you up, what went wrong?",
-            "You can always revert and try again, I won't tell anyone.",
+            "Stormtrooper accuracy, I see.",
+            "The Ewoks had higher kill counts, you know.",
+            "Well, you tried. That's... something.",
+            "These blast points... too accurate for Sand People.",
+            "Only Imperial Stormtroopers are so imprecise.",
+            "You may fire when ready. Or not. Apparently not.",
+            "Truly wonderful, the mind of a child is.",
+            "Into the garbage chute, flyboy.",
+            "Boring conversation anyway.",
         ],
     }
 
     # Game end messages (player won, by score tier)
     END_GAME_NEW_RECORD = {
-        'excellent': "Amazing! You scored {score}, this is a nearly perfect route! We're both going to be very rich once I sell this.",
-        'good': "Not bad, you scored {score}, it's the best route I've seen with this deck so far, but far from perfect.",
-        'okay': "Your score of {score} is the best route I've seen, still I doubt it's even worth selling. Hopefully somebody beats it soon, no offense.",
-        'poor': "A score of {score}... that's the best we can do? Such a waste of good cards.",
+        'excellent': "New record! {score} points! We're rich! Well, I'm rich. You get satisfaction.",
+        'good': "Score of {score}! New deck record. Not perfect, but I can sell it.",
+        'okay': "{score} is the new record. It's like being the tallest Jawa.",
+        'poor': "{score}. That's the best anyone's done? The bar is underground.",
     }
 
     END_GAME_NO_RECORD = {
-        'excellent': "Amazing! You scored {score}, still {holder} has you beat at {high_score}. I'll record this, but I can't sell it for anything.",
-        'good': "Not bad, you scored {score}. {holder} scored {high_score} though, so why should I bother following your route, try harder next time.",
-        'okay': "Your score of {score} is pitiful. {holder} has already scored {high_score}. It seems you have a lot to learn.",
-        'poor': "{score}! You really only got {score}? I feel like I'd be better served playing against myself, thanks for trying... I guess.",
+        'excellent': "{score}! Excellent, but {holder} still beat you with {high_score}.",
+        'good': "{score}. Solid, but {holder} has {high_score}. So close, yet so far.",
+        'okay': "{score}. {holder} scored {high_score}. You have much to learn, young Padawan.",
+        'poor': "{score}? Really? {holder} got {high_score}. I weep for the future.",
     }
 
-    # Bot won message
-    BOT_WON_MESSAGE = "It's ok, even droids get lucky... from time to time. You'll do better next game!"
+    # Multiple bot won messages for variety
+    BOT_WON_MESSAGES = [
+        "I win! Don't feel bad. Actually, feel a little bad.",
+        "Victory for the droid! This was not supposed to happen.",
+        "I won? I was trying to help you! Sort of.",
+        "Even droids get lucky sometimes. This was skill though.",
+        "The student has not yet surpassed the master.",
+        "Perhaps next time you'll listen to my odds calculations.",
+        "I find your lack of victory disturbing.",
+        "You underestimate my power! ...of random card selection.",
+    ]
+
+    # Battle start messages - only for extreme situations!
+    # Player crushing bot (power advantage >= 8)
+    BATTLE_PLAYER_CRUSHING = [
+        "The odds are in your favor. I calculate 94.7% chance of victory.",
+        "This should be quick. I'll try to make it entertaining.",
+        "Impressive firepower. Most impressive.",
+        "I appear to have made a tactical error.",
+        "Well, this is unfortunate. For me.",
+        "This is fine. Everything is fine.",
+        "I've seen this before. It doesn't end well for me.",
+        "Your overconfidence is... actually justified here.",
+    ]
+
+    # Bot crushing player (power advantage >= 8)
+    BATTLE_BOT_CRUSHING = [
+        "The odds are NOT in your favor. Just so you know.",
+        "I have you now!",
+        "You may want to reconsider your life choices.",
+        "This is a mistake. I'm trying to help you realize that.",
+        "I've made some calculations. They're not good. For you.",
+        "Witness the firepower of this fully armed battle station!",
+        "I find your lack of troops disturbing.",
+        "Perhaps retreat would have been the wiser option?",
+        "It's over! I have the high ground!",
+        "We're both going to pretend this didn't happen, right?",
+    ]
+
+    # Close/contested battles (power within 3) - less frequent, adds tension
+    BATTLE_CLOSE = [
+        "This should be interesting.",
+        "The odds are... actually unclear here.",
+        "May the Force be with you. You'll need it.",
+        "A fair fight. How uncivilized.",
+        "Let's see what you've got.",
+        "I have a bad feeling about this.",
+    ]
 
     def __init__(self, stats_repo: 'StatsRepository' = None):
         """
@@ -264,16 +329,16 @@ class AstrogatorBrain(StaticBrain):
 
     def _pick_message(self, pool: List[str]) -> str:
         """Pick a random message, avoiding recent repeats"""
-        available = [m for m in pool if m not in self.last_messages[-3:]]
+        available = [m for m in pool if m not in self.last_messages[-5:]]
         if not available:
             available = pool
 
         message = random.choice(available)
         self.last_messages.append(message)
 
-        # Keep last 10 messages
-        if len(self.last_messages) > 10:
-            self.last_messages = self.last_messages[-10:]
+        # Keep last 15 messages
+        if len(self.last_messages) > 15:
+            self.last_messages = self.last_messages[-15:]
 
         return message
 
@@ -305,41 +370,35 @@ class AstrogatorBrain(StaticBrain):
         """
         Generate welcome message with personality and context.
 
-        Args:
-            opponent_name: Name of the opponent
-            deck_name: Name of the deck being used
-            opponent_side: 'dark' or 'light'
+        Shorter and punchier than before!
         """
-        # Greeting based on side
+        # Side-based greeting
         if opponent_side == 'light':
-            greeting = "Greetings rebel scum, "
+            greeting = random.choice([
+                "Ah, rebel scum.",
+                "A rebel. How original.",
+                "Greetings, insurgent.",
+            ])
         else:
-            greeting = "Greetings imperial nuisance, "
+            greeting = random.choice([
+                "An Imperial. Charming.",
+                "Hello there, Imperial.",
+                "Imperial entanglement incoming.",
+            ])
 
-        # Main intro
+        # Short intro - just the essential hook
         intro = (
-            f"I am rando_cal, famous Astrogator. To you these are just cards, "
-            f"but to me each deck is a map to treasures in the Unknown Regions! "
-            f"Help me find optimal routes by beating me with the highest lifeforce "
-            f"difference in the fewest turns. Lifeforce is your used + force + reserve "
-            f"pile count. For example if you can beat me on turn 5 with 15 more lifeforce "
-            f"than me, that's a route score of 10. I need a route score of at least 30 "
-            f"to make any real money, the higher the better!"
+            f"I'm rando_cal, astrogation droid. Beat me decisively "
+            f"and I can sell the route. Score 30+ to make it worth my while."
         )
 
-        # Deck context (includes player's score on this deck if returning)
+        # Deck context (much shorter)
         deck_context = self._get_deck_context_message(deck_name, opponent_name)
 
-        # Player's cumulative astrogation score (if returning player)
-        player_score_context = self._get_player_score_context(opponent_name)
-
-        # Global leaderboard context
-        leader_context = self._get_leader_context()
-
         # Help reminder
-        help_text = "Type 'rando help' for commands."
+        help_text = "'rando help' for commands."
 
-        return f"{greeting}{intro} {deck_context}{player_score_context} {leader_context} {help_text} gl, hf {opponent_name}!"
+        return f"{greeting} {intro} {deck_context} {help_text} gl hf!"
 
     def _get_player_score_context(self, opponent_name: str) -> str:
         """Get player's cumulative astrogation score context"""
@@ -348,66 +407,43 @@ class AstrogatorBrain(StaticBrain):
 
         player_stats = self.stats_repo.get_player_stats(opponent_name)
         if player_stats and player_stats.total_ast_score > 0:
-            return f" Your current astrogation score is: {player_stats.total_ast_score} (cumulative over all games played)."
+            return f" Your astrogation score: {player_stats.total_ast_score}."
         return ""
 
     def _get_deck_context_message(self, deck_name: str, opponent_name: str) -> str:
         """
-        Get context message about this deck's history.
-
-        Matches C# SendWelcomeMessage logic:
-        - Shows deck's global high score (any player)
-        - Shows player's previous score on THIS specific deck
-        - Different messages based on whether player holds record
+        Get context message about this deck's history. Shorter version.
         """
         if not self.stats_repo:
             origin = self._get_deck_origin()
-            return f"I just picked this deck up {origin}, help me find the secrets it holds."
+            return f"Found this deck {origin}."
 
         deck_stats = self.stats_repo.get_deck_stats(deck_name)
         player_deck_stats = self.stats_repo.get_player_deck_stats(opponent_name, deck_name)
 
-        # Check if deck has any history
         has_deck_high_score = deck_stats and deck_stats.best_score > 0
         has_player_deck_score = player_deck_stats and player_deck_stats.best_score > 0
 
         if not has_deck_high_score:
-            # No history for this deck at all
             origin = self._get_deck_origin()
-            return f"I just picked this deck up {origin}, help me find the secrets it holds."
+            return f"Found this deck {origin}."
 
         high_score = deck_stats.best_score
         high_player = deck_stats.best_player
         player_score = player_deck_stats.best_score if has_player_deck_score else 0
 
-        # Check if this player holds the deck record
         player_is_holder = high_player == opponent_name
 
         if player_is_holder:
-            # Player holds the record on this deck
             if high_score > 50:
-                return f"This deck is almost fully optimized, you've already found a route score of {high_score}. Not quite perfect yet, help me find the final shortcuts."
-            elif high_score > 30:
-                return f"This deck's route score of {high_score} feels suboptimal, we must improve it."
+                return f"Your record: {high_score}. Nearly optimal."
             else:
-                return f"I appreciate your help with this, but the current route score of {high_score} is not... great. I'm certain you can beat it this time."
+                return f"Your record: {high_score}. Room for improvement."
         elif has_player_deck_score:
-            # Player has a score on this deck but doesn't hold the record
             diff = high_score - player_score
-            if diff > 30:
-                return f"Hmm are you sure you can do this? Your score of {player_score} is over 30 points behind the route found by {high_player}. They scored {high_score}, but I guess you can try if you want."
-            elif diff < 10:
-                return f"Your score of {player_score} is only {diff} points behind the leader. Let's focus and try to beat {high_player}'s score of {high_score}."
-            else:
-                return f"Your score of {player_score} is {diff} points behind the leader. {high_player} has a score of {high_score}."
+            return f"Your best: {player_score}. {high_player} has {high_score}. {diff} points ahead."
         else:
-            # Player has never played this deck, but others have
-            if high_score > 50:
-                return f"This deck is almost fully optimized, {high_player} found a route score of {high_score}. Not quite perfect yet, help me find the final shortcuts."
-            elif high_score > 30:
-                return f"This deck's route score of {high_score}, held by {high_player} feels suboptimal, we must improve it."
-            else:
-                return f"I appreciate {high_player}'s help with this, but the current route score of {high_score} is not... great. I'm certain even you can beat it."
+            return f"Record: {high_score} by {high_player}. Beat it."
 
     def _get_leader_context(self) -> str:
         """Get global leaderboard context"""
@@ -416,7 +452,7 @@ class AstrogatorBrain(StaticBrain):
 
         record = self.stats_repo.get_global_record('ast_score')
         if record and record.value > 0:
-            return f"The current top Astrogator across all decks is: {record.player_name} with {record.value} points."
+            return f"Top Astrogator: {record.player_name} ({record.value} pts)."
         return ""
 
     # =========================================================================
@@ -450,11 +486,11 @@ class AstrogatorBrain(StaticBrain):
 
         self.last_route_score = score
 
-        # Build message
-        if turn_number <= 3:
-            prefix = f"The route score is your lifeforce ({their_lifeforce}) - the turn number ({turn_number}) subtracted from my lifeforce ({my_lifeforce}), oh I'll just do the math for you it's: {score}"
+        # Shorter prefix for later turns
+        if turn_number == 2:
+            prefix = f"Route score: {score} (your lifeforce - mine - turn#)"
         else:
-            prefix = f"Current route score is {score}"
+            prefix = f"Route score: {score}"
 
         # Get tier-specific message
         suffix = self._get_score_tier_message(tier, improving, declining)
@@ -489,14 +525,6 @@ class AstrogatorBrain(StaticBrain):
                           current_player: str = None) -> Optional[str]:
         """
         Generate battle damage commentary.
-
-        Args:
-            damage: Amount of damage dealt
-            is_new_global_record: Whether this sets a new global record
-            is_new_personal_record: Whether this sets a new personal record
-            previous_holder: Previous record holder name
-            previous_record: Previous record value
-            current_player: Current player setting the record
         """
         if damage <= 0:
             return None
@@ -504,30 +532,63 @@ class AstrogatorBrain(StaticBrain):
         # New global record
         if is_new_global_record:
             if previous_holder and previous_holder != current_player:
-                return f"Nice damage score! You just set the high score, beating: {previous_holder}. Your score was: {damage}"
+                return f"New damage record: {damage}! {previous_holder} dethroned!"
             else:
-                return f"Wow! You set a new damage high score: {damage}"
+                return f"New damage record: {damage}! Impressive!"
 
         # New personal record
         if is_new_personal_record:
             if previous_record and previous_record > 0:
-                return f"That should help! You set a new personal damage score: {damage}, beating your old score of: {previous_record}"
+                return f"Personal best: {damage}! (was {previous_record})"
             else:
-                return f"That should help! You set a new personal damage score: {damage}!"
+                return f"Personal best: {damage}!"
 
         # Regular damage commentary
         if damage > 20:
             tier = 'high'
-            prefix = f"Oh {damage} damage!"
+            prefix = f"{damage} damage!"
         elif damage > 10:
             tier = 'medium'
-            prefix = f"{damage} damage!"
+            prefix = f"{damage}."
         else:
             tier = 'low'
-            prefix = f"{damage} damage..."
+            prefix = f"{damage}..."
 
         message = self._pick_message(self.DAMAGE_MESSAGES[tier])
         return f"{prefix} {message}"
+
+    # =========================================================================
+    # Battle Start Messages
+    # =========================================================================
+
+    def get_battle_start_message(self, my_power: int, their_power: int,
+                                  location_name: str = None) -> Optional[str]:
+        """
+        Generate battle start commentary for extreme situations only.
+
+        Only comments on:
+        - Crushing victories (power diff >= 8)
+        - Getting crushed (power diff <= -8)
+        - Close fights (power diff within 3) - but only 30% of the time
+
+        Returns None for "normal" battles to avoid chat spam.
+        """
+        power_diff = their_power - my_power  # Positive = player advantage
+
+        # Player crushing us (+8 or more)
+        if power_diff >= 8:
+            return self._pick_message(self.BATTLE_PLAYER_CRUSHING)
+
+        # We're crushing player (-8 or worse for them)
+        if power_diff <= -8:
+            return self._pick_message(self.BATTLE_BOT_CRUSHING)
+
+        # Close battle (within 3 either way) - only comment sometimes
+        if abs(power_diff) <= 3 and random.random() < 0.30:
+            return self._pick_message(self.BATTLE_CLOSE)
+
+        # Normal battle - no comment to avoid spam
+        return None
 
     # =========================================================================
     # Game End Messages
@@ -542,19 +603,9 @@ class AstrogatorBrain(StaticBrain):
                             is_new_top_astrogator: bool = False) -> str:
         """
         Generate end-of-game message.
-
-        Args:
-            won: Whether the player won (True = player won, False = bot won)
-            route_score: Final route score
-            deck_name: Name of the deck
-            is_new_deck_record: Whether this is a new record for this deck
-            previous_holder: Previous record holder
-            previous_score: Previous record score
-            new_total_score: New cumulative astrogation score
-            is_new_top_astrogator: Whether player is new global leader
         """
         if not won:
-            return self.BOT_WON_MESSAGE
+            return self._pick_message(self.BOT_WON_MESSAGES)
 
         # Determine score tier
         if route_score > 50:
@@ -580,11 +631,11 @@ class AstrogatorBrain(StaticBrain):
 
         # Add cumulative score
         if new_total_score is not None:
-            message += f" Your new astrogation score is: {new_total_score}"
+            message += f" Total: {new_total_score}."
 
         # Add top astrogator notification
         if is_new_top_astrogator:
-            message += " You are the new top Astrogator, thanks for making me rich!"
+            message += " You're the new top Astrogator!"
 
         return message
 

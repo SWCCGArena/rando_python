@@ -1288,6 +1288,29 @@ class CardSelectionEvaluator(ActionEvaluator):
                                 action.add_reasoning("Character target", +5.0)
                             elif card_meta.is_starship:
                                 action.add_reasoning("Starship target", +3.0)
+
+                            # =================================================
+                            # BLASTER DEFLECTION AWARENESS (25% of LS decks)
+                            # When firing blasters at Light Side opponents,
+                            # avoid targeting characters with ability > 4.
+                            # Blaster Deflection can cancel or redirect!
+                            # =================================================
+                            decision_text_lower = (context.decision_text or "").lower()
+                            is_blaster = "blaster" in decision_text_lower
+                            opponent_is_ls = bs.my_side == "dark"  # We're dark = they're light
+
+                            if is_blaster and opponent_is_ls and card_meta.is_character:
+                                target_ability = card_meta.ability_value or 0
+                                if target_ability > 4:
+                                    # High ability - Blaster Deflection can cancel!
+                                    action.add_reasoning(
+                                        f"BLASTER DEFLECTION RISK: ability {target_ability} > 4",
+                                        -30.0
+                                    )
+                                    logger.debug(
+                                        f"⚡ Blaster Deflection risk: {card.card_title} "
+                                        f"has ability {target_ability}"
+                                    )
                     else:
                         # Our own card - DON'T target if we have enemy options
                         action.add_reasoning("OUR card - avoid targeting!", -200.0)

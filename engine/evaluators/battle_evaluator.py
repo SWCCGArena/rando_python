@@ -153,6 +153,23 @@ class BattleEvaluator(ActionEvaluator):
         power_diff = my_power - their_power
         ability_test = (my_ability >= ABILITY_TEST_HIGH or my_card_count >= ABILITY_TEST_LOW)
 
+        # =================================================================
+        # OPPONENT DAMAGE CANCEL AWARENESS (Houjix/Ghhhk - 24-28% of decks)
+        # If opponent has interrupt cards and we're winning big, they might
+        # cancel our battle damage. Apply a risk factor.
+        # =================================================================
+        damage_cancel_risk = 0.0
+        their_hand = getattr(board_state, 'their_hand_size', 0)
+        if their_hand > 0 and power_diff >= 6:
+            # High probability opponent has interrupts - discount expected damage
+            # Don't make us avoid battle, just temper expectations
+            damage_cancel_risk = -5.0  # Modest penalty
+            action.add_reasoning(
+                f"Opponent may have damage cancel ({their_hand} cards in hand)",
+                damage_cancel_risk
+            )
+            logger.debug(f"⚔️ Damage cancel risk: opponent has {their_hand} cards, power_diff={power_diff}")
+
         # Check reserve deck for destiny draws
         reserve_count = board_state.reserve_deck if hasattr(board_state, 'reserve_deck') else 10
 

@@ -430,6 +430,7 @@ class DeployPhasePlanner:
         score = 0.0
         target_loc_ids = set()
         power_by_location = {}  # Track power going to each location
+        cards_by_location = {}  # Track card count per location for Barrier awareness
 
         for inst in instructions:
             # Find the target location
@@ -445,6 +446,11 @@ class DeployPhasePlanner:
                 if inst.target_location_id not in power_by_location:
                     power_by_location[inst.target_location_id] = 0
                 power_by_location[inst.target_location_id] += inst.power_contribution
+
+                # Track card count by location for Barrier awareness
+                if inst.target_location_id not in cards_by_location:
+                    cards_by_location[inst.target_location_id] = 0
+                cards_by_location[inst.target_location_id] += 1
 
             # Power contribution (base value)
             score += inst.power_contribution * 2
@@ -501,6 +507,26 @@ class DeployPhasePlanner:
                     # But contesting still denies force drain!
                     score += 5 + deny_drain_bonus
                     logger.debug(f"   ❌ LOSING at {target_loc.name}: +{5 + deny_drain_bonus} (contest only)")
+
+                # =================================================================
+                # BARRIER CARD AWARENESS (34% of decks have Barrier)
+                # Opponent can use Barrier to prevent our deployed card from
+                # battling or moving. Prefer deploying MULTIPLE cards so even
+                # if one gets Barriered, others can still participate.
+                # =================================================================
+                cards_here = cards_by_location.get(loc_id, 1)
+                if cards_here == 1:
+                    # Single card deployment to contested - vulnerable to Barrier
+                    barrier_risk = -15.0
+                    score += barrier_risk
+                    logger.debug(f"   🚧 BARRIER RISK at {target_loc.name}: {barrier_risk} "
+                               f"(single card vulnerable)")
+                elif cards_here >= 2:
+                    # Multiple cards - even if one Barriered, others can battle
+                    barrier_resilience = 10.0 * (cards_here - 1)  # +10 for each extra card
+                    score += barrier_resilience
+                    logger.debug(f"   🛡️ BARRIER RESILIENCE at {target_loc.name}: +{barrier_resilience} "
+                               f"({cards_here} cards - Barrier can't stop all)")
 
             else:
                 # === EMPTY LOCATION WITH OUR PRESENCE ===

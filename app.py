@@ -912,6 +912,11 @@ def bot_worker():
                                     bot_state.chat_manager.on_battle_damage(damage, bot_state.board_state)
                                 bot_state.event_processor.register_battle_damage_callback(on_battle_damage)
 
+                                # Register callback for battle start (commentary)
+                                def on_battle_start():
+                                    bot_state.chat_manager.on_battle_start(bot_state.board_state)
+                                bot_state.event_processor.register_battle_start_callback(on_battle_start)
+
                             # Parse initial game state and events
                             try:
                                 import xml.etree.ElementTree as ET

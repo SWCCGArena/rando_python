@@ -31,6 +31,7 @@ class CardCategory(Enum):
     DEFENSIVE = "defensive"      # Barrier cards - prevent opponent actions
     DAMAGE_CANCEL = "damage_cancel"  # Houjix/Ghhhk - cancel battle damage
     DESTINY = "destiny"          # Destiny manipulation
+    DESTINY_BONUS = "destiny_bonus"  # +X to destiny (battle, weapon)
     PROTECTION = "protection"    # Character protection
     UTILITY = "utility"          # General utility/cancel
     RETRIEVAL = "retrieval"      # Card retrieval from piles
@@ -71,6 +72,26 @@ PRIORITY_INTERRUPTS = {
         side="light",
         protection_score=80.0,
         usage_notes="Use when opponent deploys to contested location"
+    ),
+
+    # ----- BATTLE DESTINY MODIFIERS (31% / 18% of decks) -----
+    # Starting Interrupts with USED function: "+1 to battle destiny just drawn"
+    # Use when: In battle, just drew a battle destiny (always beneficial)
+    "9_51": PriorityCard(
+        blueprint_id="9_51",
+        title="Heading For The Medical Frigate",
+        category=CardCategory.DESTINY_BONUS,
+        side="light",
+        protection_score=65.0,
+        usage_notes="USED: +1 to battle destiny just drawn - almost always use"
+    ),
+    "9_139": PriorityCard(
+        blueprint_id="9_139",
+        title="Prepared Defenses",
+        category=CardCategory.DESTINY_BONUS,
+        side="dark",
+        protection_score=65.0,
+        usage_notes="USED: +1 to battle destiny just drawn - almost always use"
     ),
 
     # ----- DESTINY MANIPULATION (34% / 22% of decks) -----
@@ -469,6 +490,7 @@ def is_priority_card_by_title(card_title: str) -> bool:
 
     title_lower = card_title.lower()
 
+    # Phase 1: Critical interrupts
     # Damage cancel cards
     if "houjix" in title_lower or "ghhhk" in title_lower:
         return True
@@ -485,6 +507,23 @@ def is_priority_card_by_title(card_title: str) -> bool:
     if "jedi levitation" in title_lower or "sith fury" in title_lower:
         return True
 
+    # Phase 2: Common interrupts
+    # Battle destiny modifiers
+    if "heading for the medical frigate" in title_lower or "prepared defenses" in title_lower:
+        return True
+
+    # Character protection
+    if "blaster deflection" in title_lower or "odin nesloor" in title_lower:
+        return True
+
+    # Weapon enhancement
+    if "sorry about the mess" in title_lower:
+        return True
+
+    # Command cards
+    if "imperial command" in title_lower or "rebel leadership" in title_lower:
+        return True
+
     return False
 
 
@@ -497,16 +536,35 @@ def get_protection_score_by_title(card_title: str) -> float:
 
     title_lower = card_title.lower()
 
-    # Highest priority - survival cards
+    # Phase 1: Critical cards (highest priority - survival)
     if "houjix" in title_lower or "ghhhk" in title_lower:
         return 100.0
 
-    # High priority - key interrupts
+    # Phase 1: High priority - key interrupts
     if title_lower in ["sense", "alter"]:
         return 85.0
     if "jedi levitation" in title_lower or "sith fury" in title_lower:
         return 90.0
     if "barrier" in title_lower:
         return 80.0
+
+    # Phase 2: Medium-high priority - common useful interrupts
+    # Character protection
+    if "blaster deflection" in title_lower:
+        return 70.0
+    if "odin nesloor" in title_lower:
+        return 75.0
+
+    # Battle destiny modifiers
+    if "heading for the medical frigate" in title_lower or "prepared defenses" in title_lower:
+        return 65.0
+
+    # Command cards
+    if "imperial command" in title_lower or "rebel leadership" in title_lower:
+        return 65.0
+
+    # Weapon enhancement
+    if "sorry about the mess" in title_lower:
+        return 60.0
 
     return 0.0

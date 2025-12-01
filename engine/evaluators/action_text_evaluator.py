@@ -405,6 +405,52 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.score = VERY_GOOD_DELTA
                 action.add_reasoning("Adding battle destiny is great", VERY_GOOD_DELTA)
 
+            # ========== Battle Destiny Modifier (+1 to battle destiny) ==========
+            # Cards like "Heading For The Medical Frigate" and "Prepared Defenses"
+            # USED: "+1 to battle destiny just drawn"
+            # Almost always beneficial - free +1 to our destiny
+            elif ("+1" in action_text or "+ 1" in action_text or "add 1" in text_lower) and "battle destiny" in text_lower:
+                action.action_type = ActionType.BATTLE_DESTINY
+                # Check if we're in battle (should always be true for this action)
+                in_battle = bs and getattr(bs, 'in_battle', False)
+                if in_battle:
+                    action.score = VERY_GOOD_DELTA
+                    action.add_reasoning("+1 to battle destiny - always use in battle!", VERY_GOOD_DELTA)
+                else:
+                    # Shouldn't happen, but be safe
+                    action.score = GOOD_DELTA
+                    action.add_reasoning("+1 to battle destiny", GOOD_DELTA)
+
+            # ========== Weapon Destiny Modifier (+X to weapon destiny) ==========
+            # Cards like "Sorry About The Mess & Blaster Proficiency"
+            # USED: "+3 to weapon destiny total"
+            # Very beneficial when firing weapons - increases chance of hit
+            elif ("weapon destiny" in text_lower and
+                  ("+3" in action_text or "+ 3" in action_text or "+2" in action_text or "add" in text_lower)):
+                action.action_type = ActionType.FIRE_WEAPON
+                # Always good when firing weapons
+                action.score = VERY_GOOD_DELTA
+                action.add_reasoning("Boost weapon destiny - increases hit chance!", VERY_GOOD_DELTA)
+
+            # ========== Prevent Opponent Adding Battle Destiny ==========
+            # Cards like "Imperial Command" and "Rebel Leadership"
+            # "Prevent opponent from adding a battle destiny"
+            # Very valuable - denies opponent their destiny draw
+            elif "prevent" in text_lower and "battle destiny" in text_lower:
+                action.action_type = ActionType.BATTLE_DESTINY
+                action.score = VERY_GOOD_DELTA
+                action.add_reasoning("Prevent opponent battle destiny - denies their draw!", VERY_GOOD_DELTA)
+
+            # ========== Take Admiral/General Into Hand ==========
+            # Cards like "Imperial Command" and "Rebel Leadership"
+            # "Take one admiral or general into hand from Reserve Deck"
+            # Good for getting key characters, but costs a card from hand/deck
+            elif ("take" in text_lower and "into hand" in text_lower and
+                  ("admiral" in text_lower or "general" in text_lower)):
+                # Check if we need leadership characters (have ships without pilots, etc.)
+                action.score = GOOD_DELTA
+                action.add_reasoning("Retrieve admiral/general into hand", GOOD_DELTA)
+
             # ========== Substitute Destiny ==========
             elif "substitute destiny" in text_lower:
                 action.action_type = ActionType.SUBSTITUTE_DESTINY
@@ -481,6 +527,53 @@ class ActionTextEvaluator(ActionEvaluator):
                 # Generally good if current destiny is low
                 action.score = GOOD_DELTA
                 action.add_reasoning("Redraw destiny (current may be low)", GOOD_DELTA)
+
+            # ========== Character Protection - Cancel Weapon Targeting ==========
+            # Cards like "Blaster Deflection": Cancel targeting with weapons of ability > 4
+            # This protects our high-ability characters from weapon hits
+            # Very valuable during weapons segment
+            elif "cancel" in text_lower and "weapon" in text_lower and "target" in text_lower:
+                action.action_type = ActionType.CANCEL
+                # Check if we're in battle (weapons segment)
+                in_battle = bs and getattr(bs, 'in_battle', False)
+                if in_battle:
+                    action.score = VERY_GOOD_DELTA
+                    action.add_reasoning("Cancel weapon targeting - protect our characters!", VERY_GOOD_DELTA)
+                else:
+                    action.score = GOOD_DELTA
+                    action.add_reasoning("Cancel weapon targeting", GOOD_DELTA)
+
+            # ========== Character Protection - Immune to Attrition ==========
+            # Cards like "Odin Nesloor & First Aid": Character immune to attrition
+            # Protects valuable characters from being forfeited due to attrition
+            elif "immune to attrition" in text_lower:
+                # Check if during damage segment
+                in_battle = bs and getattr(bs, 'in_battle', False)
+                if in_battle:
+                    action.score = VERY_GOOD_DELTA
+                    action.add_reasoning("Make character immune to attrition - valuable protection!", VERY_GOOD_DELTA)
+                else:
+                    action.score = GOOD_DELTA
+                    action.add_reasoning("Character immune to attrition", GOOD_DELTA)
+
+            # ========== Character Protection - Protect Forfeit ==========
+            # Cards like "Odin Nesloor & First Aid": Forfeit value protected
+            # Preserves forfeit value so we lose less from attrition
+            elif "forfeit" in text_lower and ("protect" in text_lower or "preserved" in text_lower):
+                in_battle = bs and getattr(bs, 'in_battle', False)
+                if in_battle:
+                    action.score = GOOD_DELTA + 10.0
+                    action.add_reasoning("Protect forfeit value during battle", GOOD_DELTA + 10.0)
+                else:
+                    action.score = GOOD_DELTA
+                    action.add_reasoning("Protect forfeit value", GOOD_DELTA)
+
+            # ========== Re-target Weapon (Blaster Deflection) ==========
+            # Blaster Deflection allows re-targeting blasters at ability > 4 characters
+            # Can turn enemy weapon against them!
+            elif "re-target" in text_lower or "retarget" in text_lower:
+                action.score = VERY_GOOD_DELTA
+                action.add_reasoning("Re-target weapon at enemy - turn their weapon against them!", VERY_GOOD_DELTA)
 
             # ========== Cancel Actions (Neutral) ==========
             elif text_lower.startswith("cancel") or "to cancel" in text_lower:
