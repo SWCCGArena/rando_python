@@ -78,7 +78,7 @@ class DrawEvaluator(ActionEvaluator):
             return False
 
         # CRITICAL: Only evaluate during OUR turn
-        if context.board_state and not context.board_state.is_my_turn:
+        if context.board_state and not context.board_state.is_my_turn():
             logger.debug(f"🎴 DrawEvaluator skipping - not our turn")
             return False
 

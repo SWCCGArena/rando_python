@@ -30,6 +30,9 @@ class EventProcessor:
         # Flag to indicate we're processing historical events (catching up)
         # When True, skip chat-related callbacks to avoid re-posting old messages
         self.catching_up = False
+        # Track highest battle damage during current battle
+        # Only send chat/record score when battle ends (EB event)
+        self._pending_battle_damage = 0
 
     def register_card_placed_callback(self, callback):
         """
@@ -570,6 +573,7 @@ class EventProcessor:
         Handle EB/EA/ED/ELC (End Battle/Attack/Duel/Lightsaber Combat) events.
 
         Clears in_battle flag and battle location.
+        Also triggers battle damage callback with the final (highest) damage.
         Ported from C# BotAIHelper.EndBattle()
         """
         event_type = event.get('type', '')
@@ -584,7 +588,14 @@ class EventProcessor:
             'ELC': 'Lightsaber Combat',
         }
         battle_name = battle_types.get(event_type, 'Combat')
-        logger.info(f"🏁 {battle_name} ended")
+
+        # Now that battle is over, send the final damage notification
+        if self._pending_battle_damage > 0:
+            logger.info(f"🏁 {battle_name} ended - final damage: {self._pending_battle_damage}")
+            self._notify_battle_damage(self._pending_battle_damage)
+            self._pending_battle_damage = 0  # Reset for next battle
+        else:
+            logger.info(f"🏁 {battle_name} ended")
 
     def _handle_message(self, event: ET.Element):
         """
@@ -643,6 +654,10 @@ class EventProcessor:
         - Looks for number preceding "battle" word
         - Example: "10 battle damage" -> damage = 10
 
+        NOTE: Battle damage is reported multiple times during a battle as destiny
+        draws happen. We track the HIGHEST damage and only send chat/record score
+        when the battle ends (EB event).
+
         Args:
             message: Raw message text from event
         """
@@ -654,8 +669,13 @@ class EventProcessor:
                 try:
                     damage = int(previous_token)
                     if damage > 0:
-                        logger.info(f"💥 Battle damage detected: {damage}")
-                        self._notify_battle_damage(damage)
+                        # Track highest damage during this battle
+                        # Only notify when battle ends (see _handle_end_battle)
+                        if damage > self._pending_battle_damage:
+                            logger.info(f"💥 Battle damage updated: {self._pending_battle_damage} -> {damage}")
+                            self._pending_battle_damage = damage
+                        else:
+                            logger.debug(f"💥 Battle damage {damage} (pending: {self._pending_battle_damage})")
                         return
                 except ValueError:
                     pass

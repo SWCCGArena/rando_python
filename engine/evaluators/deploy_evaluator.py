@@ -234,7 +234,7 @@ class DeployEvaluator(ActionEvaluator):
         """Applies to Deploy phase decisions during OUR turn only"""
         # CRITICAL: Only evaluate deploy decisions during OUR turn
         # During opponent's turn, deploy-related decisions are reactions, not deploys
-        if context.board_state and not context.board_state.is_my_turn:
+        if context.board_state and not context.board_state.is_my_turn():
             logger.debug(f"🚀 DeployEvaluator skipping - not our turn")
             return False
 
@@ -453,10 +453,20 @@ class DeployEvaluator(ActionEvaluator):
                     # The planner already figured out the optimal deployment
                     # We just check if this card is in the plan
                     # After the plan is complete, allow extra actions if we have force above reserve
+                    # EXCEPTION: If we have a favorable battle setup, skip extras and fight!
                     # =======================================================
                     if deploy_plan and blueprint_id:
                         current_force = bs.force_pile if bs else 0
                         plan_score, plan_reason = self.planner.get_card_score(blueprint_id, current_force)
+
+                        # If this would be an "extra action" (score ~25), check for favorable battle
+                        # If we're set up for a good battle, skip extras and commit to fighting!
+                        if plan_score > 0 and plan_score < 50 and bs:  # Extra action score is 25
+                            if self.planner.has_favorable_battle_setup(bs):
+                                plan_score = -50.0
+                                plan_reason = "Skip extras - commit to favorable battle!"
+                                logger.info(f"⚔️ {card_metadata.title}: {plan_reason}")
+
                         action.add_reasoning(plan_reason, plan_score)
 
                         # If card is in plan, that's all we need

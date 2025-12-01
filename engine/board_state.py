@@ -645,6 +645,12 @@ class BoardState:
             return 0
         return len(self.locations[location_index].their_cards)
 
+    def get_location_by_index(self, location_index: int) -> Optional['LocationInPlay']:
+        """Get a LocationInPlay by its index, or None if invalid/empty."""
+        if location_index < 0 or location_index >= len(self.locations):
+            return None
+        return self.locations[location_index]
+
     def my_power_from_cards(self, location_index: int) -> int:
         """
         Calculate my power at a location by summing card power values.
@@ -739,10 +745,11 @@ class BoardState:
         """
         Determine if we should concede the game.
 
-        Concede conditions:
-        1. Very low life force (< 5 cards in reserve/used/force piles)
-        2. Can't afford to deploy any cards in hand
-        3. Game isn't close (opponent has significantly more life force)
+        Smarter concede conditions:
+        1. Total life force < 6 (nearly depleted)
+        2. Can't afford to deploy any cards in hand with available force
+           (available = total_lifeforce - 3, reserving 3 for draw phase)
+        3. No contested locations where a battle could turn things around
 
         Returns:
             Tuple of (should_concede, reason)
@@ -752,17 +759,19 @@ class BoardState:
         my_life = self.total_reserve_force()
         their_life = self.their_total_life_force()
 
-        # Don't concede if game is close (within 8 cards of life force)
-        life_difference = their_life - my_life
-        if life_difference < 8:
+        # Don't concede if we still have reasonable life force
+        if my_life >= 6:
             return False, ""
 
-        # Don't concede if we still have significant life force
-        if my_life >= 8:
-            return False, ""
+        # Calculate force we would have available after activation
+        # Bot reserves ~3 force for draw phase, so activatable = my_life - 3
+        # But also consider current force pile
+        force_after_activation = max(self.force_pile, my_life - 3)
+        if force_after_activation < 0:
+            force_after_activation = 0
 
         # Check if we can afford ANY deployable card in hand
-        can_afford_something = False
+        can_afford_deployment = False
         cheapest_deploy_cost = float('inf')
 
         for card in self.cards_in_hand:
@@ -772,33 +781,49 @@ class BoardState:
                     deploy_cost = metadata.deploy_value
                     cheapest_deploy_cost = min(cheapest_deploy_cost, deploy_cost)
 
-                    # Can we ever afford this?
-                    # We need force_pile >= deploy_cost
-                    # Next turn we'll activate more, but if my_life < deploy_cost
-                    # we can never accumulate enough
-                    if my_life >= deploy_cost:
-                        can_afford_something = True
+                    # Can we afford this card after activating?
+                    if force_after_activation >= deploy_cost:
+                        can_afford_deployment = True
                         break
 
-        # Also check if we can afford something with our current force pile
-        if self.force_pile >= cheapest_deploy_cost:
-            can_afford_something = True
+        # Check if there are any contested locations where a battle could happen
+        # A battle opportunity means we have presence at a location with enemy presence
+        has_battle_opportunity = False
+        for loc in self.locations:
+            if loc:
+                loc_index = getattr(loc, 'location_index', -1)
+                if loc_index >= 0:
+                    my_power = self.my_power_at_location(loc_index)
+                    their_power = self.their_power_at_location(loc_index)
+                    # Both have presence = contested = battle opportunity
+                    if my_power > 0 and their_power > 0:
+                        has_battle_opportunity = True
+                        logger.debug(f"🏳️ Battle opportunity at {getattr(loc, 'site_name', 'unknown')}: "
+                                    f"my_power={my_power}, their_power={their_power}")
+                        break
 
         # Concede if:
-        # - Low life force (< 5)
-        # - Can't afford anything deployable
-        # - Opponent has significant advantage (8+ more life)
-        if my_life < 5 and not can_afford_something and life_difference >= 8:
-            reason = (f"Life force critical ({my_life}), can't afford any deployments "
-                      f"(cheapest costs {cheapest_deploy_cost}), opponent ahead by {life_difference}")
+        # - Low life force (< 6)
+        # - Can't afford any deployments
+        # - No battle opportunities to turn things around
+        if my_life < 6 and not can_afford_deployment and not has_battle_opportunity:
+            if cheapest_deploy_cost == float('inf'):
+                deploy_info = "no deployable cards in hand"
+            else:
+                deploy_info = f"cheapest card costs {cheapest_deploy_cost}, only {force_after_activation} force available"
+            reason = (f"Life force critical ({my_life}), {deploy_info}, "
+                      f"no battle opportunities")
             logger.info(f"🏳️ Concede check: {reason}")
             return True, reason
 
-        # Also concede if life force is extremely low (< 3) and opponent has advantage
-        if my_life < 3 and life_difference >= 5:
-            reason = f"Life force nearly depleted ({my_life}), opponent ahead by {life_difference}"
-            logger.info(f"🏳️ Concede check: {reason}")
-            return True, reason
+        # Also concede if life force is extremely low (< 3) even if we could deploy
+        # something small - game is essentially over
+        if my_life < 3:
+            life_difference = their_life - my_life
+            if life_difference >= 5 and not has_battle_opportunity:
+                reason = f"Life force nearly depleted ({my_life}), opponent ahead by {life_difference}, no battle chances"
+                logger.info(f"🏳️ Concede check: {reason}")
+                return True, reason
 
         return False, ""
 

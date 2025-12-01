@@ -66,7 +66,7 @@ class MoveEvaluator(ActionEvaluator):
 
         # CRITICAL: Only evaluate move decisions during OUR turn
         # During opponent's turn, we can't initiate moves
-        if context.board_state and not context.board_state.is_my_turn:
+        if context.board_state and not context.board_state.is_my_turn():
             logger.debug(f"🚶 MoveEvaluator skipping - not our turn")
             return False
 
@@ -143,6 +143,11 @@ class MoveEvaluator(ActionEvaluator):
         my_power = board_state.my_power_at_location(loc_idx)
         their_power = board_state.their_power_at_location(loc_idx)
         my_card_count = board_state.my_card_count_at_location(loc_idx) if hasattr(board_state, 'my_card_count_at_location') else 0
+
+        # Sanitize negative power values (GEMP may send -1 for empty/invalid)
+        if their_power < 0:
+            logger.debug(f"⚠️ Negative enemy power ({their_power}) at loc {loc_idx} - treating as 0")
+            their_power = 0
 
         power_diff = my_power - their_power
 
@@ -237,7 +242,15 @@ class MoveEvaluator(ActionEvaluator):
         # BUT we must check if spreading is actually viable:
         # - How much force do we have to move cards?
         # - Can we move ENOUGH power to establish (6) or contest (beat enemy + margin)?
-        if power_diff >= OVERKILL_THRESHOLD and my_card_count >= 2:
+        # - We must RETAIN control after moving - don't spread if it would leave us below establish threshold
+        ESTABLISH_THRESHOLD = 6  # Power needed to control uncontested location
+
+        # Only spread if we have EXCESS power beyond what's needed for control
+        power_needed_to_stay = max(their_power + OVERKILL_THRESHOLD, ESTABLISH_THRESHOLD)
+        excess_power = my_power - power_needed_to_stay
+
+        if excess_power >= 2 and my_card_count >= 2:  # Need some excess to spread
+            logger.debug(f"🔍 Spread check: my_power={my_power}, power_needed={power_needed_to_stay}, excess={excess_power}")
             spread_analysis = self._analyze_spread_viability(
                 board_state, loc_idx, my_power, my_card_count
             )
@@ -279,13 +292,30 @@ class MoveEvaluator(ActionEvaluator):
         if force_available < 1:
             return {'viable': False, 'reason': 'no force to move'}
 
+        # Get opponent power at source location to know how much we need to retain
+        their_power_here = board_state.their_power_at_location(loc_idx)
+        if their_power_here < 0:
+            their_power_here = 0
+
+        # Calculate how much power we must retain at source
+        power_to_retain = max(their_power_here + CONTEST_MARGIN, ESTABLISH_THRESHOLD)
+
         # Estimate power per card (rough average)
         avg_power_per_card = our_power_here / max(our_card_count, 1)
 
-        # How many cards can we afford to move?
-        max_cards_to_move = min(force_available, our_card_count - 1)  # Leave at least 1 card
+        # Calculate how many cards we can move while retaining enough power
+        power_we_can_spare = our_power_here - power_to_retain
+        if power_we_can_spare < 2:
+            return {'viable': False, 'reason': f'need {power_to_retain} power to retain control, only have {our_power_here}'}
+
+        # How many cards can we move? (limited by: force, spare power, leaving at least 1 card)
+        cards_by_force = force_available
+        cards_by_power = int(power_we_can_spare / avg_power_per_card) if avg_power_per_card > 0 else 0
+        cards_by_count = our_card_count - 1  # Leave at least 1 card
+
+        max_cards_to_move = min(cards_by_force, cards_by_power, cards_by_count)
         if max_cards_to_move < 1:
-            return {'viable': False, 'reason': 'not enough force or cards'}
+            return {'viable': False, 'reason': f'not enough cards to spare (force={cards_by_force}, power={cards_by_power}, count={cards_by_count})'}
 
         max_moveable_power = int(max_cards_to_move * avg_power_per_card)
 
@@ -293,13 +323,21 @@ class MoveEvaluator(ActionEvaluator):
         best_opportunity = None
         best_score = 0
 
-        for adj_idx in [loc_idx - 1, loc_idx + 1]:
-            if adj_idx < 0 or adj_idx >= len(board_state.locations):
-                continue
+        # Use proper adjacency check from board_state
+        adjacent_locs = board_state.find_adjacent_locations(loc_idx)
+        logger.debug(f"🔍 Spread analysis from loc {loc_idx}: adjacent={adjacent_locs}, my_power={our_power_here}, max_moveable={max_moveable_power}")
 
+        for adj_idx in adjacent_locs:
             their_power = board_state.their_power_at_location(adj_idx)
             our_power_there = board_state.my_power_at_location(adj_idx)
             potential_power = our_power_there + max_moveable_power
+
+            logger.debug(f"   Adj loc {adj_idx}: their_power={their_power}, our_power={our_power_there}")
+
+            # Treat negative power as 0 (GEMP may send -1 for invalid/empty)
+            if their_power < 0:
+                logger.warning(f"⚠️ Negative enemy power ({their_power}) at loc {adj_idx} - treating as 0")
+                their_power = 0
 
             # Skip if we already have good presence
             if our_power_there >= ESTABLISH_THRESHOLD and their_power == 0:
@@ -350,19 +388,14 @@ class MoveEvaluator(ActionEvaluator):
             }
 
         # No viable opportunity - explain why
-        # Check what the adjacent locations have
-        adjacent_powers = []
-        for adj_idx in [loc_idx - 1, loc_idx + 1]:
-            if 0 <= adj_idx < len(board_state.locations):
-                their_power = board_state.their_power_at_location(adj_idx)
-                our_power = board_state.my_power_at_location(adj_idx)
-                adjacent_powers.append((adj_idx, their_power, our_power))
-
-        if not adjacent_powers:
+        # Check what the adjacent locations have (reuse adjacent_locs from earlier)
+        if not adjacent_locs:
             return {'viable': False, 'reason': 'no adjacent locations'}
 
         # Find the issue
-        for adj_idx, their_power, our_power in adjacent_powers:
+        for adj_idx in adjacent_locs:
+            their_power = max(0, board_state.their_power_at_location(adj_idx))  # Treat negative as 0
+            our_power = board_state.my_power_at_location(adj_idx)
             if their_power > 0:
                 power_needed = their_power + CONTEST_MARGIN
                 if max_moveable_power < power_needed - our_power:

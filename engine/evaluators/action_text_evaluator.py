@@ -735,6 +735,28 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.score = BAD_DELTA
                 action.add_reasoning("Peeking rarely worth it", BAD_DELTA)
 
+            # ========== "Use X Force" / "Lose X Force" Actions ==========
+            # These cost force and are often optional - randomize with skew toward passing
+            elif text_lower.startswith("use ") and " force " in text_lower:
+                import random
+                # Skew toward negative: 70% chance of negative score
+                if random.random() < 0.7:
+                    random_delta = random.uniform(-40.0, -5.0)  # Negative range
+                else:
+                    random_delta = random.uniform(-5.0, 20.0)   # Occasionally positive
+                action.score = random_delta
+                action.add_reasoning(f"'Use Force' action - randomized, skew pass ({random_delta:+.1f})", random_delta)
+
+            elif text_lower.startswith("lose ") and " force " in text_lower:
+                import random
+                # Strongly skew toward negative - losing force is rarely good
+                if random.random() < 0.85:
+                    random_delta = random.uniform(-50.0, -10.0)  # Usually negative
+                else:
+                    random_delta = random.uniform(-10.0, 10.0)   # Rarely positive
+                action.score = random_delta
+                action.add_reasoning(f"'Lose Force' action - randomized, strong skew pass ({random_delta:+.1f})", random_delta)
+
             # ========== Default/Unknown ==========
             else:
                 # Unknown action - leave at base score

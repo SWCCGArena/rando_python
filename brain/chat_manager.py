@@ -204,7 +204,7 @@ class ChatManager:
 
         # Guard 1: Only report at start of opponent's turn, not ours
         # Route score commentary should happen when opponent starts their turn
-        if board_state and board_state.is_my_turn:
+        if board_state and board_state.is_my_turn():
             logger.debug(f"Skipping route score for turn {turn_number} - it's our turn, not opponent's")
             # Still update tracking to prevent repeated triggers
             self.current_turn = turn_number

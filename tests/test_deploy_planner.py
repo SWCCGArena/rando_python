@@ -249,6 +249,13 @@ class MockCardMetadata:
     is_exterior: bool = True  # Default to exterior for sites
     parsec: int = 0  # For space locations
 
+    # Deploy restriction (e.g., ["Tatooine"] for Jawas that can only deploy to Tatooine)
+    deploy_restriction_systems: list = None
+
+    def __post_init__(self):
+        if self.deploy_restriction_systems is None:
+            self.deploy_restriction_systems = []
+
 
 def mock_get_card(blueprint_id: str) -> Optional[MockCardMetadata]:
     """Mock version of card_loader.get_card"""
@@ -435,12 +442,15 @@ class ScenarioBuilder:
 
     def add_character(self, name: str, power: int, deploy_cost: int,
                       is_pilot: bool = False, is_warrior: bool = True,
-                      is_unique: bool = True) -> 'ScenarioBuilder':
+                      is_unique: bool = True,
+                      deploy_restriction_systems: List[str] = None) -> 'ScenarioBuilder':
         """Add a character to hand.
 
         Args:
             is_unique: If True, this card is unique (only 1 can be on board).
                        In SWCCG, unique cards have • prefix in their name.
+            deploy_restriction_systems: List of system names this card can deploy to.
+                       E.g., ["Tatooine"] for Jawas means they can only go to Tatooine sites.
         """
         card_id = f"card_{self._card_counter}"
         bp_id = f"char_bp_{self._card_counter}"
@@ -467,6 +477,7 @@ class ScenarioBuilder:
             is_pilot=is_pilot,
             is_warrior=is_warrior,
             is_unique=is_unique,
+            deploy_restriction_systems=deploy_restriction_systems or [],
         )
 
         return self
@@ -2378,11 +2389,12 @@ def test_combination_lock_six_cards():
     4. Commander alone = 7 power, 7 cost
 
     The planner should pick the CHEAPEST combo that reaches threshold.
+    NOTE: With limited force (6), the planner can't afford to reinforce after threshold.
     """
     scenario = (
         ScenarioBuilder("Combination Lock - 6 Cards")
         .as_side("dark")
-        .with_force(14)  # Budget for all cards plus 2 reserve
+        .with_force(6)  # Limited force - just enough for cheapest combo (no excess for reinforcing)
         .with_deploy_threshold(6)
         .add_ground_location("Target", my_icons=2, their_icons=3)
         # 3 efficient troopers
@@ -2656,11 +2668,12 @@ def test_eight_card_mega_combo():
     - 1 Officer + 2 Troopers = 7 power, 4 cost
 
     The planner should pick the cheapest combo that reaches threshold.
+    NOTE: With limited force, the planner picks cheapest combo without excess for reinforcing.
     """
     scenario = (
         ScenarioBuilder("Eight Card Mega Combo")
         .as_side("dark")
-        .with_force(14)
+        .with_force(6)  # Limited force - just enough for cheapest combo (no excess for reinforcing)
         .add_ground_location("Grand Arena", my_icons=2, their_icons=3)
         # 4 cheap troopers
         .add_character("Trooper1", power=2, deploy_cost=1)
@@ -4427,23 +4440,26 @@ class TestCombinedGroundSpaceDeployment:
         """
         When pilot characters are deployed to ground, ships that need pilots
         should NOT be included in the plan (they'd have 0 power without a pilot).
+
+        Scenario: Lando (7 power) can beat enemy 5 power on ground, so ground is preferred.
+        Lady Luck needs a pilot, but Lando is used for ground, so Lady Luck should NOT deploy.
         """
         scenario = (
             ScenarioBuilder("Pilots Used for Ground")
             .as_side("light")
             .with_force(15)
 
-            # Ground with enemy - needs characters
-            .add_ground_location("Cloud City", my_icons=2, their_icons=2, their_power=6)
+            # Ground with enemy - Lando (7 power) can beat 5 power enemy
+            .add_ground_location("Cloud City", my_icons=2, their_icons=2, their_power=5)
 
             # Space empty
             .add_space_location("Bespin System", my_icons=1, their_icons=2, their_power=0)
 
-            # Pilot characters - will be used for ground
-            .add_character("•Lando", power=6, deploy_cost=5, is_pilot=True)
+            # Pilot character with enough power to beat enemy alone
+            .add_character("•Lando", power=7, deploy_cost=5, is_pilot=True)
 
-            # Ship needing pilot - should NOT deploy since Lando is on ground
-            .add_starship("•Lady Luck", power=0, deploy_cost=3, has_permanent_pilot=False)
+            # Ship needing pilot - base_power=3, but should NOT deploy since Lando is on ground
+            .add_starship("•Lady Luck", power=3, deploy_cost=3, has_permanent_pilot=False)
             .build()
         )
         result = run_scenario(scenario)
@@ -5675,6 +5691,477 @@ def test_multiple_attackable_space_targets():
 
     assert len(kamino_deploys) >= 1, \
         f"Should deploy to winnable Kamino, not unwinnable Bespin! Got {len(kamino_deploys)} Kamino deploys"
+
+
+# =============================================================================
+# PILOT PLANNING TESTS - ALL PILOTS CAN FLY SHIPS
+# =============================================================================
+
+def test_warrior_pilot_can_fly_unpiloted_ship():
+    """
+    Warrior-pilots (like Solo) CAN pilot unpiloted starships.
+
+    Previously only "pure pilots" (pilots without warrior trait) were considered.
+    This test verifies that warrior-pilots are included in ship+pilot combos.
+
+    Setup:
+    - Solo (pilot=True, warrior=True) in hand - 4 power, 4 deploy
+    - Falcon (needs pilot, base_power=3) in hand - 3 deploy
+    - Tatooine space - empty, 2 opponent icons
+
+    Solo+Falcon combo = 3+4=7 power (ship base + pilot), 4+3=7 deploy cost
+    Should be able to establish at Tatooine with 7 power (above threshold 6)
+    """
+    scenario = (
+        ScenarioBuilder("Warrior Pilot Can Fly Ship")
+        .as_side("light")
+        .with_force(10)
+        .with_deploy_threshold(6)
+        # Empty space location we can deploy to
+        .add_space_location("Tatooine", my_icons=2, their_icons=2, my_power=0, their_power=0)
+        # Solo is a pilot AND warrior - should still be able to fly ships!
+        .add_character("Han Solo", power=4, deploy_cost=4, is_pilot=True, is_warrior=True)
+        # Unpiloted ship - power=3 is the BASE power (used when piloted)
+        # The planner will correctly set effective_power=0 for unpiloted ships
+        .add_starship("Millennium Falcon", power=3, deploy_cost=3, has_permanent_pilot=False)
+        .build()
+    )
+
+    result = run_scenario(scenario)
+
+    # Should generate space plans with Solo+Falcon combo
+    logger.info(f"   📊 Plan strategy: {result.plan.strategy}")
+    logger.info(f"   📊 Instructions: {[(i.card_name, i.target_location_name) for i in result.plan.instructions]}")
+
+    # Check that we have space deployment (not just HOLD_BACK)
+    space_deploys = [i for i in result.plan.instructions if i.target_location_name == "Tatooine"]
+
+    # Should have both ship and pilot in the plan
+    ship_deploy = any("Falcon" in i.card_name for i in result.plan.instructions)
+    pilot_deploy = any("Solo" in i.card_name for i in result.plan.instructions)
+
+    assert ship_deploy and pilot_deploy, \
+        f"Warrior-pilot Solo should be able to pilot Falcon! Got ship={ship_deploy}, pilot={pilot_deploy}"
+
+
+def test_space_plans_generated_with_warrior_pilot():
+    """
+    Space plans should be generated when ONLY warrior-pilots are available.
+
+    This is the root cause of the "0 space plans" bug - the planner was only
+    considering "pure pilots" (pilot + NOT warrior).
+
+    Setup:
+    - Luke (warrior-pilot: is_pilot=True, is_warrior=True) - should work
+    - X-Wing (needs pilot, base_power=4)
+    - Space location with opponent icons
+    """
+    scenario = (
+        ScenarioBuilder("Space Plans With Warrior Pilot")
+        .as_side("light")
+        .with_force(12)
+        .with_deploy_threshold(6)
+        # Space location
+        .add_space_location("Yavin", my_icons=2, their_icons=2, my_power=0, their_power=0)
+        # Luke is pilot AND warrior
+        .add_character("Luke Skywalker", power=4, deploy_cost=4, is_pilot=True, is_warrior=True)
+        # Unpiloted X-Wing - power=4 is the BASE power (used when piloted)
+        .add_starship("Red 5", power=4, deploy_cost=3, has_permanent_pilot=False)
+        .build()
+    )
+
+    result = run_scenario(scenario)
+
+    # Should NOT hold back - should have a space plan
+    logger.info(f"   📊 Plan strategy: {result.plan.strategy}")
+
+    assert result.plan.strategy != DeployStrategy.HOLD_BACK, \
+        "Should generate space plan with warrior-pilot Luke, not HOLD_BACK!"
+
+    # Should have deployment instructions for the ship+pilot combo
+    assert len(result.plan.instructions) > 0, \
+        "Should have deployment instructions with warrior-pilot+ship combo!"
+
+
+# =============================================================================
+# EXCESS FORCE OPTIMIZATION TESTS
+# =============================================================================
+
+def test_excess_force_reinforces_established_location():
+    """
+    When we have excess force after reaching threshold at an empty location,
+    deploy additional cards for defensive buffer.
+
+    Setup:
+    - 16 force available (reserve 2 = 14 deployable)
+    - Solo (4 power, 4 deploy) + Trooper (2 power, 2 deploy) = 6 power, 6 cost
+    - Pucumir (2 power, 3 deploy) available
+    - Empty location with opponent icons
+
+    After deploying Solo+Trooper (6 power = threshold), should also deploy
+    Pucumir with excess force for defensive buffer.
+    """
+    scenario = (
+        ScenarioBuilder("Excess Force Reinforcement")
+        .as_side("light")
+        .with_force(16)  # Plenty of force
+        .with_deploy_threshold(6)
+        # Empty exterior location
+        .add_ground_location("Desert Heart", my_icons=2, their_icons=2, my_power=0, their_power=0)
+        # Characters that can establish
+        .add_character("Solo", power=4, deploy_cost=4, is_pilot=True, is_warrior=True)
+        .add_character("Cloud City Trooper", power=2, deploy_cost=2, is_pilot=False, is_warrior=False, is_unique=False)
+        .add_character("Pucumir Thryss", power=2, deploy_cost=3, is_pilot=False, is_warrior=False)
+        .build()
+    )
+
+    result = run_scenario(scenario)
+
+    logger.info(f"   📊 Plan: {result.plan.strategy}")
+    logger.info(f"   📊 Instructions: {[(i.card_name, i.power_contribution, i.deploy_cost) for i in result.plan.instructions]}")
+
+    # Calculate total deployed
+    total_power = sum(i.power_contribution for i in result.plan.instructions if i.power_contribution)
+    total_cost = sum(i.deploy_cost for i in result.plan.instructions if i.deploy_cost)
+
+    logger.info(f"   📊 Total power: {total_power}, Total cost: {total_cost}")
+
+    # Should deploy more than just threshold (6 power)
+    # With 16 force (14 deployable after reserve), should use most of it
+    # Solo (4) + Trooper (2) = 6 cost, leaves 8 force
+    # Pucumir (3 cost) fits, total = 9 cost
+    assert total_cost > 6, \
+        f"Should deploy extra cards with excess force! Only deployed {total_cost} cost with 14 available"
+
+
+def test_excess_force_not_wasted_on_marginal_gains():
+    """
+    Excess force optimization should NOT deploy if we're already well-fortified.
+
+    Setup:
+    - Already have 10 power at a location (threshold + 4)
+    - Have additional cheap character
+    - Should NOT add more (already fortified enough)
+    """
+    scenario = (
+        ScenarioBuilder("No Excess at Fortified Location")
+        .as_side("light")
+        .with_force(20)
+        .with_deploy_threshold(6)
+        # Location with our presence already well above threshold
+        .add_ground_location("Secure Base", my_icons=2, their_icons=2, my_power=10, their_power=0)
+        # Small character we could deploy
+        .add_character("Rebel Trooper", power=1, deploy_cost=1, is_pilot=False, is_warrior=False, is_unique=False)
+        .build()
+    )
+
+    result = run_scenario(scenario)
+
+    # Should not add to already-fortified location
+    secure_deploys = [i for i in result.plan.instructions
+                     if i.target_location_name == "Secure Base"]
+
+    logger.info(f"   📊 Deploys to Secure Base: {len(secure_deploys)}")
+
+    assert len(secure_deploys) == 0, \
+        f"Should not pile on at already-fortified location! Got {len(secure_deploys)} deploys"
+
+
+# =============================================================================
+# DEPLOY RESTRICTION TESTS
+# Test that cards with "Deploys only on <System>" restrictions are filtered
+# to only deploy to locations in that system.
+# =============================================================================
+
+
+def test_character_with_tatooine_restriction_only_deploys_to_tatooine():
+    """
+    A character restricted to Tatooine (like Jawas) should only deploy to
+    Tatooine locations, not to other systems like Dagobah.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Tatooine-restricted character")
+            .as_side("dark")
+            .with_force(10)
+            # Jawa-like character: can ONLY deploy to Tatooine
+            .add_character("Jawa", power=3, deploy_cost=2, is_warrior=False,
+                          deploy_restriction_systems=["Tatooine"])
+            # Normal character: can deploy anywhere (power 6 to meet threshold)
+            .add_character("Stormtrooper", power=6, deploy_cost=2, is_warrior=True)
+            # Dagobah location (NOT Tatooine)
+            .add_ground_location("Dagobah: Yoda's Hut", their_power=0, their_icons=1)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # Should NOT deploy Jawa (restricted to Tatooine, but only Dagobah available)
+        # Should deploy Stormtrooper (no restrictions)
+        jawa_deploys = [i for i in result.plan.instructions if "Jawa" in i.card_name]
+        trooper_deploys = [i for i in result.plan.instructions if "Stormtrooper" in i.card_name]
+
+        logger.info(f"   📊 Jawa deploys: {len(jawa_deploys)}, Trooper deploys: {len(trooper_deploys)}")
+
+        assert len(jawa_deploys) == 0, \
+            f"Jawa should NOT deploy to Dagobah (restricted to Tatooine)! Got {jawa_deploys}"
+        assert len(trooper_deploys) > 0, \
+            f"Stormtrooper should deploy to Dagobah (no restrictions)"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_character_with_restriction_deploys_to_matching_system():
+    """
+    A character restricted to Tatooine SHOULD deploy to Tatooine locations.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Tatooine-restricted character at Tatooine")
+            .as_side("dark")
+            .with_force(10)
+            # Jawa-like character: can ONLY deploy to Tatooine
+            .add_character("Jawa", power=6, deploy_cost=2, is_warrior=False,
+                          deploy_restriction_systems=["Tatooine"])
+            # Tatooine location (matches restriction!)
+            .add_ground_location("Tatooine: Mos Eisley", their_power=0, their_icons=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # SHOULD deploy Jawa (Tatooine site matches restriction)
+        jawa_deploys = [i for i in result.plan.instructions if "Jawa" in i.card_name]
+
+        logger.info(f"   📊 Jawa deploys: {len(jawa_deploys)}")
+
+        assert len(jawa_deploys) > 0, \
+            f"Jawa SHOULD deploy to Tatooine (matches restriction)!"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_character_with_multiple_system_restrictions():
+    """
+    A character restricted to multiple systems (e.g., "Deploys only on Tatooine or Endor")
+    should deploy to any of those systems but not others.
+    """
+    patch_card_loader()
+    try:
+        # Test character can deploy to Endor (one of allowed systems)
+        scenario = (
+            ScenarioBuilder("Multi-system restricted character at Endor")
+            .as_side("dark")
+            .with_force(10)
+            # Ewok scout: can deploy to Tatooine OR Endor
+            .add_character("Ewok Scout", power=6, deploy_cost=2, is_warrior=True,
+                          deploy_restriction_systems=["Tatooine", "Endor"])
+            # Endor location (matches one restriction!)
+            .add_ground_location("Endor: Dense Forest", their_power=0, their_icons=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # SHOULD deploy (Endor matches one of the restrictions)
+        ewok_deploys = [i for i in result.plan.instructions if "Ewok" in i.card_name]
+
+        logger.info(f"   📊 Ewok deploys: {len(ewok_deploys)}")
+
+        assert len(ewok_deploys) > 0, \
+            f"Ewok SHOULD deploy to Endor (matches restriction)!"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_character_with_multiple_system_restrictions_blocked():
+    """
+    A character restricted to multiple systems should NOT deploy to a different system.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Multi-system restricted character blocked")
+            .as_side("dark")
+            .with_force(10)
+            # Ewok scout: can deploy to Tatooine OR Endor (but NOT Cloud City)
+            .add_character("Ewok Scout", power=6, deploy_cost=2, is_warrior=True,
+                          deploy_restriction_systems=["Tatooine", "Endor"])
+            # Stormtrooper: no restrictions
+            .add_character("Stormtrooper", power=6, deploy_cost=2, is_warrior=True)
+            # Cloud City location (doesn't match any restriction)
+            .add_ground_location("Cloud City: Upper Walkway", their_power=0, their_icons=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # Should NOT deploy Ewok (Cloud City doesn't match restrictions)
+        ewok_deploys = [i for i in result.plan.instructions if "Ewok" in i.card_name]
+        trooper_deploys = [i for i in result.plan.instructions if "Stormtrooper" in i.card_name]
+
+        logger.info(f"   📊 Ewok deploys: {len(ewok_deploys)}, Trooper deploys: {len(trooper_deploys)}")
+
+        assert len(ewok_deploys) == 0, \
+            f"Ewok should NOT deploy to Cloud City! Got {ewok_deploys}"
+        assert len(trooper_deploys) > 0, \
+            f"Stormtrooper should deploy (no restrictions)"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_restricted_and_unrestricted_characters_together():
+    """
+    When we have both restricted and unrestricted characters, only the
+    unrestricted ones should deploy to non-matching locations.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Mixed restricted/unrestricted characters")
+            .as_side("dark")
+            .with_force(15)
+            # Jawa: restricted to Tatooine
+            .add_character("Jawa", power=5, deploy_cost=2, is_warrior=False,
+                          deploy_restriction_systems=["Tatooine"])
+            # Ewok: restricted to Endor
+            .add_character("Ewok", power=5, deploy_cost=2, is_warrior=True,
+                          deploy_restriction_systems=["Endor"])
+            # Stormtrooper: no restrictions
+            .add_character("Stormtrooper", power=6, deploy_cost=2, is_warrior=True)
+            # Dagobah location (neither Tatooine nor Endor)
+            .add_ground_location("Dagobah: Yoda's Hut", their_power=0, their_icons=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # Only Stormtrooper should deploy
+        jawa_deploys = [i for i in result.plan.instructions if "Jawa" in i.card_name]
+        ewok_deploys = [i for i in result.plan.instructions if "Ewok" in i.card_name]
+        trooper_deploys = [i for i in result.plan.instructions if "Stormtrooper" in i.card_name]
+
+        logger.info(f"   📊 Jawa: {len(jawa_deploys)}, Ewok: {len(ewok_deploys)}, Trooper: {len(trooper_deploys)}")
+
+        assert len(jawa_deploys) == 0, "Jawa should NOT deploy to Dagobah"
+        assert len(ewok_deploys) == 0, "Ewok should NOT deploy to Dagobah"
+        assert len(trooper_deploys) > 0, "Stormtrooper SHOULD deploy to Dagobah"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_restriction_uses_system_name_from_colon_format():
+    """
+    Locations like "Cloud City: Carbonite Chamber" should match "Cloud City" restriction.
+    The system name is the part before the colon.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Colon-format location matching")
+            .as_side("dark")
+            .with_force(10)
+            # Ugnaught: can ONLY deploy to Cloud City
+            .add_character("Ugnaught", power=6, deploy_cost=2, is_warrior=False,
+                          deploy_restriction_systems=["Cloud City"])
+            # Cloud City site (system name before colon matches restriction)
+            .add_ground_location("Cloud City: Carbonite Chamber", their_power=0, their_icons=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # SHOULD deploy (Cloud City: Carbonite Chamber matches "Cloud City" restriction)
+        ugnaught_deploys = [i for i in result.plan.instructions if "Ugnaught" in i.card_name]
+
+        logger.info(f"   📊 Ugnaught deploys: {len(ugnaught_deploys)}")
+
+        assert len(ugnaught_deploys) > 0, \
+            f"Ugnaught SHOULD deploy to Cloud City: Carbonite Chamber!"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_restriction_with_unique_marker_in_location():
+    """
+    Locations with unique marker (•Cloud City: Carbonite Chamber) should still
+    match restrictions. The • is stripped for comparison.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Unique marker in location name")
+            .as_side("dark")
+            .with_force(10)
+            # Ugnaught: can ONLY deploy to Cloud City
+            .add_character("Ugnaught", power=6, deploy_cost=2, is_warrior=False,
+                          deploy_restriction_systems=["Cloud City"])
+            # Add a placeholder location first
+            .add_ground_location("Placeholder", their_power=0, their_icons=2)
+            .build()
+        )
+
+        # Replace location name with unique marker version
+        scenario.board.locations[0].name = "•Cloud City: Upper Walkway"
+        scenario.board.locations[0].site_name = "•Cloud City: Upper Walkway"
+
+        result = run_scenario(scenario)
+
+        # SHOULD deploy despite • in location name
+        ugnaught_deploys = [i for i in result.plan.instructions if "Ugnaught" in i.card_name]
+
+        logger.info(f"   📊 Ugnaught deploys: {len(ugnaught_deploys)}")
+
+        assert len(ugnaught_deploys) > 0, \
+            f"Ugnaught SHOULD deploy to •Cloud City: Upper Walkway!"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_no_deployable_characters_due_to_restrictions():
+    """
+    When ALL characters are restricted to systems not on the board,
+    the plan should be empty (no deployments).
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("All characters restricted")
+            .as_side("dark")
+            .with_force(15)
+            # Jawa: restricted to Tatooine
+            .add_character("Jawa", power=5, deploy_cost=2, is_warrior=False,
+                          deploy_restriction_systems=["Tatooine"])
+            # Ewok: restricted to Endor
+            .add_character("Ewok", power=5, deploy_cost=2, is_warrior=True,
+                          deploy_restriction_systems=["Endor"])
+            # Dagobah location (neither Tatooine nor Endor)
+            .add_ground_location("Dagobah: Yoda's Hut", their_power=0, their_icons=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # No deployments should be planned
+        char_deploys = [i for i in result.plan.instructions
+                       if "Jawa" in i.card_name or "Ewok" in i.card_name]
+
+        logger.info(f"   📊 Character deploys: {len(char_deploys)}")
+
+        assert len(char_deploys) == 0, \
+            f"No characters should deploy (all restricted to wrong systems)!"
+
+    finally:
+        unpatch_card_loader()
 
 
 # =============================================================================

@@ -105,7 +105,7 @@ class DecisionHandler:
         # Check if we're in draw phase and it's our turn
         if board_state:
             phase = board_state.current_phase or ""
-            is_my_turn = board_state.is_my_turn
+            is_my_turn = board_state.is_my_turn()
             is_our_draw_phase = "draw" in phase.lower() and is_my_turn
 
             if is_our_draw_phase and not no_long_delay:
@@ -434,6 +434,15 @@ class DecisionHandler:
             decision_request=request,
             game_history=GameHistory(),  # TODO: Track history
         )
+
+        # =====================================================
+        # CRITICAL: For ARBITRARY_CARDS with min > 1, bypass brain!
+        # Brain only returns single choice, but multi-select needs
+        # multiple cards comma-separated. Fall through to handler.
+        # =====================================================
+        if decision_type == 'ARBITRARY_CARDS' and min_value > 1:
+            logger.info(f"🔄 ARBITRARY_CARDS with min={min_value} - bypassing brain for multi-select")
+            return None
 
         # Ask brain for decision
         logger.debug("🧠 Using brain for decision...")

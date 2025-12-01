@@ -271,7 +271,7 @@ class CombinedEvaluator:
         self.evaluators = evaluators
         self.logger = logging.getLogger(__name__)
 
-    def track_action(self, action: EvaluatedAction, card_id: str = None):
+    def track_action(self, action: EvaluatedAction, card_id: str = None, decision_text: str = None):
         """
         Track that an action was chosen.
 
@@ -281,6 +281,7 @@ class CombinedEvaluator:
         Args:
             action: The action that was chosen
             card_id: Optional card ID associated with the action
+            decision_text: Optional decision text (for detecting deploy target selection)
         """
         # Track deploys
         if action.action_type == ActionType.DEPLOY and card_id:
@@ -294,8 +295,22 @@ class CombinedEvaluator:
                 # CARD_SELECTION ("Choose where to deploy Yularen").
                 # The instruction must remain in the plan so CARD_SELECTION
                 # knows the planned target location.
-                # The instruction will be naturally replaced when the next
-                # plan is created on the next CARD_ACTION_CHOICE decision.
+                # record_deployment is called below when target is selected.
+
+        # Track deployment target selection (CARD_SELECTION for "Choose where to deploy")
+        # This is when the deployment is actually committed
+        if action.action_type == ActionType.SELECT_CARD and decision_text:
+            if "choose where to deploy" in decision_text.lower():
+                # Extract blueprint_id from decision text: value='212_6'>•Allegiant General Pryde
+                import re
+                match = re.search(r"value='([^']+)'", decision_text)
+                if match:
+                    blueprint_id = match.group(1)
+                    for evaluator in self.evaluators:
+                        if hasattr(evaluator, 'planner') and hasattr(evaluator.planner, 'record_deployment'):
+                            evaluator.planner.record_deployment(blueprint_id)
+                            self.logger.info(f"📝 Recorded deployment of {blueprint_id} (target selected)")
+                            break
 
         # Track moves
         if action.action_type == ActionType.MOVE and card_id:

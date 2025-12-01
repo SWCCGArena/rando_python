@@ -385,7 +385,7 @@ class BotState:
 bot_state = BotState()
 
 
-def process_events_iteratively(initial_events, game_id, initial_channel_number, client, event_processor=None, max_iterations=50):
+def process_events_iteratively(initial_events, game_id, initial_channel_number, client, event_processor=None, max_iterations=25):
     """
     Process game events iteratively, handling decisions that lead to more events.
     Uses a loop instead of recursion to avoid stack overflow and detect infinite loops.

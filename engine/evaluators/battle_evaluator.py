@@ -64,7 +64,7 @@ class BattleEvaluator(ActionEvaluator):
 
         # CRITICAL: Only evaluate battle initiation during OUR turn
         # During opponent's turn, we can't initiate battles - we're defending
-        if context.board_state and not context.board_state.is_my_turn:
+        if context.board_state and not context.board_state.is_my_turn():
             logger.debug(f"⚔️ BattleEvaluator skipping - not our turn")
             return False
 

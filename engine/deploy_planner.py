@@ -529,9 +529,13 @@ class DeployPhasePlanner:
 
         MIN_ESTABLISH_POWER = self.deploy_threshold
 
-        # Find best location for this specific card
+        # Find best location for this specific card (that the card can deploy to)
         best_loc = None
         for loc in ground_targets:
+            # Check deploy restrictions for this card
+            eligible = self._filter_cards_for_location([card], loc.name)
+            if not eligible:
+                continue  # Card can't deploy here due to restrictions
             min_needed = loc.their_power + 1 if loc.their_power > 0 else MIN_ESTABLISH_POWER
             if card['power'] >= min_needed:
                 best_loc = loc
@@ -571,9 +575,14 @@ class DeployPhasePlanner:
             if not available_chars or force_remaining <= 0:
                 break
 
+            # Filter characters that can deploy to this location
+            eligible_chars = self._filter_cards_for_location(available_chars, loc.name)
+            if not eligible_chars:
+                continue
+
             power_goal = max(MIN_ESTABLISH_POWER, loc.their_power + 1)
             cards_for_location, power_allocated, cost_used = self._find_optimal_combination(
-                available_chars, force_remaining, power_goal, must_exceed=False
+                eligible_chars, force_remaining, power_goal, must_exceed=False
             )
 
             min_needed = loc.their_power + 1 if loc.their_power > 0 else MIN_ESTABLISH_POWER
@@ -623,12 +632,17 @@ class DeployPhasePlanner:
             if not available_chars or force_remaining <= 0:
                 break
 
+            # Filter characters that can deploy to this location
+            eligible_chars = self._filter_cards_for_location(available_chars, loc.name)
+            if not eligible_chars:
+                continue
+
             # Calculate power needed for this location
             power_goal = max(MIN_ESTABLISH_POWER, loc.their_power + 1)
 
             # Find optimal combination of characters for this location
             cards_for_location, power_allocated, cost_used = self._find_optimal_combination(
-                available_chars, force_remaining, power_goal, must_exceed=False
+                eligible_chars, force_remaining, power_goal, must_exceed=False
             )
 
             # Check if the combination meets our requirements
@@ -704,9 +718,29 @@ class DeployPhasePlanner:
             if not target_loc.is_ground:
                 continue
 
-            # Filter deployables for this location (vehicles need exterior)
+            # Filter deployables for this location (vehicles need exterior, system restrictions)
             location_deployables = []
             for card in all_deployable:
+                # Check deploy system restrictions first
+                restrictions = card.get('deploy_restriction_systems', [])
+                if restrictions:
+                    # Card has restrictions - check if location matches any allowed system
+                    loc_clean = target_loc.name.lstrip('•').strip()
+                    can_deploy = False
+                    for system in restrictions:
+                        system_lower = system.lower()
+                        loc_lower = loc_clean.lower()
+                        if loc_lower.startswith(system_lower):
+                            can_deploy = True
+                            break
+                        if ':' in loc_clean:
+                            loc_system = loc_clean.split(':')[0].strip().lower()
+                            if loc_system == system_lower:
+                                can_deploy = True
+                                break
+                    if not can_deploy:
+                        continue  # Card restricted to other systems
+
                 if card.get('is_vehicle'):
                     # Vehicles can only deploy to exterior locations
                     if target_loc.is_exterior:
@@ -839,10 +873,16 @@ class DeployPhasePlanner:
             if not available_chars or force_remaining <= 0:
                 break
 
+            # Filter characters that can deploy to this location (respects deploy restrictions)
+            eligible_chars = self._filter_cards_for_location(available_chars, loc.name)
+            if not eligible_chars:
+                logger.debug(f"   ⏭️ No characters can deploy to {loc.name} (all restricted)")
+                continue
+
             power_goal = max(MIN_ESTABLISH_POWER, loc.their_power + 1)
 
             cards_for_location, power_allocated, cost_used = self._find_optimal_combination(
-                available_chars, force_remaining, power_goal, must_exceed=False
+                eligible_chars, force_remaining, power_goal, must_exceed=False
             )
 
             min_needed = loc.their_power + 1 if loc.their_power > 0 else MIN_ESTABLISH_POWER
@@ -1149,13 +1189,20 @@ class DeployPhasePlanner:
     def _generate_all_space_plans(self, starships: List[Dict],
                                    space_targets: List[LocationAnalysis],
                                    force_budget: int,
-                                   pure_pilots: List[Dict],
+                                   all_pilots: List[Dict],
                                    locations: List[LocationAnalysis]) -> List[Tuple[List[DeploymentInstruction], int, float]]:
         """
         Generate multiple space plans - one for EACH target location.
 
         CRITICAL: Generate a plan for each location independently and score them.
         This ensures we consider crushing contested locations vs establishing at empty.
+
+        Args:
+            starships: List of starship cards in hand
+            space_targets: List of space locations to consider
+            force_budget: Available force for deploying
+            all_pilots: List of ALL pilot characters (not just pure pilots)
+            locations: All analyzed locations for scoring
 
         Returns list of (instructions, force_remaining, score) tuples.
         """
@@ -1172,7 +1219,9 @@ class DeployPhasePlanner:
             s for s in starships
             if s['cost'] <= force_budget and not s.get('has_permanent_pilot', False)
         ]
-        affordable_pilots = [p for p in pure_pilots if p['cost'] <= force_budget] if pure_pilots else []
+        # CRITICAL: Use ALL pilots (any character with pilot ability can fly ships)
+        # Not just "pure pilots" - warrior-pilots like Solo can also pilot!
+        affordable_pilots = [p for p in all_pilots if p['cost'] <= force_budget] if all_pilots else []
 
         # For unpiloted ships, we need a pilot - create combined entries
         # The ship+pilot combo is treated as a single deployable unit
@@ -1209,6 +1258,33 @@ class DeployPhasePlanner:
         # === GENERATE A PLAN FOR EACH TARGET LOCATION ===
         # This is the key change: try each location independently
         for target_loc in space_targets:
+            # Filter deployables for this location (system restrictions)
+            location_deployables = []
+            for ship in all_deployable_space:
+                # Check deploy system restrictions
+                restrictions = ship.get('deploy_restriction_systems', [])
+                if restrictions:
+                    # Ship has restrictions - check if location matches any allowed system
+                    loc_clean = target_loc.name.lstrip('•').strip()
+                    can_deploy = False
+                    for system in restrictions:
+                        system_lower = system.lower()
+                        loc_lower = loc_clean.lower()
+                        if loc_lower.startswith(system_lower):
+                            can_deploy = True
+                            break
+                        if ':' in loc_clean:
+                            loc_system = loc_clean.split(':')[0].strip().lower()
+                            if loc_system == system_lower:
+                                can_deploy = True
+                                break
+                    if not can_deploy:
+                        continue  # Ship restricted to other systems
+                location_deployables.append(ship)
+
+            if not location_deployables:
+                continue
+
             # Calculate power needed for this specific location
             # CRITICAL: Include our EXISTING power at the location for crushable scenarios
             existing_power = target_loc.my_power if target_loc.my_power > 0 else 0
@@ -1225,7 +1301,7 @@ class DeployPhasePlanner:
 
             # Find optimal combination of ships (including ship+pilot combos) for THIS location
             ships_for_loc, power_allocated, cost_used = self._find_optimal_combination(
-                all_deployable_space.copy(), force_budget, power_goal, must_exceed=(target_loc.their_power > 0 and existing_power == 0)
+                location_deployables.copy(), force_budget, power_goal, must_exceed=(target_loc.their_power > 0 and existing_power == 0)
             )
 
             if not ships_for_loc:
@@ -1303,8 +1379,8 @@ class DeployPhasePlanner:
                     ))
 
             # Add additional pilots if available and affordable (for piloted ships that could use boost)
-            if pure_pilots and force_remaining > 0:
-                for pilot in pure_pilots:
+            if all_pilots and force_remaining > 0:
+                for pilot in all_pilots:
                     if pilot['blueprint_id'] in pilots_already_added:
                         continue  # Already included via combo
                     if pilot['cost'] <= force_remaining:
@@ -1873,10 +1949,16 @@ class DeployPhasePlanner:
         if space_targets:
             logger.info(f"   🚀 Space targets: {[(loc.name, loc.their_icons, loc.their_power) for loc in space_targets]}")
 
-        # Identify pure pilots (pilot but not warrior) - they're best aboard ships
+        # Identify ALL pilots (any character with pilot ability can fly ships)
+        # Pure pilots (pilot but not warrior) are BEST aboard ships but all can pilot
+        all_pilots = [c for c in available_chars if c.get('is_pilot')]
         pure_pilots = [c for c in available_chars if c.get('is_pure_pilot')]
-        if pure_pilots:
-            logger.info(f"   👨‍✈️ Pure pilots available: {[p['name'] for p in pure_pilots]}")
+        if all_pilots:
+            pilot_names = [p['name'] for p in all_pilots]
+            pure_names = [p['name'] for p in pure_pilots]
+            logger.info(f"   👨‍✈️ All pilots available: {pilot_names}")
+            if pure_pilots:
+                logger.info(f"   👨‍✈️ Pure pilots (best for ships): {pure_names}")
 
         # =================================================================
         # Generate MULTIPLE plans for each deployable card and compare
@@ -1890,8 +1972,9 @@ class DeployPhasePlanner:
 
         # Generate all space plans (one per affordable starship)
         # Uses space_targets which includes both uncontested AND contested space locations
+        # CRITICAL: Pass ALL pilots (not just pure pilots) - any pilot can fly ships!
         all_space_plans = self._generate_all_space_plans(
-            starships.copy(), space_targets, force_remaining, pure_pilots, locations
+            starships.copy(), space_targets, force_remaining, all_pilots, locations
         )
 
         # Log all plans for debugging
@@ -2337,7 +2420,9 @@ class DeployPhasePlanner:
 
                 # Deploy any remaining piloted vehicles here (only to exterior locations!)
                 if loc.is_exterior:
-                    for vehicle in piloted_vehicles[:]:
+                    # Filter vehicles that can deploy to this location
+                    eligible_vehicles = self._filter_cards_for_location(piloted_vehicles, loc.name)
+                    for vehicle in eligible_vehicles[:]:
                         if force_remaining <= BATTLE_FORCE_RESERVE:
                             break
                         if vehicle['cost'] <= force_remaining - BATTLE_FORCE_RESERVE:
@@ -2357,7 +2442,9 @@ class DeployPhasePlanner:
 
                 # Deploy any remaining characters here (if it's a ground location)
                 if loc.is_ground:
-                    for char in available_chars[:]:
+                    # Filter characters that can deploy to this location
+                    eligible_chars = self._filter_cards_for_location(available_chars, loc.name)
+                    for char in eligible_chars[:]:
                         if force_remaining <= BATTLE_FORCE_RESERVE:
                             break
                         if char['cost'] <= force_remaining - BATTLE_FORCE_RESERVE:
@@ -2372,6 +2459,66 @@ class DeployPhasePlanner:
                                 deploy_cost=char['cost'],
                             ))
                             logger.info(f"   💪 PILE ON: Deploy {char['name']} ({char['power']} power) to {loc.name}")
+                            force_remaining -= char['cost']
+                            available_chars.remove(char)
+
+        # =================================================================
+        # STEP 5D-2: REINFORCE ESTABLISHED (UNCONTESTED) LOCATIONS
+        # If we're establishing at empty locations and have EXCESS force,
+        # add extra power for defensive buffer (opponent may attack next turn).
+        # Only do this if we have substantial leftover force (> 4) to avoid
+        # waste on marginal gains.
+        # =================================================================
+        REINFORCE_THRESHOLD = 4  # Only reinforce if we have > 4 force left
+
+        # Find UNCONTESTED locations where we're establishing (their_power == 0)
+        establish_locs = [
+            loc for loc in locations
+            if loc.card_id in planned_location_ids
+            and loc.their_power == 0  # ONLY uncontested locations
+        ]
+
+        if establish_locs and force_remaining > REINFORCE_THRESHOLD and available_chars:
+            logger.info(f"   🛡️ REINFORCE ESTABLISHED: {force_remaining} force remaining, "
+                       f"{len(establish_locs)} uncontested locations, {len(available_chars)} chars available")
+
+            # Sort by their_icons (higher value locations get reinforced first)
+            establish_locs.sort(key=lambda x: x.their_icons, reverse=True)
+
+            for loc in establish_locs:
+                if force_remaining <= REINFORCE_THRESHOLD:
+                    break
+
+                # Calculate current planned power at this location
+                planned_power = sum(
+                    inst.power_contribution for inst in plan.instructions
+                    if inst.target_location_id == loc.card_id
+                )
+
+                # Only reinforce if we're at/near threshold (not already heavily fortified)
+                if planned_power >= MIN_ESTABLISH_POWER + 4:
+                    logger.debug(f"   ⏭️ Skip {loc.name}: already well-fortified ({planned_power} power)")
+                    continue
+
+                # Deploy additional characters (ground locations only)
+                if loc.is_ground:
+                    # Filter characters that can deploy to this location
+                    eligible_chars = self._filter_cards_for_location(available_chars, loc.name)
+                    for char in eligible_chars[:]:
+                        if force_remaining <= REINFORCE_THRESHOLD:
+                            break
+                        if char['cost'] <= force_remaining - BATTLE_FORCE_RESERVE:
+                            plan.instructions.append(DeploymentInstruction(
+                                card_blueprint_id=char['blueprint_id'],
+                                card_name=char['name'],
+                                target_location_id=loc.card_id,
+                                target_location_name=loc.name,
+                                priority=2,
+                                reason=f"REINFORCE {loc.name} (+{char['power']} defensive buffer)",
+                                power_contribution=char['power'],
+                                deploy_cost=char['cost'],
+                            ))
+                            logger.info(f"   🛡️ REINFORCE: Deploy {char['name']} ({char['power']} power) to {loc.name}")
                             force_remaining -= char['cost']
                             available_chars.remove(char)
 
@@ -2731,6 +2878,9 @@ class DeployPhasePlanner:
             is_targeted_weapon = getattr(metadata, 'is_targeted_weapon', False)
             is_standalone_weapon = getattr(metadata, 'is_standalone_weapon', False)
 
+            # Deploy restriction systems (e.g., ["Tatooine"] for Jawas)
+            deploy_restrictions = getattr(metadata, 'deploy_restriction_systems', []) or []
+
             deployable.append({
                 'card_id': card.card_id,
                 'blueprint_id': card.blueprint_id,
@@ -2754,6 +2904,8 @@ class DeployPhasePlanner:
                 'weapon_target_type': weapon_target_type,  # "character", "vehicle", "starship", or None
                 'is_targeted_weapon': is_targeted_weapon,  # Needs to attach to a target
                 'is_standalone_weapon': is_standalone_weapon,  # Automated/Artillery - no target needed
+                # Deploy restriction systems (empty list = can deploy anywhere)
+                'deploy_restriction_systems': deploy_restrictions,
             })
 
             cards_added += 1
@@ -2769,6 +2921,53 @@ class DeployPhasePlanner:
             logger.info(f"   ✅ _get_all_deployable_cards: {cards_added} deployable cards from {len(hand_list)} in hand")
 
         return deployable
+
+    def _filter_cards_for_location(self, cards: List[Dict], location_name: str) -> List[Dict]:
+        """
+        Filter cards to only those that can deploy to a specific location.
+
+        Cards with "Deploys only on <System>" restrictions can only deploy to
+        locations in that system (e.g., Jawas can only go to Tatooine sites).
+
+        Args:
+            cards: List of card dicts from _get_all_deployable_cards
+            location_name: Name of the target location (e.g., "•Tatooine: Mos Eisley")
+
+        Returns:
+            Filtered list of cards that can deploy to this location
+        """
+        filtered = []
+        for card in cards:
+            restrictions = card.get('deploy_restriction_systems', [])
+            if not restrictions:
+                # No restriction - can deploy anywhere
+                filtered.append(card)
+                continue
+
+            # Card has restrictions - check if location matches any allowed system
+            loc_clean = location_name.lstrip('•').strip()
+            can_deploy = False
+
+            for system in restrictions:
+                system_lower = system.lower()
+                loc_lower = loc_clean.lower()
+
+                # Check if location is in the restricted system
+                if loc_lower.startswith(system_lower):
+                    can_deploy = True
+                    break
+                if ':' in loc_clean:
+                    loc_system = loc_clean.split(':')[0].strip().lower()
+                    if loc_system == system_lower:
+                        can_deploy = True
+                        break
+
+            if can_deploy:
+                filtered.append(card)
+            else:
+                logger.debug(f"   🚫 {card['name']} restricted to {restrictions}, skipping {location_name}")
+
+        return filtered
 
     def _analyze_locations(self, board_state, deployable_power: int = 0) -> List[LocationAnalysis]:
         """
@@ -2984,6 +3183,39 @@ class DeployPhasePlanner:
         if not self.current_plan:
             return False
         return self.current_plan.strategy == DeployStrategy.HOLD_BACK
+
+    def has_favorable_battle_setup(self, board_state: 'BoardState') -> bool:
+        """
+        Check if we have a favorable battle setup at any contested location.
+
+        If we have a power advantage (FAVORABLE or CRUSH threat level), we should
+        commit to battling rather than spending force on extra deployments.
+
+        Returns True if we should skip extra actions to battle instead.
+        """
+        if not board_state or not board_state.locations:
+            return False
+
+        # Get thresholds from config
+        favorable_threshold = 4  # Default BATTLE_FAVORABLE_THRESHOLD
+
+        for loc_idx, loc in enumerate(board_state.locations):
+            if loc is None or not loc.card_id:
+                continue
+
+            # Check if contested (both players have presence)
+            my_power = board_state.my_power_at_location(loc_idx)
+            their_power = board_state.their_power_at_location(loc_idx)
+
+            if my_power > 0 and their_power > 0:
+                # Contested location - check power differential
+                power_diff = my_power - their_power
+
+                if power_diff >= favorable_threshold:
+                    logger.info(f"⚔️ Favorable battle at loc {loc_idx}: {my_power} vs {their_power} (+{power_diff}) - skip extras!")
+                    return True
+
+        return False
 
     def record_deployment(self, blueprint_id: str):
         """Record that we made a deployment"""

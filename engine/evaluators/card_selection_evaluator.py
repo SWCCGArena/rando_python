@@ -482,19 +482,32 @@ class CardSelectionEvaluator(ActionEvaluator):
         """
         Choose which card/pile to lose Force from.
 
-        Priority order (BEST to WORST):
-        1. Hand (Effects/Interrupts) - BEST! Known cards the bot can't use well
-        2. Reserve pile - unknown cards, might lose something useful
-        3. Used pile - already spent
-        4. Force pile - reduces activation potential
-        5. Hand (Characters/Vehicles/Starships/Weapons/Locations) - AVOID, these are deployable
-
-        Key insight: Effects/Interrupts in hand are KNOWN useless cards for the bot,
-        while reserve pile cards are unknown and might contain characters/weapons we could use.
+        SMART FORCE LOSS STRATEGY:
+        - When reserve is healthy (>= 10): prefer losing from reserve/piles
+        - When reserve is low (< 10) AND hand is big (> 6): prefer losing from hand
+          - First: cards that can't deploy (deploy cost > total force)
+          - Second: lowest value cards (by forfeit)
+          - Third: effects/interrupts (bot can't use well)
+        - Always try to keep hand at 6+ cards before going back to reserve
         """
         actions = []
         bs = context.board_state
         from ..card_loader import get_card
+
+        # Get resource levels for strategic decisions
+        total_reserve = bs.total_reserve_force() if bs else 20
+        hand_size = bs.hand_size if bs else 0
+        total_force = total_reserve + (bs.force_pile if bs else 0)
+
+        # Strategic thresholds
+        LOW_RESERVE_THRESHOLD = 10  # Below this, start losing from hand
+        MIN_HAND_SIZE = 6           # Don't go below this hand size
+
+        # Should we prefer losing from hand?
+        prefer_hand_loss = (total_reserve < LOW_RESERVE_THRESHOLD and hand_size > MIN_HAND_SIZE)
+
+        if prefer_hand_loss:
+            logger.info(f"💀 Low reserve ({total_reserve}) with hand {hand_size} - prefer losing hand cards")
 
         for card_id in context.card_ids:
             action = EvaluatedAction(
@@ -511,9 +524,14 @@ class CardSelectionEvaluator(ActionEvaluator):
                 blueprint = card.blueprint_id if card else ""
                 if blueprint.startswith("-1_") or not card:
                     # This represents losing from a pile, not a specific card
-                    # Acceptable but not as good as losing known useless cards
                     action.display_text = "Lose Force"
-                    action.add_reasoning("Force from pile (unknown cards)", GOOD_DELTA * 3)
+
+                    if prefer_hand_loss:
+                        # When low on reserve, AVOID losing more from piles
+                        action.add_reasoning(f"Pile loss - reserve critical ({total_reserve})", BAD_DELTA * 3)
+                    else:
+                        # Normal: acceptable to lose from pile
+                        action.add_reasoning("Force from pile (unknown cards)", GOOD_DELTA * 3)
                     actions.append(action)
                     continue
 
@@ -521,7 +539,7 @@ class CardSelectionEvaluator(ActionEvaluator):
                     card_title = card.card_title or card_id
                     action.display_text = f"Lose {card_title}"
 
-                    # Get card metadata for type checking
+                    # Get card metadata for type and deploy cost
                     card_meta = get_card(card.blueprint_id) if card.blueprint_id else None
                     card_type = card_meta.card_type if card_meta else (card.card_type or "")
 
@@ -529,13 +547,13 @@ class CardSelectionEvaluator(ActionEvaluator):
                     zone = card.zone.upper() if card.zone else ""
 
                     if zone == "HAND":
-                        # Hand cards - depends on card type
-                        # BEST to lose: Effects, Interrupts (bot can't use these well)
-                        # KEEP: Characters, Vehicles, Starships, Weapons, Locations (deployable)
+                        # Hand cards - evaluate based on deployability and value
+                        deploy_cost = card_meta.deploy_value if card_meta else 99
+                        forfeit_val = card_meta.forfeit_value if card_meta else 0
 
-                        is_valuable = False
+                        is_deployable = False
                         if card_meta:
-                            is_valuable = (
+                            is_deployable = (
                                 card_meta.is_character or
                                 card_meta.is_vehicle or
                                 card_meta.is_starship or
@@ -544,29 +562,57 @@ class CardSelectionEvaluator(ActionEvaluator):
                             )
                         else:
                             # Fallback to card_type string
-                            valuable_types = ["Character", "Vehicle", "Starship", "Weapon", "Location"]
-                            is_valuable = any(vt.lower() in card_type.lower() for vt in valuable_types)
+                            deployable_types = ["Character", "Vehicle", "Starship", "Weapon", "Location"]
+                            is_deployable = any(dt.lower() in card_type.lower() for dt in deployable_types)
 
-                        if is_valuable:
-                            # AVOID losing valuable deployable cards from hand
-                            action.add_reasoning(f"Deployable card in hand ({card_type})", BAD_DELTA * 4)
-                            logger.debug(f"Force loss: {card_title} is deployable ({card_type}) - avoid")
+                        # Check if card can actually be deployed with remaining force
+                        can_afford = deploy_cost <= total_force
+
+                        if prefer_hand_loss:
+                            # LOW RESERVE MODE: Aggressively lose hand cards
+                            if is_deployable and not can_afford:
+                                # BEST: Can't afford to deploy anyway - lose this first!
+                                action.add_reasoning(f"Can't afford (costs {deploy_cost}, have {total_force})", GOOD_DELTA * 8)
+                                logger.info(f"💀 Force loss: {card_title} unaffordable ({deploy_cost}) - BEST to lose")
+                            elif not is_deployable:
+                                # Effects/Interrupts - good to lose
+                                action.add_reasoning(f"Effect/Interrupt - bot can't use", GOOD_DELTA * 6)
+                                logger.debug(f"💀 Force loss: {card_title} ({card_type}) - good to lose")
+                            elif is_deployable and can_afford:
+                                # Can afford this - lose based on forfeit value
+                                # Lower forfeit = more expendable
+                                forfeit_bonus = (8 - forfeit_val) * 5  # 0 forfeit = +40, 8 forfeit = 0
+                                action.add_reasoning(f"Deployable (forfeit {forfeit_val}) - preserve if valuable", forfeit_bonus)
+                                logger.debug(f"💀 Force loss: {card_title} forfeit {forfeit_val} - score bonus {forfeit_bonus}")
                         else:
-                            # Effects/Interrupts - BEST to lose! Bot can't use these well
-                            action.add_reasoning(f"Effect/Interrupt - bot can't use, lose this!", GOOD_DELTA * 5)
-                            logger.debug(f"Force loss: {card_title} ({card_type}) - BEST to lose")
+                            # NORMAL MODE: Preserve hand, lose from piles
+                            if is_deployable:
+                                # AVOID losing valuable deployable cards
+                                action.add_reasoning(f"Deployable card in hand ({card_type})", BAD_DELTA * 4)
+                                logger.debug(f"Force loss: {card_title} is deployable ({card_type}) - avoid")
+                            else:
+                                # Effects/Interrupts - BEST to lose
+                                action.add_reasoning(f"Effect/Interrupt - bot can't use, lose this!", GOOD_DELTA * 5)
+                                logger.debug(f"Force loss: {card_title} ({card_type}) - BEST to lose")
 
                     elif zone == "RESERVE_DECK" or zone == "RESERVE":
-                        # Reserve pile - unknown cards, might lose something useful
-                        action.add_reasoning("Reserve pile - unknown cards", GOOD_DELTA * 3)
+                        if prefer_hand_loss:
+                            # AVOID reserve when low
+                            action.add_reasoning(f"Reserve pile - preserve (only {total_reserve} left)", BAD_DELTA * 2)
+                        else:
+                            action.add_reasoning("Reserve pile - unknown cards", GOOD_DELTA * 3)
 
                     elif zone == "USED_PILE" or zone == "USED":
-                        # Used pile - already spent, acceptable
-                        action.add_reasoning("Used pile - already spent", GOOD_DELTA * 2)
+                        if prefer_hand_loss:
+                            action.add_reasoning("Used pile - better than reserve", GOOD_DELTA)
+                        else:
+                            action.add_reasoning("Used pile - already spent", GOOD_DELTA * 2)
 
                     elif zone == "FORCE_PILE" or zone == "FORCE":
-                        # Force pile - reduces activation potential
-                        action.add_reasoning("Force pile - reduces activation", GOOD_DELTA)
+                        if prefer_hand_loss:
+                            action.add_reasoning("Force pile - bad, need for deploy", BAD_DELTA * 2)
+                        else:
+                            action.add_reasoning("Force pile - reduces activation", GOOD_DELTA)
 
                     else:
                         # Card in play - use forfeit value
@@ -575,11 +621,6 @@ class CardSelectionEvaluator(ActionEvaluator):
                         # Prefer forfeiting low-value cards
                         forfeit_bonus = (10 - forfeit) * 2
                         action.add_reasoning(f"In play (forfeit {forfeit})", forfeit_bonus)
-
-                # Adjust based on overall life force
-                total_reserve = bs.total_reserve_force()
-                if total_reserve < 10:
-                    action.add_reasoning("Low life - be careful", BAD_DELTA)
 
             actions.append(action)
 

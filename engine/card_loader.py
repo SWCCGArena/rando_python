@@ -259,6 +259,89 @@ class Card:
         return any('docking' in str(icon).lower() for icon in self.icons)
 
     @property
+    def deploy_restriction_systems(self) -> list:
+        """
+        Extract system names from "Deploys only on" restrictions in gametext.
+
+        Returns:
+            List of system names this card can deploy to, or empty list if no restriction.
+
+        Examples:
+            "Deploys only on Tatooine." -> ["Tatooine"]
+            "Deploys only on Cloud City, but may move elsewhere." -> ["Cloud City"]
+            "Deploys only on Dagobah or Cloud City." -> ["Dagobah", "Cloud City"]
+            "Deploys only on Coruscant or to Emperor's site" -> ["Coruscant"]
+                (the "to Emperor's site" part is ignored as it allows deployment anywhere)
+        """
+        if not self.gametext:
+            return []
+
+        import re
+        # Look for "Deploys only on <systems>"
+        match = re.search(r'Deploys only on\s+([^.;]+)', self.gametext, re.IGNORECASE)
+        if not match:
+            return []
+
+        restriction_text = match.group(1).strip()
+
+        # Remove common suffixes that aren't system names
+        # Stop at first comma that's followed by "but", "and", etc.
+        restriction_text = re.split(r',\s*(?:but|and|may|when|power|adds|once|during)', restriction_text, flags=re.IGNORECASE)[0]
+
+        # Split on " or " to get multiple systems
+        parts = re.split(r'\s+or\s+', restriction_text, flags=re.IGNORECASE)
+
+        systems = []
+        for part in parts:
+            part = part.strip()
+            # Skip "to same site as X" or "to Emperor's site" type restrictions
+            # These allow deployment based on other conditions, not location
+            if part.lower().startswith('to '):
+                continue
+            # Remove trailing punctuation and qualifiers
+            part = re.sub(r'[,;.].*', '', part)
+            part = part.strip()
+            if part:
+                systems.append(part)
+
+        return systems
+
+    def can_deploy_to_location(self, location_name: str) -> bool:
+        """
+        Check if this card can deploy to a given location based on system restrictions.
+
+        Args:
+            location_name: The name of the location (e.g., "•Cloud City: Carbonite Chamber")
+
+        Returns:
+            True if the card can deploy to this location, False if restricted.
+        """
+        restrictions = self.deploy_restriction_systems
+        if not restrictions:
+            # No restriction - can deploy anywhere (subject to other rules)
+            return True
+
+        # Normalize location name - remove unique marker (•) and get the system part
+        loc_clean = location_name.lstrip('•').strip()
+
+        for system in restrictions:
+            system_lower = system.lower()
+            loc_lower = loc_clean.lower()
+
+            # Check if location is in the restricted system:
+            # 1. Location starts with system name (e.g., "Cloud City: Carbonite Chamber")
+            # 2. Location IS the system (e.g., "Tatooine" system location)
+            # 3. Location has system before the colon (e.g., "Tatooine: Mos Eisley")
+            if loc_lower.startswith(system_lower):
+                return True
+            if ':' in loc_clean:
+                loc_system = loc_clean.split(':')[0].strip().lower()
+                if loc_system == system_lower:
+                    return True
+
+        return False
+
+    @property
     def is_starship_site(self) -> bool:
         """Check if this is a starship site (space location that is a site)"""
         # Starship sites are on starships and are space locations
