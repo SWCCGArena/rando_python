@@ -51,7 +51,10 @@ class DeployEvaluator(ActionEvaluator):
         self.pending_deploy_card_ids: set = set()
         self._last_turn_number = -1
         # Phase-level planner for strategic deployment decisions
-        self.planner = DeployPhasePlanner(deploy_threshold=config.DEPLOY_THRESHOLD)
+        self.planner = DeployPhasePlanner(
+            deploy_threshold=config.DEPLOY_THRESHOLD,
+            battle_force_reserve=config.BATTLE_FORCE_RESERVE
+        )
 
     def reset_pending_deploys(self):
         """Reset pending deploy tracking (call at turn start)"""

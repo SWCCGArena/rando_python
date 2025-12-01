@@ -16,6 +16,13 @@ from typing import Optional, List, Set, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 from .game_strategy import GameStrategy
+from .priority_cards import (
+    is_priority_card,
+    is_priority_card_by_title,
+    get_protection_score,
+    get_protection_score_by_title,
+    get_priority_card,
+)
 
 if TYPE_CHECKING:
     from .board_state import BoardState, LocationInPlay
@@ -335,19 +342,69 @@ class StrategyController:
             return True
         return False
 
-    def is_high_value_card(self, card_type: str, card_title: str) -> bool:
+    def is_high_value_card(
+        self,
+        card_type: str,
+        card_title: str,
+        blueprint_id: Optional[str] = None
+    ) -> bool:
         """
         Check if a card is high value (should be protected).
 
-        Ported from C# AIStrategyController.IsHighValueCard
+        Enhanced from C# AIStrategyController.IsHighValueCard to use
+        the priority cards system.
+
+        Args:
+            card_type: Card type string (e.g., "Interrupt", "Effect")
+            card_title: Card title
+            blueprint_id: Optional blueprint ID for precise lookup
+
+        Returns:
+            True if card should be protected from loss
         """
-        # Ghhhk, Sense, Alter are high value
-        if "Ghhhk" in card_title or "Sense" in card_title or "Alter" in card_title:
+        # Check priority cards system first (most accurate)
+        if blueprint_id and is_priority_card(blueprint_id):
             return True
+
+        # Fall back to title-based check
+        if card_title and is_priority_card_by_title(card_title):
+            return True
+
+        # Legacy checks (from C# code)
+        if card_title:
+            if "Ghhhk" in card_title or "Sense" in card_title or "Alter" in card_title:
+                return True
+
         # Non-interrupts/effects/weapons are generally high value
         if card_type not in ["Interrupt", "Effect", "Weapon"]:
             return True
+
         return False
+
+    def get_card_protection_score(
+        self,
+        blueprint_id: Optional[str] = None,
+        card_title: Optional[str] = None
+    ) -> float:
+        """
+        Get the protection score for a card (how much to penalize losing it).
+
+        Args:
+            blueprint_id: Card blueprint ID
+            card_title: Card title (fallback if no blueprint)
+
+        Returns:
+            Protection score (0-100, higher = more protected)
+        """
+        if blueprint_id:
+            score = get_protection_score(blueprint_id)
+            if score > 0:
+                return score
+
+        if card_title:
+            return get_protection_score_by_title(card_title)
+
+        return 0.0
 
     def update_strategy(self, board_state: 'BoardState'):
         """

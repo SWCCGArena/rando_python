@@ -385,7 +385,7 @@ class BotState:
 bot_state = BotState()
 
 
-def process_events_iteratively(initial_events, game_id, initial_channel_number, client, event_processor=None, max_iterations=25):
+def process_events_iteratively(initial_events, game_id, initial_channel_number, client, event_processor=None, max_iterations=100):
     """
     Process game events iteratively, handling decisions that lead to more events.
     Uses a loop instead of recursion to avoid stack overflow and detect infinite loops.
@@ -396,7 +396,11 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
         initial_channel_number: Starting channel number
         client: GEMPClient instance
         event_processor: Optional EventProcessor to update board state
-        max_iterations: Maximum number of decision loops to prevent infinite loops
+        max_iterations: Maximum number of event processing loops to prevent infinite loops.
+            Set to 100 because legitimate scenarios (e.g., opponent drawing many cards during
+            draw phase) can easily exceed 25 iterations without being an actual loop.
+            Real loops are detected much faster by DecisionHandler.should_concede_due_to_loop()
+            which tracks repeating decision patterns.
 
     Returns:
         Updated channel number

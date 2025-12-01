@@ -437,64 +437,227 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.score = VERY_BAD_DELTA
                 action.add_reasoning("Never cancel own cards", VERY_BAD_DELTA)
 
+            # ========== Sense - Cancel Opponent's Interrupt ==========
+            # Sense: "Target one just-played Interrupt. If destiny < ability, cancel target Interrupt"
+            # This appears when opponent plays an interrupt and we can respond with Sense.
+            # Generally valuable to cancel opponent's interrupts, but save for important ones.
+            elif ("cancel" in text_lower and "interrupt" in text_lower and
+                  "your" not in text_lower):
+                action.action_type = ActionType.CANCEL
+
+                # Check what interrupt we're canceling (might be in action text)
+                # High-value targets to cancel: Barrier, Houjix, Ghhhk, Sense itself
+                high_value_target = False
+                for target in ["barrier", "houjix", "ghhhk", "sense", "alter",
+                              "nabrun", "elis", "hyper", "escape pod"]:
+                    if target in text_lower:
+                        high_value_target = True
+                        break
+
+                # Also check if during battle (canceling battle interrupts is valuable)
+                in_battle = bs and getattr(bs, 'in_battle', False)
+
+                if high_value_target:
+                    action.score = VERY_GOOD_DELTA
+                    action.add_reasoning("Cancel HIGH VALUE opponent interrupt!", VERY_GOOD_DELTA)
+                elif in_battle:
+                    action.score = GOOD_DELTA + 10.0
+                    action.add_reasoning("Cancel opponent interrupt during battle", GOOD_DELTA + 10.0)
+                elif not context.is_my_turn:
+                    # During opponent's turn - their interrupts are usually important
+                    action.score = GOOD_DELTA
+                    action.add_reasoning("Cancel opponent interrupt (their turn)", GOOD_DELTA)
+                else:
+                    # During our turn - they're responding to us, might be worth canceling
+                    action.score = 15.0  # Moderate priority
+                    action.add_reasoning("Cancel opponent interrupt (our turn)", 15.0)
+
+            # ========== Destiny Manipulation (Jedi Levitation / Sith Fury) ==========
+            # USED: "If you just drew a character for destiny, take that card into hand"
+            # This is triggered when we draw a character for destiny.
+            # Take high-value characters into hand, redraw if destiny was low.
+            elif "cancel and redraw" in text_lower and "destiny" in text_lower:
+                # Option to cancel current destiny and redraw
+                # Generally good if current destiny is low
+                action.score = GOOD_DELTA
+                action.add_reasoning("Redraw destiny (current may be low)", GOOD_DELTA)
+
             # ========== Cancel Actions (Neutral) ==========
             elif text_lower.startswith("cancel") or "to cancel" in text_lower:
                 action.action_type = ActionType.CANCEL
                 # Let these be rare - don't rank high or low
                 action.add_reasoning("Cancel action - neutral", 0.0)
 
-            # ========== Cancel Battle Damage ==========
+            # ========== Cancel Battle Damage (Houjix / Ghhhk) ==========
+            # These are CRITICAL survival cards. Per the rules:
+            # "If you lost battle and have no cards left to forfeit, cancel all remaining battle damage"
+            # Use when:
+            #   - We're in damage segment (in_battle should be true)
+            #   - We have remaining damage to take
+            #   - We have NO cards left to forfeit at battle location
+            # Save when:
+            #   - We still have cards to forfeit (use those first)
+            #   - Damage remaining is minimal (save for bigger emergencies)
             elif "Cancel all remaining battle damage" in action_text:
                 action.action_type = ActionType.CANCEL_DAMAGE
-                # TODO: Check remaining battle damage amount
-                # For now, rank it moderately
-                action.score = GOOD_DELTA
-                action.add_reasoning("Cancelling battle damage", GOOD_DELTA)
+
+                # Get our damage remaining
+                my_attrition = 0
+                my_damage = 0
+                cards_at_battle = 0
+
+                if bs:
+                    my_side = getattr(bs, 'my_side', 'dark').lower()
+                    if my_side == 'dark':
+                        my_attrition = getattr(bs, 'dark_attrition_remaining', 0)
+                        my_damage = getattr(bs, 'dark_damage_remaining', 0)
+                    else:
+                        my_attrition = getattr(bs, 'light_attrition_remaining', 0)
+                        my_damage = getattr(bs, 'light_damage_remaining', 0)
+
+                    # Check if we have cards at battle location to forfeit
+                    battle_loc_idx = getattr(bs, 'current_battle_location', -1)
+                    if battle_loc_idx >= 0 and battle_loc_idx < len(bs.locations):
+                        battle_loc = bs.locations[battle_loc_idx]
+                        if battle_loc:
+                            cards_at_battle = len(battle_loc.my_cards)
+
+                total_damage = my_attrition + my_damage
+                logger.info(f"🛡️ Houjix/Ghhhk analysis: attrition={my_attrition}, damage={my_damage}, "
+                           f"total={total_damage}, cards_at_battle={cards_at_battle}")
+
+                if total_damage <= 0:
+                    # No damage to cancel - don't waste the card
+                    action.score = VERY_BAD_DELTA
+                    action.add_reasoning("No damage to cancel - save Houjix/Ghhhk!", VERY_BAD_DELTA)
+                elif cards_at_battle > 0:
+                    # We have cards we could forfeit instead - probably should do that
+                    # But if damage is VERY high, might still want to use it
+                    if total_damage >= 8:
+                        action.score = GOOD_DELTA
+                        action.add_reasoning(f"High damage ({total_damage}) - consider using despite {cards_at_battle} cards", GOOD_DELTA)
+                    else:
+                        action.score = BAD_DELTA
+                        action.add_reasoning(f"Have {cards_at_battle} cards to forfeit - save Houjix/Ghhhk", BAD_DELTA)
+                elif total_damage >= 5:
+                    # CRITICAL: No cards to forfeit and significant damage!
+                    action.score = VERY_GOOD_DELTA + 20.0
+                    action.add_reasoning(f"CRITICAL: {total_damage} damage with NO forfeit options - USE NOW!", VERY_GOOD_DELTA + 20.0)
+                elif total_damage >= 2:
+                    # Moderate damage, no forfeit options - use it
+                    action.score = VERY_GOOD_DELTA
+                    action.add_reasoning(f"No forfeit options, {total_damage} damage - use Houjix/Ghhhk", VERY_GOOD_DELTA)
+                else:
+                    # Small damage (1) - might want to save for bigger emergency
+                    action.score = GOOD_DELTA
+                    action.add_reasoning(f"Small damage ({total_damage}) - could save for bigger emergency", GOOD_DELTA)
 
             # ========== Take Card Into Hand ==========
+            # This includes destiny manipulation (Jedi Levitation / Sith Fury):
+            # "Take [character just drawn for destiny] into hand"
+            # Want to take high-value unique characters, avoid taking weak ones
             elif "Take" in action_text and "into hand" in action_text:
                 # Check for dangerous cards
                 if "palpatine" in text_lower:
                     action.score = BAD_DELTA
                     action.add_reasoning("Avoid taking Palpatine", BAD_DELTA)
                 else:
-                    action.score = GOOD_DELTA
-                    action.add_reasoning("Taking card into hand", GOOD_DELTA)
+                    # Try to identify the card being taken
+                    target_info = self._get_target_from_action_text(action_text, context)
+                    card_meta = target_info.get('card_metadata')
+
+                    # Check if this is a character destiny (Jedi Levitation/Sith Fury scenario)
+                    is_character_destiny = card_meta and card_meta.is_character
+
+                    if is_character_destiny:
+                        # Taking a character drawn for destiny into hand
+                        destiny = card_meta.destiny_value or 0
+                        power = card_meta.power_value or 0
+                        is_unique = card_meta.is_unique
+
+                        # High-value characters we want in hand
+                        if is_unique and (power >= 5 or destiny >= 5):
+                            action.score = VERY_GOOD_DELTA
+                            action.add_reasoning(f"Take HIGH VALUE character (power {power}, destiny {destiny}) into hand!", VERY_GOOD_DELTA)
+                        elif destiny >= 4:
+                            # Good destiny - might want to keep as destiny
+                            action.score = 10.0  # Neutral-ish, let it draw
+                            action.add_reasoning(f"Destiny {destiny} is good - consider keeping as destiny", 10.0)
+                        elif is_unique:
+                            # Unique character, moderate value
+                            action.score = GOOD_DELTA
+                            action.add_reasoning(f"Take unique character into hand", GOOD_DELTA)
+                        else:
+                            # Non-unique, low destiny - probably keep as destiny
+                            action.score = 5.0
+                            action.add_reasoning(f"Low destiny ({destiny}) non-unique - might keep as destiny", 5.0)
+                    else:
+                        # Generic take into hand - usually good
+                        action.score = GOOD_DELTA
+                        action.add_reasoning("Taking card into hand", GOOD_DELTA)
 
             # ========== Prevent Battle/Move (Barrier Cards) ==========
-            # Barrier cards prevent opponents from battling or moving.
-            # ONLY valuable when used at a CONTESTED location (both players present).
-            # The whole point is to stop them from attacking after they deploy.
+            # Barrier cards (Imperial/Rebel Barrier) prevent opponent from battling or moving.
+            # Use when:
+            #   - Location IS contested (both players present)
+            #   - Target is a significant threat (high power)
+            #   - We're not already winning overwhelmingly
+            # Save when:
+            #   - Location not contested (no point)
+            #   - We're already dominating the location
             elif "Prevent" in action_text and "from battling or moving" in action_text:
-                # Try to find the target card and check if location is contested
                 target_card_name = self._extract_card_name_from_prevent_text(action_text)
                 location_contested = False
+                target_power = 0
+                my_power = 0
+                their_power = 0
+                location_name = "unknown"
 
                 if bs and target_card_name:
-                    # Find the card being prevented
+                    # Find the card being prevented and analyze the situation
                     for card_id, card in bs.cards_in_play.items():
                         if card.card_title and target_card_name.lower() in card.card_title.lower():
-                            # Found the card - check if its location is contested
+                            # Found the card - analyze its location
                             loc_idx = card.location_index
                             if loc_idx >= 0 and loc_idx < len(bs.locations):
                                 loc = bs.locations[loc_idx]
                                 if loc:
-                                    # Contested = both players have presence
+                                    location_name = loc.site_name or loc.system_name or "location"
                                     has_my_presence = len(loc.my_cards) > 0
                                     has_their_presence = len(loc.their_cards) > 0
                                     location_contested = has_my_presence and has_their_presence
-                                    logger.info(f"🚧 Barrier check: {target_card_name} at {loc.site_name or loc.system_name}, "
-                                               f"my={len(loc.my_cards)}, their={len(loc.their_cards)}, contested={location_contested}")
+                                    my_power = loc.my_power or 0
+                                    their_power = loc.their_power or 0
+
+                                    # Get target's power from card metadata
+                                    target_meta = get_card(card.blueprint_id)
+                                    if target_meta:
+                                        target_power = target_meta.power_value or 0
+
+                                    logger.info(f"🚧 Barrier analysis: {target_card_name} (power {target_power}) at {location_name}, "
+                                               f"my_power={my_power}, their_power={their_power}, contested={location_contested}")
                             break
 
-                if location_contested:
-                    # Location IS contested - barrier is valuable!
-                    action.score = GOOD_DELTA
-                    action.add_reasoning("Preventing opponent actions at CONTESTED location", GOOD_DELTA)
-                else:
-                    # Location NOT contested - save the barrier for later
+                if not location_contested:
+                    # Location NOT contested - save barrier for when we need it
                     action.score = BAD_DELTA
-                    action.add_reasoning("Save barrier - location not contested", BAD_DELTA)
+                    action.add_reasoning(f"Save barrier - {location_name} not contested", BAD_DELTA)
+                elif my_power >= their_power + 8:
+                    # We're already dominating - don't waste the barrier
+                    action.score = BAD_DELTA
+                    action.add_reasoning(f"Save barrier - already dominating ({my_power} vs {their_power})", BAD_DELTA)
+                elif target_power >= 5:
+                    # High-power target at contested location - VERY valuable!
+                    action.score = VERY_GOOD_DELTA
+                    action.add_reasoning(f"Barrier on HIGH POWER target ({target_power}) at contested {location_name}!", VERY_GOOD_DELTA)
+                elif their_power >= my_power:
+                    # They're winning or tied - barrier is valuable
+                    action.score = GOOD_DELTA + 10.0
+                    action.add_reasoning(f"Barrier to protect at {location_name} (losing {my_power} vs {their_power})", GOOD_DELTA + 10.0)
+                else:
+                    # We're ahead but not dominating - still useful
+                    action.score = GOOD_DELTA
+                    action.add_reasoning(f"Barrier at contested {location_name}", GOOD_DELTA)
 
             # ========== Monnok-type (Reveal Hand) ==========
             elif "LOST: Reveal opponent's hand" in action_text:

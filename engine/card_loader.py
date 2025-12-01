@@ -497,7 +497,7 @@ class CardDatabase:
         Get a card by its blueprint ID (gempId).
 
         Args:
-            blueprint_id: The gempId (e.g., "7_163")
+            blueprint_id: The gempId (e.g., "7_163", "7_163*" for foil, "7_163^" for AI)
 
         Returns:
             Card object or None if not found
@@ -505,7 +505,11 @@ class CardDatabase:
         if not self._loaded:
             self.load()
 
-        return self.cards.get(blueprint_id)
+        # Strip variant suffixes - these cards have same data as base version
+        # "*" = foil, "^" = AI-generated art
+        lookup_id = blueprint_id.rstrip('*^') if blueprint_id else blueprint_id
+
+        return self.cards.get(lookup_id)
 
     def get_card_title(self, blueprint_id: str) -> str:
         """Get card title by blueprint ID (returns blueprint ID if not found)"""

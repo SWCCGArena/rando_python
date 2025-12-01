@@ -20,6 +20,11 @@ import random
 import re
 from typing import List, Optional
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
+from ..priority_cards import (
+    is_priority_card,
+    get_protection_score,
+    get_protection_score_by_title,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +47,8 @@ class CardSelectionEvaluator(ActionEvaluator):
         super().__init__("CardSelection")
 
     def can_evaluate(self, context: DecisionContext) -> bool:
-        """Handle CARD_SELECTION decisions"""
-        return context.decision_type == 'CARD_SELECTION'
+        """Handle CARD_SELECTION and ARBITRARY_CARDS decisions"""
+        return context.decision_type in ('CARD_SELECTION', 'ARBITRARY_CARDS')
 
     def evaluate(self, context: DecisionContext) -> List[EvaluatedAction]:
         """Evaluate card selection options based on decision text"""
@@ -56,10 +61,31 @@ class CardSelectionEvaluator(ActionEvaluator):
         card_ids = context.card_ids
 
         if not card_ids:
-            logger.warning("No card IDs in CARD_SELECTION decision")
+            logger.warning(f"No card IDs in {context.decision_type} decision")
             return []
 
-        # Determine the type of card selection
+        # =====================================================
+        # ARBITRARY_CARDS-specific patterns (check first)
+        # =====================================================
+        if context.decision_type == 'ARBITRARY_CARDS':
+            if "starting location" in text_lower:
+                return self._evaluate_starting_location(context)
+            elif "card to take into hand" in text_lower:
+                return self._evaluate_take_into_hand(context)
+            elif "card to put on lost pile" in text_lower:
+                # Battle damage - reuse forfeit logic
+                return self._evaluate_lost_pile_selection(context)
+            elif "interrupt to play from lost pile" in text_lower:
+                # Recursion effect - random selection is fine
+                return self._evaluate_play_from_lost_pile(context)
+            elif "card to place in" in text_lower and "pile" in text_lower:
+                # Generic pile placement - prefer effects/interrupts
+                return self._evaluate_pile_placement(context)
+            # Fall through to common patterns below
+
+        # =====================================================
+        # Common patterns (CARD_SELECTION and ARBITRARY_CARDS)
+        # =====================================================
         if "choose card to set sabacc value" in text_lower:
             actions = self._evaluate_sabacc_set_value(context)
         elif "choose" in text_lower and "clone" in text_lower:
@@ -596,15 +622,26 @@ class CardSelectionEvaluator(ActionEvaluator):
                         # Check if card can actually be deployed with remaining force
                         can_afford = deploy_cost <= total_force
 
+                        # Check if this is a priority card we should protect
+                        blueprint = card.blueprint_id if card else ""
+                        protection = get_protection_score(blueprint)
+                        if protection == 0 and card_title:
+                            protection = get_protection_score_by_title(card_title)
+
                         if prefer_hand_loss:
                             # LOW RESERVE MODE: Aggressively lose hand cards
                             if is_deployable and not can_afford:
                                 # BEST: Can't afford to deploy anyway - lose this first!
                                 action.add_reasoning(f"Can't afford (costs {deploy_cost}, have {total_force})", GOOD_DELTA * 8)
                                 logger.info(f"💀 Force loss: {card_title} unaffordable ({deploy_cost}) - BEST to lose")
+                            elif protection > 0:
+                                # PRIORITY CARD - protect it even though it's effect/interrupt!
+                                penalty = -protection * 0.8  # Strong penalty for losing priority cards
+                                action.add_reasoning(f"PRIORITY CARD - protect! (score {protection})", penalty)
+                                logger.info(f"🛡️ Force loss: {card_title} is PRIORITY - protecting!")
                             elif not is_deployable:
-                                # Effects/Interrupts - good to lose
-                                action.add_reasoning(f"Effect/Interrupt - bot can't use", GOOD_DELTA * 6)
+                                # Non-priority Effects/Interrupts - OK to lose
+                                action.add_reasoning(f"Effect/Interrupt - bot can't use well", GOOD_DELTA * 6)
                                 logger.debug(f"💀 Force loss: {card_title} ({card_type}) - good to lose")
                             elif is_deployable and can_afford:
                                 # Can afford this - lose based on forfeit value
@@ -618,10 +655,15 @@ class CardSelectionEvaluator(ActionEvaluator):
                                 # AVOID losing valuable deployable cards
                                 action.add_reasoning(f"Deployable card in hand ({card_type})", BAD_DELTA * 4)
                                 logger.debug(f"Force loss: {card_title} is deployable ({card_type}) - avoid")
+                            elif protection > 0:
+                                # PRIORITY CARD - protect it!
+                                penalty = -protection * 0.8
+                                action.add_reasoning(f"PRIORITY CARD - protect! (score {protection})", penalty)
+                                logger.info(f"🛡️ Force loss: {card_title} is PRIORITY - protecting!")
                             else:
-                                # Effects/Interrupts - BEST to lose
-                                action.add_reasoning(f"Effect/Interrupt - bot can't use, lose this!", GOOD_DELTA * 5)
-                                logger.debug(f"Force loss: {card_title} ({card_type}) - BEST to lose")
+                                # Non-priority Effects/Interrupts - OK to lose
+                                action.add_reasoning(f"Effect/Interrupt - bot can't use well, lose this", GOOD_DELTA * 5)
+                                logger.debug(f"Force loss: {card_title} ({card_type}) - OK to lose")
 
                     elif zone == "RESERVE_DECK" or zone == "RESERVE":
                         if prefer_hand_loss:
@@ -1053,11 +1095,19 @@ class CardSelectionEvaluator(ActionEvaluator):
 
             action.add_reasoning("FROM HAND - can only lose, not forfeit!", -50.0)
 
-            # Effects and interrupts from hand are slightly less bad to lose
-            # since they can't be used anyway if we're losing the battle
-            if card_meta:
+            # Check if this is a priority card
+            blueprint = card.blueprint_id if card else ""
+            protection = get_protection_score(blueprint) if blueprint else 0
+
+            if protection > 0:
+                # PRIORITY CARD - heavily penalize losing from hand
+                penalty = -protection * 1.0  # Full penalty for losing priority cards
+                action.add_reasoning(f"PRIORITY CARD - protect! (score {protection})", penalty)
+                logger.info(f"🛡️ Battle loss: {card_title} is PRIORITY - protecting!")
+            elif card_meta:
                 card_type = card_meta.card_type or ""
                 if card_type.lower() in ['effect', 'interrupt', 'used interrupt', 'lost interrupt']:
+                    # Non-priority effects/interrupts - less bad to lose
                     action.add_reasoning(f"{card_type} - less valuable in hand", +30.0)
                 elif card_meta.is_unique:
                     action.add_reasoning("Unique card - very bad to lose!", -30.0)
@@ -1258,10 +1308,15 @@ class CardSelectionEvaluator(ActionEvaluator):
         Key principle: If min=0 but max>0, we CAN select and usually SHOULD.
         Passing should be the exception (handled by specific evaluators), not default.
         Give cards a base score that beats PassEvaluator (~5-20) to prefer action.
+
+        For ARBITRARY_CARDS: add randomization and type-based preferences.
         """
         actions = []
+        from ..card_loader import get_card
 
-        logger.warning(f"Unknown CARD_SELECTION type: '{context.decision_text}'")
+        is_arbitrary = context.decision_type == 'ARBITRARY_CARDS'
+        log_level = logger.info if is_arbitrary else logger.warning
+        log_level(f"Unknown {context.decision_type}: '{context.decision_text}'")
 
         # Check if we can select cards (max > 0)
         max_select = context.extra.get('max', 1)  # Default to 1 if not specified
@@ -1272,19 +1327,349 @@ class CardSelectionEvaluator(ActionEvaluator):
         # - If max = 0: we can't select anything, neutral score
         if max_select > 0:
             base_score = 30.0  # Beats PassEvaluator's ~5-20 score
-            reason = f"Unknown selection (min={min_select}, max={max_select}) - prefer selecting"
+            reason = f"Unknown selection (min={min_select}, max={max_select})"
         else:
             base_score = 0.0
             reason = "Unknown selection with max=0 - can't select"
 
-        for card_id in context.card_ids:
+        # Check if this looks like a "lose" or "place" decision (for type preferences)
+        text_lower = context.decision_text.lower()
+        is_loss_decision = any(x in text_lower for x in ["lose", "lost", "place in", "put on"])
+
+        for i, card_id in enumerate(context.card_ids):
+            blueprint = context.blueprints[i] if i < len(context.blueprints) else ""
+
             action = EvaluatedAction(
                 action_id=card_id,
                 action_type=ActionType.UNKNOWN,
                 score=base_score,
                 display_text=f"Select card {card_id}"
             )
-            action.add_reasoning(reason, 0.0)  # Score already set in base_score
+            action.add_reasoning(reason, 0.0)
+
+            # For ARBITRARY_CARDS: add randomization and type preferences
+            if is_arbitrary:
+                # Add randomization to avoid predictable patterns
+                random_factor = random.uniform(-10, 15)
+                action.add_reasoning("Random factor", random_factor)
+
+                # Apply type-based preferences if we have metadata
+                if blueprint and not blueprint.startswith("-1_"):
+                    card_meta = get_card(blueprint)
+                    if card_meta:
+                        action.display_text = f"Select {card_meta.title}"
+                        card_type = (card_meta.card_type or "").lower()
+
+                        if is_loss_decision:
+                            # For loss decisions: prefer effects/interrupts
+                            if "effect" in card_type or "interrupt" in card_type:
+                                action.add_reasoning("Effect/Interrupt - OK to lose", 25.0)
+                            elif card_meta.is_character:
+                                action.add_reasoning("Character - avoid losing", -15.0)
+                            elif card_meta.is_starship:
+                                action.add_reasoning("Starship - avoid losing", -15.0)
+                            elif card_meta.is_vehicle:
+                                action.add_reasoning("Vehicle - avoid losing", -10.0)
+                            elif card_meta.is_location:
+                                action.add_reasoning("Location - avoid losing", -20.0)
+                        else:
+                            # For gain/select decisions: prefer deployables
+                            if card_meta.is_character:
+                                action.add_reasoning("Character - valuable", 10.0)
+                            elif card_meta.is_starship:
+                                action.add_reasoning("Starship - valuable", 8.0)
+                            elif card_meta.is_location:
+                                action.add_reasoning("Location - valuable", 10.0)
+
+            actions.append(action)
+
+        return actions
+
+    # =====================================================
+    # ARBITRARY_CARDS handlers
+    # =====================================================
+
+    def _evaluate_starting_location(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose starting location - pick location with most force icons for our side.
+
+        Starting locations set up our force generation for the entire game,
+        so we want locations with the most icons for our side (Dark or Light).
+        """
+        actions = []
+        bs = context.board_state
+        from ..card_loader import get_card
+
+        my_side = (bs.my_side or "dark").lower() if bs else "dark"
+        logger.info(f"🏠 Starting location selection for {my_side} side, {len(context.card_ids)} options")
+
+        for i, card_id in enumerate(context.card_ids):
+            blueprint = context.blueprints[i] if i < len(context.blueprints) else ""
+
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=50.0,  # Base score
+                display_text=f"Start at {card_id}"
+            )
+
+            # Look up location metadata for force icons
+            if blueprint and not blueprint.startswith("-1_"):
+                card_meta = get_card(blueprint)
+                if card_meta:
+                    action.display_text = f"Start at {card_meta.title}"
+
+                    # Get icons for our side
+                    if my_side == "dark":
+                        my_icons = card_meta.dark_side_icons or 0
+                        their_icons = card_meta.light_side_icons or 0
+                    else:
+                        my_icons = card_meta.light_side_icons or 0
+                        their_icons = card_meta.dark_side_icons or 0
+
+                    # Strong bonus for our icons (force generation)
+                    if my_icons > 0:
+                        icon_bonus = my_icons * 30.0  # +30 per icon
+                        action.add_reasoning(f"{my_icons} {my_side} icon(s) for activation", icon_bonus)
+
+                    # Small bonus for opponent icons (drain potential)
+                    if their_icons > 0:
+                        drain_bonus = their_icons * 10.0
+                        action.add_reasoning(f"{their_icons} opponent icon(s) = drain potential", drain_bonus)
+
+                    logger.debug(f"  {card_meta.title}: {my_icons} my icons, {their_icons} their icons")
+                else:
+                    # Add small random factor if no metadata
+                    action.add_reasoning("Unknown location", random.uniform(0, 10))
+            else:
+                action.add_reasoning("Unknown location", random.uniform(0, 10))
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_take_into_hand(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose card to take into hand - from search/draw effects.
+
+        For ARBITRARY_CARDS "take into hand" decisions, we generally want:
+        1. High-value deployable cards (characters, starships)
+        2. Cards we can actually afford to deploy
+        3. Some randomization since we can't perfectly evaluate all cards
+
+        Since we don't always know what's best, add randomization to avoid
+        predictable patterns.
+        """
+        actions = []
+        bs = context.board_state
+        from ..card_loader import get_card
+
+        total_force = (bs.force_pile + bs.total_reserve_force()) if bs else 20
+
+        logger.info(f"🃏 Take into hand selection, {len(context.card_ids)} options")
+
+        for i, card_id in enumerate(context.card_ids):
+            blueprint = context.blueprints[i] if i < len(context.blueprints) else ""
+
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=50.0,  # Base score
+                display_text=f"Take {card_id}"
+            )
+
+            # Add randomization to avoid predictable patterns
+            random_factor = random.uniform(-10, 10)
+            action.add_reasoning("Random factor", random_factor)
+
+            if blueprint and not blueprint.startswith("-1_"):
+                card_meta = get_card(blueprint)
+                if card_meta:
+                    action.display_text = f"Take {card_meta.title}"
+
+                    # Prefer deployable cards
+                    if card_meta.is_character:
+                        action.add_reasoning("Character - deployable", 15.0)
+                        # Bonus for high power
+                        power = card_meta.power_value or 0
+                        if power >= 5:
+                            action.add_reasoning(f"High power ({power})", 10.0)
+                    elif card_meta.is_starship:
+                        action.add_reasoning("Starship - deployable", 12.0)
+                    elif card_meta.is_vehicle:
+                        action.add_reasoning("Vehicle - deployable", 10.0)
+                    elif card_meta.is_weapon:
+                        action.add_reasoning("Weapon - deployable", 8.0)
+                    elif card_meta.is_location:
+                        action.add_reasoning("Location - opens options", 15.0)
+
+                    # Slight penalty for cards we can't afford
+                    deploy_cost = card_meta.deploy_value or 0
+                    if deploy_cost > total_force:
+                        action.add_reasoning(f"Can't afford (costs {deploy_cost})", -5.0)
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_lost_pile_selection(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose card to put on Lost Pile - for battle damage.
+
+        Similar to forfeit logic: prefer low-value cards.
+        Prefer effects/interrupts over deployable cards.
+        """
+        actions = []
+        bs = context.board_state
+        from ..card_loader import get_card
+
+        logger.info(f"💀 Lost Pile selection (battle damage), {len(context.card_ids)} options")
+
+        for i, card_id in enumerate(context.card_ids):
+            blueprint = context.blueprints[i] if i < len(context.blueprints) else ""
+
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=50.0,  # Base score
+                display_text=f"Lose {card_id}"
+            )
+
+            if blueprint and not blueprint.startswith("-1_"):
+                card_meta = get_card(blueprint)
+                if card_meta:
+                    action.display_text = f"Lose {card_meta.title}"
+                    card_type = (card_meta.card_type or "").lower()
+
+                    # Check if this is a priority card
+                    protection = get_protection_score(blueprint)
+
+                    if protection > 0:
+                        # PRIORITY CARD - don't lose it!
+                        penalty = -protection * 0.8
+                        action.add_reasoning(f"PRIORITY CARD - protect! (score {protection})", penalty)
+                        logger.info(f"🛡️ Lost pile: {card_meta.title} is PRIORITY - protecting!")
+                    elif "effect" in card_type or "interrupt" in card_type:
+                        # Non-priority effects/interrupts - OK to lose
+                        action.add_reasoning(f"{card_meta.card_type} - OK to lose", 40.0)
+                    # AVOID losing deployable cards
+                    elif card_meta.is_character:
+                        forfeit = card_meta.forfeit_value or 0
+                        power = card_meta.power_value or 0
+                        # Penalty based on value
+                        penalty = -10.0 - (power * 3) - (forfeit * 2)
+                        action.add_reasoning(f"Character (power {power}, forfeit {forfeit})", penalty)
+                    elif card_meta.is_starship:
+                        action.add_reasoning("Starship - avoid losing", -25.0)
+                    elif card_meta.is_vehicle:
+                        action.add_reasoning("Vehicle - avoid losing", -20.0)
+                    elif card_meta.is_weapon:
+                        action.add_reasoning("Weapon - slight avoid", -10.0)
+                    elif card_meta.is_location:
+                        action.add_reasoning("Location - avoid losing", -30.0)
+                    else:
+                        # Unknown type - neutral with randomization
+                        action.add_reasoning("Unknown type", random.uniform(-5, 5))
+            else:
+                # Hidden/unknown card - add randomization
+                action.add_reasoning("Unknown card", random.uniform(0, 20))
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_play_from_lost_pile(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose Interrupt to play from Lost Pile - recursion effect.
+
+        For effects like Sense that let us play interrupts from Lost Pile,
+        randomization is fine since we don't have deep interrupt evaluation.
+        """
+        actions = []
+        from ..card_loader import get_card
+
+        logger.info(f"♻️ Play from Lost Pile selection, {len(context.card_ids)} options")
+
+        for i, card_id in enumerate(context.card_ids):
+            blueprint = context.blueprints[i] if i < len(context.blueprints) else ""
+
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=50.0,  # Base score
+                display_text=f"Play {card_id}"
+            )
+
+            # Add randomization
+            random_factor = random.uniform(-5, 15)
+            action.add_reasoning("Random selection", random_factor)
+
+            if blueprint and not blueprint.startswith("-1_"):
+                card_meta = get_card(blueprint)
+                if card_meta:
+                    action.display_text = f"Play {card_meta.title}"
+                    # Small bonus just for having metadata
+                    action.add_reasoning("Known card", 5.0)
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_pile_placement(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose card to place in a pile - generic pile placement.
+
+        When we need to lose/place cards, prefer effects/interrupts
+        over deployable cards (characters, vehicles, starships, weapons).
+        """
+        actions = []
+        from ..card_loader import get_card
+
+        logger.info(f"📚 Pile placement selection, {len(context.card_ids)} options")
+
+        for i, card_id in enumerate(context.card_ids):
+            blueprint = context.blueprints[i] if i < len(context.blueprints) else ""
+
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=50.0,  # Base score
+                display_text=f"Place {card_id}"
+            )
+
+            if blueprint and not blueprint.startswith("-1_"):
+                card_meta = get_card(blueprint)
+                if card_meta:
+                    action.display_text = f"Place {card_meta.title}"
+                    card_type = (card_meta.card_type or "").lower()
+
+                    # Check if this is a priority card
+                    protection = get_protection_score(blueprint)
+
+                    if protection > 0:
+                        # PRIORITY CARD - don't place it!
+                        penalty = -protection * 0.6  # Slightly less severe than losing
+                        action.add_reasoning(f"PRIORITY CARD - protect! (score {protection})", penalty)
+                        logger.info(f"🛡️ Pile placement: {card_meta.title} is PRIORITY - protecting!")
+                    elif "effect" in card_type or "interrupt" in card_type:
+                        # Non-priority effects/interrupts - OK to place
+                        action.add_reasoning(f"{card_meta.card_type} - OK to place", 30.0)
+                    # AVOID placing deployable cards
+                    elif card_meta.is_character:
+                        action.add_reasoning("Character - avoid placing", -20.0)
+                    elif card_meta.is_starship:
+                        action.add_reasoning("Starship - avoid placing", -20.0)
+                    elif card_meta.is_vehicle:
+                        action.add_reasoning("Vehicle - avoid placing", -15.0)
+                    elif card_meta.is_weapon:
+                        action.add_reasoning("Weapon - slight avoid", -10.0)
+                    elif card_meta.is_location:
+                        action.add_reasoning("Location - avoid placing", -25.0)
+                    else:
+                        action.add_reasoning("Unknown type", random.uniform(-5, 10))
+            else:
+                action.add_reasoning("Unknown card", random.uniform(0, 15))
+
             actions.append(action)
 
         return actions

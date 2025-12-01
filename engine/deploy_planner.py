@@ -192,8 +192,9 @@ class DeployPhasePlanner:
     3. High score if card is in plan, low score if not
     """
 
-    def __init__(self, deploy_threshold: int = 6):
+    def __init__(self, deploy_threshold: int = 6, battle_force_reserve: int = 1):
         self.deploy_threshold = deploy_threshold
+        self.battle_force_reserve = battle_force_reserve  # Base reserve (1 for effects/reactions)
         self.current_plan: Optional[DeploymentPlan] = None
         self._last_phase: str = ""
         self._last_turn: int = -1
@@ -204,6 +205,48 @@ class DeployPhasePlanner:
         self.current_plan = None
         self._last_phase = ""
         self._last_turn = -1
+
+    def _calculate_plan_reserve(self, instructions: List['DeploymentInstruction'],
+                                 locations: List['LocationAnalysis'],
+                                 flee_count: int = 0) -> int:
+        """
+        Calculate the force reserve needed for a specific plan.
+
+        Dynamic reserve based on what the plan requires:
+        - Base: battle_force_reserve (default 1) for effects/reactions
+        - +1 if plan deploys to a contested location (need to initiate battle)
+        - +1 per card that needs to flee (movement costs)
+
+        Args:
+            instructions: The deployment instructions in the plan
+            locations: All analyzed locations on board
+            flee_count: Number of cards that need to flee (from flee plan)
+
+        Returns:
+            Total force that should be reserved
+        """
+        reserve = self.battle_force_reserve  # Base reserve (1)
+
+        # Check if any deployment targets a contested location
+        contested_targets = set()
+        for inst in instructions:
+            if inst.target_location_name:
+                for loc in locations:
+                    if loc.name == inst.target_location_name and loc.their_power > 0:
+                        contested_targets.add(inst.target_location_name)
+                        break
+
+        # Add 1 force for battle initiation if deploying to contested location
+        if contested_targets:
+            reserve += 1
+            logger.debug(f"   📋 Reserve +1 for battle at: {contested_targets}")
+
+        # Add 1 force per card that needs to flee
+        if flee_count > 0:
+            reserve += flee_count
+            logger.debug(f"   📋 Reserve +{flee_count} for flee movement")
+
+        return reserve
 
     def _parse_icon_string(self, icon_value) -> int:
         """
@@ -718,6 +761,16 @@ class DeployPhasePlanner:
             if not target_loc.is_ground:
                 continue
 
+            # Adjust budget for contested locations (need +1 reserve for battle initiation)
+            # This ensures plans don't exceed total_force when reserve is added
+            if target_loc.their_power > 0:
+                loc_budget = force_budget - 1  # Reserve 1 extra for battle
+            else:
+                loc_budget = force_budget  # Uncontested - use full budget
+
+            if loc_budget <= 0:
+                continue
+
             # Filter deployables for this location (vehicles need exterior, system restrictions)
             location_deployables = []
             for card in all_deployable:
@@ -769,7 +822,7 @@ class DeployPhasePlanner:
             # APPROACH 1: Generate a plan for EACH SINGLE CARD that meets threshold
             # This enables multi-location combinations using different cards
             for card in location_deployables:
-                if card['cost'] > force_budget:
+                if card['cost'] > loc_budget:
                     continue
 
                 card_power = existing_power + card['power']
@@ -803,6 +856,7 @@ class DeployPhasePlanner:
                     power_contribution=card['power'],
                     deploy_cost=card['cost'],
                 )]
+                # Keep force_remaining relative to original budget for consistent validation
                 force_remaining = force_budget - card['cost']
                 score = self._score_plan(instructions, locations)
                 plans.append((instructions, force_remaining, score))
@@ -810,7 +864,7 @@ class DeployPhasePlanner:
             # APPROACH 2: Also find optimal combination for locations needing multiple cards
             # This covers cases where no single card meets threshold but combinations do
             cards_for_loc, power_allocated, cost_used = self._find_optimal_combination(
-                location_deployables.copy(), force_budget, power_goal, must_exceed=(target_loc.their_power > 0 and existing_power == 0)
+                location_deployables.copy(), loc_budget, power_goal, must_exceed=(target_loc.their_power > 0 and existing_power == 0)
             )
 
             if not cards_for_loc or len(cards_for_loc) <= 1:
@@ -830,6 +884,7 @@ class DeployPhasePlanner:
 
             # Build multi-card combination instructions
             instructions = []
+            # Keep force_remaining relative to original budget for consistent validation
             force_remaining = force_budget - cost_used
 
             for card in cards_for_loc:
@@ -1258,6 +1313,16 @@ class DeployPhasePlanner:
         # === GENERATE A PLAN FOR EACH TARGET LOCATION ===
         # This is the key change: try each location independently
         for target_loc in space_targets:
+            # Adjust budget for contested locations (need +1 reserve for battle initiation)
+            # This ensures plans don't exceed total_force when reserve is added
+            if target_loc.their_power > 0:
+                loc_budget = force_budget - 1  # Reserve 1 extra for battle
+            else:
+                loc_budget = force_budget  # Uncontested - use full budget
+
+            if loc_budget <= 0:
+                continue
+
             # Filter deployables for this location (system restrictions)
             location_deployables = []
             for ship in all_deployable_space:
@@ -1301,7 +1366,7 @@ class DeployPhasePlanner:
 
             # Find optimal combination of ships (including ship+pilot combos) for THIS location
             ships_for_loc, power_allocated, cost_used = self._find_optimal_combination(
-                location_deployables.copy(), force_budget, power_goal, must_exceed=(target_loc.their_power > 0 and existing_power == 0)
+                location_deployables.copy(), loc_budget, power_goal, must_exceed=(target_loc.their_power > 0 and existing_power == 0)
             )
 
             if not ships_for_loc:
@@ -1323,6 +1388,7 @@ class DeployPhasePlanner:
 
             # Build instructions for this location
             instructions = []
+            # Keep force_remaining relative to original budget for consistent validation
             force_remaining = force_budget - cost_used
             pilots_already_added = set()  # Track pilots already included via combos
 
@@ -1472,19 +1538,23 @@ class DeployPhasePlanner:
                 card_type = card_meta.card_type if card_meta else "Unknown"
                 logger.info(f"      [{i}] {c.card_title or c.blueprint_id} ({card_type}) - Power: {power}, Deploy: {deploy}")
 
-        # Get available force (reserve some for battle)
+        # Get available force (use base reserve initially - dynamic reserve applied per-plan)
         total_force = board_state.force_pile
-        force_reserved = 2  # Reserve for battle effects
-        force_to_spend = max(0, total_force - force_reserved)
+        # Start with minimal reserve - actual reserve depends on what the plan does:
+        # - Base: battle_force_reserve (1) for effects/reactions
+        # - +1 if deploying to contested location (need to initiate battle)
+        # - +1 per card that needs to flee (movement costs)
+        base_reserve = self.battle_force_reserve
+        force_to_spend = max(0, total_force - base_reserve)
 
-        logger.info(f"   Force: {total_force} total, {force_to_spend} for deploying (reserve {force_reserved})")
+        logger.info(f"   Force: {total_force} total, {force_to_spend} for deploying (base reserve {base_reserve}, dynamic per-plan)")
 
         # Initialize the plan
         plan = DeploymentPlan(
             strategy=DeployStrategy.HOLD_BACK,
             reason="Planning...",
             total_force_available=total_force,
-            force_reserved_for_battle=force_reserved,
+            force_reserved_for_battle=base_reserve,  # Will be updated with dynamic reserve
             force_to_spend=force_to_spend,
         )
 
@@ -2155,95 +2225,121 @@ class DeployPhasePlanner:
         all_plans.extend(multi_location_plans)
 
         if all_plans:
-            # Sort by score descending, pick the best
-            all_plans.sort(key=lambda x: x[3], reverse=True)
-            best_type, best_instructions, best_force_left, best_score = all_plans[0]
-
-            logger.info(f"   ✅ CHOSE {best_type.upper()} PLAN (score {best_score:.0f})")
-            for inst in best_instructions:
-                logger.info(f"      - {inst.card_name} -> {inst.target_location_name} ({inst.power_contribution} power)")
-
-            plan.instructions.extend(best_instructions)
-            force_remaining = best_force_left
-
-            # Update available_chars based on what was used
-            used_blueprints = {inst.card_blueprint_id for inst in best_instructions}
-            available_chars = [c for c in available_chars if c['blueprint_id'] not in used_blueprints]
-
             # =================================================================
-            # STEP 5C: CROSS-DOMAIN DEPLOYMENT (fallback)
-            # If we chose a single-domain plan and still have force left,
-            # try to deploy to the other domain with remaining force.
+            # DYNAMIC RESERVE: Filter and score plans based on actual reserve needed
+            # Each plan may need different reserve:
+            # - Base reserve (1) for effects/reactions
+            # - +1 if deploying to contested location (battle initiation)
             # =================================================================
-            if force_remaining > 0 and best_type != 'combined':
-                if best_type == 'ground' and starships:
-                    # Ground plan chosen - deploy remaining piloted starships to space
-                    remaining_ships = [s for s in starships if s['blueprint_id'] not in used_blueprints]
-                    piloted_ships = [s for s in remaining_ships if not s.get('needs_pilot') and s['power'] > 0]
+            valid_plans = []
+            for plan_type, instructions, force_left, score in all_plans:
+                # Calculate this plan's required reserve
+                plan_reserve = self._calculate_plan_reserve(instructions, locations)
+                plan_cost = force_to_spend - force_left
 
-                    if piloted_ships and space_targets:
-                        logger.info(f"   🔄 CROSS-DOMAIN: {force_remaining} force left, checking space deployment")
-                        for loc in space_targets:
-                            if force_remaining <= 0:
-                                break
-                            # Find affordable ships that meet threshold
-                            affordable = [s for s in piloted_ships
-                                         if s['cost'] <= force_remaining and s['power'] >= MIN_ESTABLISH_POWER]
-                            if not affordable:
-                                continue
-                            # Pick best ship
-                            best_ship = max(affordable, key=lambda s: s['power'])
-                            plan.instructions.append(DeploymentInstruction(
-                                card_blueprint_id=best_ship['blueprint_id'],
-                                card_name=best_ship['name'],
-                                target_location_id=loc.card_id,
-                                target_location_name=loc.name,
-                                priority=2,
-                                reason=f"Space: Cross-domain deploy after ground ({best_ship['power']} power)",
-                                power_contribution=best_ship['power'],
-                                deploy_cost=best_ship['cost'],
-                            ))
-                            logger.info(f"   🚀 CROSS-DOMAIN: Deploy {best_ship['name']} to {loc.name}")
-                            force_remaining -= best_ship['cost']
-                            piloted_ships.remove(best_ship)
-                            break  # One location per cross-domain for now
+                # Check if plan fits with its required reserve
+                # Plan is valid if: plan_cost + plan_reserve <= total_force
+                if plan_cost + plan_reserve <= total_force:
+                    # Adjust force_left to account for actual reserve
+                    actual_force_left = total_force - plan_cost - plan_reserve
+                    valid_plans.append((plan_type, instructions, actual_force_left, score, plan_reserve))
+                else:
+                    logger.debug(f"   ⏭️ Plan {plan_type} rejected: cost {plan_cost} + reserve {plan_reserve} > {total_force}")
 
-                elif best_type == 'space' and available_chars:
-                    # Space plan chosen - deploy remaining characters to ground
-                    if char_ground_targets:
-                        logger.info(f"   🔄 CROSS-DOMAIN: {force_remaining} force left, checking ground deployment")
-                        for loc in char_ground_targets:
-                            if force_remaining <= 0:
-                                break
-                            # Find optimal character combination for this location
-                            power_goal = max(MIN_ESTABLISH_POWER, loc.their_power + 1)
-                            chars_for_loc, power_allocated, cost_used = self._find_optimal_combination(
-                                available_chars, force_remaining, power_goal, must_exceed=(loc.their_power > 0)
-                            )
-                            if not chars_for_loc:
-                                continue
-                            # Check if we meet requirements
-                            if loc.their_power > 0 and power_allocated <= loc.their_power:
-                                continue
-                            if loc.their_power == 0 and power_allocated < MIN_ESTABLISH_POWER:
-                                continue
-                            # Deploy characters
-                            for char in chars_for_loc:
+            if not valid_plans:
+                logger.info(f"   ⏭️ All {len(all_plans)} plans rejected due to reserve requirements")
+                all_plans = []  # Clear to trigger "No valid plans" path
+            else:
+                # Sort by score descending, pick the best
+                valid_plans.sort(key=lambda x: x[3], reverse=True)
+                best_type, best_instructions, best_force_left, best_score, best_reserve = valid_plans[0]
+
+                logger.info(f"   ✅ CHOSE {best_type.upper()} PLAN (score {best_score:.0f}, reserve {best_reserve})")
+                for inst in best_instructions:
+                    logger.info(f"      - {inst.card_name} -> {inst.target_location_name} ({inst.power_contribution} power)")
+
+                plan.instructions.extend(best_instructions)
+                plan.force_reserved_for_battle = best_reserve  # Update with actual reserve
+                force_remaining = best_force_left
+
+                # Update available_chars based on what was used
+                used_blueprints = {inst.card_blueprint_id for inst in best_instructions}
+                available_chars = [c for c in available_chars if c['blueprint_id'] not in used_blueprints]
+
+                # =================================================================
+                # STEP 5C: CROSS-DOMAIN DEPLOYMENT (fallback)
+                # If we chose a single-domain plan and still have force left,
+                # try to deploy to the other domain with remaining force.
+                # =================================================================
+                if force_remaining > 0 and best_type != 'combined':
+                    if best_type == 'ground' and starships:
+                        # Ground plan chosen - deploy remaining piloted starships to space
+                        remaining_ships = [s for s in starships if s['blueprint_id'] not in used_blueprints]
+                        piloted_ships = [s for s in remaining_ships if not s.get('needs_pilot') and s['power'] > 0]
+
+                        if piloted_ships and space_targets:
+                            logger.info(f"   🔄 CROSS-DOMAIN: {force_remaining} force left, checking space deployment")
+                            for loc in space_targets:
+                                if force_remaining <= 0:
+                                    break
+                                # Find affordable ships that meet threshold
+                                affordable = [s for s in piloted_ships
+                                             if s['cost'] <= force_remaining and s['power'] >= MIN_ESTABLISH_POWER]
+                                if not affordable:
+                                    continue
+                                # Pick best ship
+                                best_ship = max(affordable, key=lambda s: s['power'])
                                 plan.instructions.append(DeploymentInstruction(
-                                    card_blueprint_id=char['blueprint_id'],
-                                    card_name=char['name'],
+                                    card_blueprint_id=best_ship['blueprint_id'],
+                                    card_name=best_ship['name'],
                                     target_location_id=loc.card_id,
                                     target_location_name=loc.name,
                                     priority=2,
-                                    reason=f"Ground: Cross-domain deploy after space ({char['power']} power)",
-                                    power_contribution=char['power'],
-                                    deploy_cost=char['cost'],
+                                    reason=f"Space: Cross-domain deploy after ground ({best_ship['power']} power)",
+                                    power_contribution=best_ship['power'],
+                                    deploy_cost=best_ship['cost'],
                                 ))
-                                logger.info(f"   🎭 CROSS-DOMAIN: Deploy {char['name']} to {loc.name}")
-                                if char in available_chars:
-                                    available_chars.remove(char)
-                            force_remaining -= cost_used
-                            break  # One location per cross-domain for now
+                                logger.info(f"   🚀 CROSS-DOMAIN: Deploy {best_ship['name']} to {loc.name}")
+                                force_remaining -= best_ship['cost']
+                                piloted_ships.remove(best_ship)
+                                break  # One location per cross-domain for now
+
+                    elif best_type == 'space' and available_chars:
+                        # Space plan chosen - deploy remaining characters to ground
+                        if char_ground_targets:
+                            logger.info(f"   🔄 CROSS-DOMAIN: {force_remaining} force left, checking ground deployment")
+                            for loc in char_ground_targets:
+                                if force_remaining <= 0:
+                                    break
+                                # Find optimal character combination for this location
+                                power_goal = max(MIN_ESTABLISH_POWER, loc.their_power + 1)
+                                chars_for_loc, power_allocated, cost_used = self._find_optimal_combination(
+                                    available_chars, force_remaining, power_goal, must_exceed=(loc.their_power > 0)
+                                )
+                                if not chars_for_loc:
+                                    continue
+                                # Check if we meet requirements
+                                if loc.their_power > 0 and power_allocated <= loc.their_power:
+                                    continue
+                                if loc.their_power == 0 and power_allocated < MIN_ESTABLISH_POWER:
+                                    continue
+                                # Deploy characters
+                                for char in chars_for_loc:
+                                    plan.instructions.append(DeploymentInstruction(
+                                        card_blueprint_id=char['blueprint_id'],
+                                        card_name=char['name'],
+                                        target_location_id=loc.card_id,
+                                        target_location_name=loc.name,
+                                        priority=2,
+                                        reason=f"Ground: Cross-domain deploy after space ({char['power']} power)",
+                                        power_contribution=char['power'],
+                                        deploy_cost=char['cost'],
+                                    ))
+                                    logger.info(f"   🎭 CROSS-DOMAIN: Deploy {char['name']} to {loc.name}")
+                                    if char in available_chars:
+                                        available_chars.remove(char)
+                                force_remaining -= cost_used
+                                break  # One location per cross-domain for now
 
         else:
             logger.info(f"   ⏭️ No valid ground or space plans")
@@ -2394,11 +2490,11 @@ class DeployPhasePlanner:
         # =================================================================
         # STEP 5D: PILE ON - Deploy additional cards to CONTESTED locations
         # Once we've committed to a battle, spend remaining force to crush opponent
-        # Keep only 2 force reserved for battle itself
+        # Keep force reserved for battle itself (configurable)
         # NOTE: Only pile on at contested locations (their_power > 0)
         #       Uncontested locations use establish threshold, not pile-on
         # =================================================================
-        BATTLE_FORCE_RESERVE = 2
+        battle_reserve = self.battle_force_reserve
         planned_location_ids = set(inst.target_location_id for inst in plan.instructions if inst.target_location_id)
 
         # Only pile on at CONTESTED locations (opponent has presence)
@@ -2408,14 +2504,14 @@ class DeployPhasePlanner:
             and loc.their_power > 0  # ONLY contested locations
         ]
 
-        if attack_locs and force_remaining > BATTLE_FORCE_RESERVE:
+        if attack_locs and force_remaining > battle_reserve:
             logger.info(f"   💪 PILE ON: {force_remaining} force remaining, {len(attack_locs)} contested locations")
 
             # Sort by opponent power (pile on to hardest battles first)
             attack_locs.sort(key=lambda x: x.their_power, reverse=True)
 
             for loc in attack_locs:
-                if force_remaining <= BATTLE_FORCE_RESERVE:
+                if force_remaining <= battle_reserve:
                     break
 
                 # Deploy any remaining piloted vehicles here (only to exterior locations!)
@@ -2423,9 +2519,9 @@ class DeployPhasePlanner:
                     # Filter vehicles that can deploy to this location
                     eligible_vehicles = self._filter_cards_for_location(piloted_vehicles, loc.name)
                     for vehicle in eligible_vehicles[:]:
-                        if force_remaining <= BATTLE_FORCE_RESERVE:
+                        if force_remaining <= battle_reserve:
                             break
-                        if vehicle['cost'] <= force_remaining - BATTLE_FORCE_RESERVE:
+                        if vehicle['cost'] <= force_remaining - battle_reserve:
                             plan.instructions.append(DeploymentInstruction(
                                 card_blueprint_id=vehicle['blueprint_id'],
                                 card_name=vehicle['name'],
@@ -2445,9 +2541,9 @@ class DeployPhasePlanner:
                     # Filter characters that can deploy to this location
                     eligible_chars = self._filter_cards_for_location(available_chars, loc.name)
                     for char in eligible_chars[:]:
-                        if force_remaining <= BATTLE_FORCE_RESERVE:
+                        if force_remaining <= battle_reserve:
                             break
-                        if char['cost'] <= force_remaining - BATTLE_FORCE_RESERVE:
+                        if char['cost'] <= force_remaining - battle_reserve:
                             plan.instructions.append(DeploymentInstruction(
                                 card_blueprint_id=char['blueprint_id'],
                                 card_name=char['name'],
@@ -2507,7 +2603,7 @@ class DeployPhasePlanner:
                     for char in eligible_chars[:]:
                         if force_remaining <= REINFORCE_THRESHOLD:
                             break
-                        if char['cost'] <= force_remaining - BATTLE_FORCE_RESERVE:
+                        if char['cost'] <= force_remaining - battle_reserve:
                             plan.instructions.append(DeploymentInstruction(
                                 card_blueprint_id=char['blueprint_id'],
                                 card_name=char['name'],
@@ -2796,8 +2892,8 @@ class DeployPhasePlanner:
         from .card_loader import get_card
 
         deployable = []
-        # Reserve 1 force for battle effects, but never go negative
-        available_force = max(0, board_state.force_pile - 1)
+        # Reserve force for battle effects (configurable), but never go negative
+        available_force = max(0, board_state.force_pile - self.battle_force_reserve)
 
         # === UNIQUENESS TRACKING ===
         # Track unique card titles actually deployed on the board (our side only)
