@@ -500,6 +500,11 @@ class DecisionHandler:
             logger.info("✅ Decision: Sabacc card (drawing one)")
             return (decision_id, "0")
 
+        elif "do you want to draw" in text.lower() and "battle destiny" in text.lower():
+            # Drawing battle destiny adds to our power - almost always good
+            logger.info("✅ Decision: Drawing battle destiny (Yes)")
+            return (decision_id, "0")
+
         else:
             # Default: pick first option
             logger.info(f"⚠️  Unknown multiple choice decision, defaulting to first option")

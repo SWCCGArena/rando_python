@@ -1029,6 +1029,9 @@ class DeployPhasePlanner:
         Generate a space-focused deployment plan using full budget.
 
         If pure_pilots are provided, will try to include them boarding starships.
+
+        IMPORTANT: Ships needing pilots have 0 power until piloted. When we have
+        available pilots, we estimate piloted ship power as base_power + 2 (typical pilot ability).
         """
         instructions = []
         force_remaining = force_budget
@@ -1037,28 +1040,56 @@ class DeployPhasePlanner:
 
         MIN_ESTABLISH_POWER = self.deploy_threshold
 
+        # CRITICAL FIX: When we have pilots, estimate ship power WITH pilot
+        # Otherwise unpiloted ships (0 power) will never meet power thresholds
+        # We modify 'cost' to include pilot cost so _find_optimal_combination works correctly
+        ships_with_estimated_power = []
+        for ship in available_ships:
+            ship_copy = ship.copy()
+            if ship.get('needs_pilot') and available_pure_pilots:
+                # Estimate piloted power: base_power + typical pilot ability (2)
+                # Include cheapest pilot cost in ship cost for budget calculation
+                cheapest_pilot_cost = min(p['cost'] for p in available_pure_pilots)
+                ship_copy['power'] = ship.get('base_power', 0) + 2  # Typical pilot adds ~2 ability
+                ship_copy['original_cost'] = ship['cost']  # Save original for actual deployment
+                ship_copy['cost'] = ship['cost'] + cheapest_pilot_cost  # Include pilot cost
+                logger.debug(f"   🚀 {ship['name']}: estimated piloted power={ship_copy['power']}, "
+                            f"combined cost={ship_copy['cost']} (ship {ship_copy['original_cost']} + pilot {cheapest_pilot_cost})")
+            ships_with_estimated_power.append(ship_copy)
+
         for loc in space_targets:
-            if not available_ships or force_remaining <= 0:
+            if not ships_with_estimated_power or force_remaining <= 0:
                 break
 
             power_goal = max(MIN_ESTABLISH_POWER, loc.their_power + 1)
 
+            # Use estimated power for finding optimal combination
             cards_for_location, power_allocated, cost_used = self._find_optimal_combination(
-                available_ships, force_remaining, power_goal, must_exceed=False
+                ships_with_estimated_power, force_remaining, power_goal, must_exceed=False
             )
 
             if not cards_for_location or power_allocated < MIN_ESTABLISH_POWER:
+                logger.debug(f"   ⚠️ Space plan: couldn't meet {MIN_ESTABLISH_POWER} power at {loc.name} "
+                            f"(got {power_allocated} power)")
                 continue
 
             force_remaining -= cost_used
             for ship in cards_for_location:
-                if ship in available_ships:
-                    available_ships.remove(ship)
+                # Find and remove from both lists (estimated and original)
+                ship_blueprint = ship['blueprint_id']
+                ships_with_estimated_power = [s for s in ships_with_estimated_power
+                                               if s['blueprint_id'] != ship_blueprint]
+                available_ships = [s for s in available_ships
+                                   if s['blueprint_id'] != ship_blueprint]
 
                 if loc.their_power > 0:
                     reason = f"Space: Contest {loc.name} (vs {loc.their_power} power)"
                 else:
                     reason = f"Space: Control {loc.name} ({loc.their_icons} icons)"
+
+                # Use actual ship cost (not estimated combined cost), power will come from pilot
+                actual_cost = ship.get('original_cost', ship.get('cost', 0))
+                actual_power = ship.get('base_power', 0) if ship.get('needs_pilot') else ship.get('power', 0)
 
                 instructions.append(DeploymentInstruction(
                     card_blueprint_id=ship['blueprint_id'],
@@ -1067,13 +1098,13 @@ class DeployPhasePlanner:
                     target_location_name=loc.name,
                     priority=2,
                     reason=reason,
-                    power_contribution=ship['power'],
-                    deploy_cost=ship['cost'],
+                    power_contribution=actual_power,
+                    deploy_cost=actual_cost,
                 ))
 
-                # After deploying a starship, consider deploying a pure pilot aboard it
-                # Pure pilots add their ability to the ship and are better there than on ground
-                if available_pure_pilots:
+                # After deploying a starship that needs a pilot, deploy a pilot aboard it
+                # This is REQUIRED for unpiloted ships, not optional
+                if ship.get('needs_pilot') and available_pure_pilots:
                     # Find affordable pure pilot
                     affordable_pilots = [p for p in available_pure_pilots if p['cost'] <= force_remaining]
                     if affordable_pilots:
@@ -1088,11 +1119,30 @@ class DeployPhasePlanner:
                             target_location_id=loc.card_id,  # Same location as ship
                             target_location_name=loc.name,
                             priority=3,  # After the ship
-                            reason=f"Pure pilot aboard {ship['name']}",
+                            reason=f"Pilot aboard {ship['name']}",
                             power_contribution=best_pilot['power'],
                             deploy_cost=best_pilot['cost'],
                         ))
-                        logger.info(f"   👨‍✈️ Plan: Deploy pure pilot {best_pilot['name']} aboard {ship['name']}")
+                        logger.info(f"   👨‍✈️ Plan: Deploy pilot {best_pilot['name']} aboard {ship['name']}")
+                elif available_pure_pilots and not ship.get('has_permanent_pilot'):
+                    # Ship has permanent pilot but we can still add another pilot for extra power
+                    affordable_pilots = [p for p in available_pure_pilots if p['cost'] <= force_remaining]
+                    if affordable_pilots:
+                        best_pilot = max(affordable_pilots, key=lambda p: _pilot_score_for_ship(p, ship))
+                        force_remaining -= best_pilot['cost']
+                        available_pure_pilots.remove(best_pilot)
+
+                        instructions.append(DeploymentInstruction(
+                            card_blueprint_id=best_pilot['blueprint_id'],
+                            card_name=best_pilot['name'],
+                            target_location_id=loc.card_id,
+                            target_location_name=loc.name,
+                            priority=3,
+                            reason=f"Extra pilot aboard {ship['name']}",
+                            power_contribution=best_pilot['power'],
+                            deploy_cost=best_pilot['cost'],
+                        ))
+                        logger.info(f"   👨‍✈️ Plan: Deploy extra pilot {best_pilot['name']} aboard {ship['name']}")
 
         return instructions, force_remaining
 
@@ -2093,8 +2143,10 @@ class DeployPhasePlanner:
 
         # Identify ALL pilots (any character with pilot ability can fly ships)
         # Pure pilots (pilot but not warrior) are BEST aboard ships but all can pilot
-        all_pilots = [c for c in available_chars if c.get('is_pilot')]
-        pure_pilots = [c for c in available_chars if c.get('is_pure_pilot')]
+        # CRITICAL: Use original `characters` list, NOT `available_chars` which may have been
+        # depleted by earlier steps. Step 5 generates INDEPENDENT plans for comparison.
+        all_pilots = [c for c in characters if c.get('is_pilot')]
+        pure_pilots = [c for c in characters if c.get('is_pure_pilot')]
         if all_pilots:
             pilot_names = [p['name'] for p in all_pilots]
             pure_names = [p['name'] for p in pure_pilots]
@@ -2108,8 +2160,10 @@ class DeployPhasePlanner:
         # =================================================================
 
         # Generate all ground plans (one per affordable character)
+        # CRITICAL: Use fresh copy of `characters`, NOT `available_chars` which was depleted
+        # by earlier steps. Step 5 generates INDEPENDENT plans for comparison.
         all_ground_plans = self._generate_all_ground_plans(
-            available_chars.copy(), vehicles.copy(), char_ground_targets, force_remaining, locations
+            characters.copy(), vehicles.copy(), char_ground_targets, force_remaining, locations
         )
 
         # Generate all space plans (one per affordable starship)

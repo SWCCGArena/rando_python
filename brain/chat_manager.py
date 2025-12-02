@@ -199,34 +199,59 @@ class ChatManager:
         - Not after loading into a game (turn jumped, not incremented)
         - Not after a revert (same reason)
         """
+        # Diagnostic logging
+        is_my_turn = board_state.is_my_turn() if board_state else None
+        current_player = board_state.current_turn_player if board_state else None
+        my_name = board_state.my_player_name if board_state else None
+        logger.info(f"📊 on_turn_start({turn_number}): current_turn={self.current_turn}, "
+                   f"reported={self.reported_turns}, is_my_turn={is_my_turn}, "
+                   f"current_player='{current_player}', my_name='{my_name}'")
+
         if turn_number in self.reported_turns:
+            logger.info(f"📊 Turn {turn_number} already reported, skipping")
             return
 
         # Guard 1: Only report at start of opponent's turn, not ours
         # Route score commentary should happen when opponent starts their turn
+        # NOTE: In SWCCG, both players share the same turn number, so we must NOT
+        # add to reported_turns here - we need to report when opponent's turn starts
         if board_state and board_state.is_my_turn():
-            logger.debug(f"Skipping route score for turn {turn_number} - it's our turn, not opponent's")
-            # Still update tracking to prevent repeated triggers
+            logger.info(f"📊 Guard 1: Skipping turn {turn_number} - it's our turn (player='{current_player}')")
+            # Update current_turn but DON'T add to reported_turns - we still need to
+            # report this turn when opponent's turn starts (same turn number in SWCCG)
             self.current_turn = turn_number
-            self.reported_turns.add(turn_number)
             return
 
         # Guard 2: Don't report during battle
         if board_state and board_state.in_battle:
-            logger.debug(f"Skipping route score for turn {turn_number} - in battle")
+            logger.info(f"📊 Guard 2: Skipping turn {turn_number} - in battle")
             # Still update tracking to prevent repeated triggers
             self.current_turn = turn_number
             self.reported_turns.add(turn_number)
             return
 
         # Guard 3: Only report if turn incremented by 1 (not a jump after load/revert)
-        # If current_turn is 0, this is first turn we've seen - don't report
-        # If turn jumped by more than 1, we probably loaded into an existing game
-        if self.current_turn == 0:
-            logger.info(f"First turn seen ({turn_number}) - skipping route score (possible game load)")
+        # If current_turn is 0 AND turn is high, we might have loaded into an existing game
+        # But if was_welcome_sent() is True, we're reconnecting to our own game (after restart)
+        # and should continue reporting route scores
+        if self.current_turn == 0 and turn_number > 3:
+            from engine.table_manager import was_welcome_sent
+            if was_welcome_sent():
+                # Reconnection to our own game - don't skip route scores
+                logger.info(f"First turn seen ({turn_number}) - reconnection to our game, will report")
+                self.current_turn = turn_number
+                # Fall through to report
+            else:
+                # Fresh load into someone else's existing game - skip
+                logger.info(f"First turn seen ({turn_number}) - skipping route score (loaded into existing game)")
+                self.current_turn = turn_number
+                self.reported_turns.add(turn_number)
+                return
+        elif self.current_turn == 0:
+            # First turn seen but it's early game - just track it, don't skip
+            logger.info(f"First turn seen ({turn_number}) - early game, will report")
             self.current_turn = turn_number
-            self.reported_turns.add(turn_number)
-            return
+            # Don't add to reported_turns yet, let it fall through to report
 
         if turn_number > self.current_turn + 1:
             logger.info(f"Turn jumped from {self.current_turn} to {turn_number} - skipping route score (possible load/revert)")
@@ -236,6 +261,7 @@ class ChatManager:
 
         self.current_turn = turn_number
         self.reported_turns.add(turn_number)
+        logger.info(f"📊 All guards passed for turn {turn_number}, will generate message")
 
         # Reset battle damage flag for new turn
         self.damage_this_battle_reported = False
@@ -251,10 +277,13 @@ class ChatManager:
         # Get turn message from brain
         if self.brain and turn_number >= 2:
             message = self.brain.get_turn_message(turn_number, board_state)
+            logger.info(f"📊 Brain returned message for turn {turn_number}: {message[:50] if message else 'None'}...")
             if message:
                 # Calculate and store route score
                 self.last_route_score = self.brain.calculate_route_score(board_state)
                 self._send_chat(message, message_type='turn')
+        else:
+            logger.info(f"📊 Not generating message: brain={self.brain is not None}, turn={turn_number}")
 
     def on_card_deployed(self, card_title: str, blueprint_id: str, zone: str, owner: str,
                          board_state: 'BoardState'):

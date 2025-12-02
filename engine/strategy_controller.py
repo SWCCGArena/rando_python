@@ -116,6 +116,18 @@ class StrategyController:
         """
         pass  # No action needed - Battle Order checked via board state
 
+    def on_card_deployed(self, card_id: str) -> None:
+        """
+        Handle card deployment notifications.
+
+        Previously used for location check optimization, now a no-op
+        since Battle Order detection uses direct board state checks.
+
+        Args:
+            card_id: The deployed card's ID
+        """
+        pass  # No action needed - Battle Order checked via board state
+
     def is_avoid_using_card(self, card_title: str) -> bool:
         """
         Check if a card should be avoided (bad cards to play).

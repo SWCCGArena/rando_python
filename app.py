@@ -1162,12 +1162,26 @@ def bot_worker():
                                         )
 
                                     # Check for turn change and notify chat manager
-                                    if (bot_state.chat_manager and bot_state.board_state and
-                                        bot_state.board_state.turn_number > bot_state.chat_manager.current_turn):
-                                        bot_state.chat_manager.on_turn_start(
-                                            bot_state.board_state.turn_number,
-                                            bot_state.board_state
+                                    # Note: In SWCCG, both players share the same turn number (e.g., both have "turn 5")
+                                    # So we need to check BOTH turn number increase AND opponent turn start
+                                    logger.info(f"📊 Turn check prereq: chat_manager={bot_state.chat_manager is not None}, "
+                                               f"board_state={bot_state.board_state is not None}")
+                                    if bot_state.chat_manager and bot_state.board_state:
+                                        turn_num = bot_state.board_state.turn_number
+                                        is_opponent_turn = not bot_state.board_state.is_my_turn()
+                                        current_turn = bot_state.chat_manager.current_turn
+                                        reported = bot_state.chat_manager.reported_turns
+                                        # Call on_turn_start if turn number increased OR if opponent's turn started
+                                        # The chat_manager has guards to prevent duplicate reporting
+                                        should_call = turn_num > current_turn or (
+                                            is_opponent_turn and turn_num not in reported
                                         )
+                                        logger.info(f"📊 Turn check: turn={turn_num}, current={current_turn}, "
+                                                   f"opponent_turn={is_opponent_turn}, reported={reported}, "
+                                                   f"should_call={should_call}")
+                                        if should_call:
+                                            logger.info(f"📊 Calling on_turn_start for turn {turn_num}")
+                                            bot_state.chat_manager.on_turn_start(turn_num, bot_state.board_state)
                                 else:
                                     logger.debug("No new game events")
 

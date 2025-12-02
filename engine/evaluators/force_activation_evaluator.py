@@ -24,8 +24,8 @@ CRITICAL_LIFE_FORCE = 6  # Below this, minimize activation
 
 # Force activation limits
 MAX_FORCE_PILE = 20  # Never have more than this in force pile
-RESERVE_FOR_DESTINY = 3  # Cards to keep in reserve for battle destiny draws
-RESERVE_FOR_DESTINY_ENDGAME = 2  # Cards to keep when total cards < 10
+RESERVE_FOR_DESTINY_CONTESTED = 2  # Cards to keep when locations are contested
+RESERVE_FOR_DESTINY_SAFE = 1  # Cards to keep when no contested locations
 
 
 class ForceActivationEvaluator(ActionEvaluator):
@@ -163,12 +163,14 @@ class ForceActivationEvaluator(ActionEvaluator):
         # === RULE 1: RESERVE CARDS FOR DESTINY DRAWS ===
         # This is the MOST important rule - we need cards in reserve deck
         # to draw destiny during battles
-        if life_force < 10:
-            # Endgame - only reserve 2 cards
-            reserve_needed = RESERVE_FOR_DESTINY_ENDGAME
+        # Reserve more if there are contested locations (potential battles)
+        has_contested = self._has_contested_locations(bs)
+        if has_contested:
+            reserve_needed = RESERVE_FOR_DESTINY_CONTESTED
+            logger.debug(f"🎲 Contested locations found - reserving {reserve_needed} cards")
         else:
-            # Normal game - reserve 3 cards
-            reserve_needed = RESERVE_FOR_DESTINY
+            reserve_needed = RESERVE_FOR_DESTINY_SAFE
+            logger.debug(f"🎲 No contested locations - reserving {reserve_needed} card")
 
         # Calculate max we can activate while keeping reserve
         max_from_reserve = max(0, reserve_deck - reserve_needed)
@@ -193,14 +195,8 @@ class ForceActivationEvaluator(ActionEvaluator):
                 amount = emergency_amount
             return amount
 
-        # Late game - be more conservative
-        if life_force < LATE_GAME_LIFE_FORCE:
-            # Leave more for destiny draws
-            min_reserve = max(3, life_force // 3)
-            available_after_reserve = max(0, reserve_deck - min_reserve)
-            if available_after_reserve < amount:
-                logger.debug(f"Late game ({life_force} life), leaving {min_reserve} reserve, limiting to {available_after_reserve}")
-                amount = available_after_reserve
+        # NOTE: Late game reserve logic removed - now using simple contested/safe logic
+        # (1 card if safe, 2 cards if contested) which is already applied in RULE 1
 
         # === CONSIDER HAND CONTENTS ===
         # Check if we have expensive cards that need saving for
@@ -236,3 +232,20 @@ class ForceActivationEvaluator(ActionEvaluator):
                 amount = 2
 
         return amount
+
+    def _has_contested_locations(self, bs) -> bool:
+        """
+        Check if there are any contested locations on the board.
+
+        A location is contested if both players have power there.
+        """
+        if not hasattr(bs, 'locations') or not bs.locations:
+            return False
+
+        for i, loc in enumerate(bs.locations):
+            my_power = bs.my_power_at_location(i)
+            their_power = bs.their_power_at_location(i)
+            if my_power > 0 and their_power > 0:
+                return True
+
+        return False

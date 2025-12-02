@@ -294,14 +294,29 @@ class ActionTextEvaluator(ActionEvaluator):
                     actions.append(action)
                     continue  # Skip further evaluation for this action
 
-                # Check for Battle Order rules (force drains cost extra)
+                # Check for Battle Order rules (force drains cost extra +3)
                 under_battle_order = False
                 if bs and hasattr(bs, 'strategy_controller') and bs.strategy_controller:
                     under_battle_order = bs.strategy_controller.under_battle_order_rules
 
                 if under_battle_order:
-                    # Under Battle Order - avoid low force drains (< 2)
-                    if drain_amount >= 0 and drain_amount < 2:
+                    # Check if we have expensive cards in hand that we should save for
+                    has_expensive_card = False
+                    if bs and hasattr(bs, 'cards_in_hand'):
+                        for card in bs.cards_in_hand:
+                            if card.blueprint_id:
+                                card_data = get_card(card.blueprint_id)
+                                if card_data and card_data.deploy_value and card_data.deploy_value > 6:
+                                    has_expensive_card = True
+                                    logger.debug(f"Have expensive card in hand: {card_data.title} (deploy {card_data.deploy_value})")
+                                    break
+
+                    if has_expensive_card:
+                        # Don't pay 3 extra force when we have expensive cards to deploy
+                        action.score = VERY_BAD_DELTA
+                        action.add_reasoning("Under Battle Order - saving force for expensive card", VERY_BAD_DELTA)
+                    elif drain_amount >= 0 and drain_amount < 2:
+                        # Under Battle Order - avoid low force drains (< 2)
                         action.score = VERY_BAD_DELTA
                         action.add_reasoning(f"Under Battle Order - drain {drain_amount} too low", VERY_BAD_DELTA)
                     elif drain_amount >= 2:
@@ -731,8 +746,8 @@ class ActionTextEvaluator(ActionEvaluator):
                                     has_my_presence = len(loc.my_cards) > 0
                                     has_their_presence = len(loc.their_cards) > 0
                                     location_contested = has_my_presence and has_their_presence
-                                    my_power = loc.my_power or 0
-                                    their_power = loc.their_power or 0
+                                    my_power = bs.my_power_at_location(loc.location_index)
+                                    their_power = bs.their_power_at_location(loc.location_index)
 
                                     # Get target's power from card metadata
                                     target_meta = get_card(card.blueprint_id)
