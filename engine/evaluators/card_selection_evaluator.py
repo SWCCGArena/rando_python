@@ -847,6 +847,12 @@ class CardSelectionEvaluator(ActionEvaluator):
             base_score = max(0, 100 - (forfeit * 10))
             action.add_reasoning(f"Forfeit value {forfeit}", base_score)
 
+            # CRITICAL: Hit cards should ALWAYS be forfeited first!
+            # They're already damaged - no reason to keep them around
+            if bs and bs.is_card_hit(card_id):
+                action.add_reasoning("ALREADY HIT - forfeit first!", +150.0)
+                logger.info(f"🎯 {card_title} is HIT - prioritizing for forfeit")
+
             # BONUS: Pilots on ships should be forfeited FIRST
             # (when ship dies, pilots die too - so save the ship by forfeiting pilot)
             if info['is_pilot_on_ship']:
@@ -1068,6 +1074,12 @@ class CardSelectionEvaluator(ActionEvaluator):
                 # Prefer low forfeit value cards
                 forfeit_bonus = (10 - forfeit) * 2
                 action.add_reasoning(f"Forfeit value {forfeit}", forfeit_bonus)
+
+                # CRITICAL: Hit cards should ALWAYS be forfeited first!
+                if bs.is_card_hit(card_id):
+                    action.add_reasoning("ALREADY HIT - forfeit first!", +150.0)
+                    card_title = card.card_title or card_id
+                    logger.info(f"🎯 {card_title} is HIT - prioritizing for forfeit")
 
                 # Penalize forfeiting high-value cards (unique characters, ships)
                 if card_meta:

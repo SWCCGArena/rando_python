@@ -213,6 +213,14 @@ class BotState:
             self.config, 'HALL_CHECK_INTERVAL_DURING_GAME', 60
         )
 
+        # Chat polling state - keeps bot registered in chat room
+        # Must poll regularly or GEMP removes us (HTTP 410)
+        # C# bot uses 3s, web client uses 750ms, but we use 10s to stay under rate limit
+        # 10s = 6 polls/min, keeps us well under 40 calls/min total
+        self._last_chat_poll_time = 0.0
+        self._chat_msg_id = 0
+        self.CHAT_POLL_INTERVAL = 10.0  # seconds (6 polls/min)
+
     def initialize_table_manager(self):
         """Initialize table manager after client is ready"""
         if self.client and not self.table_manager:
@@ -507,17 +515,35 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
 
                 # Post the decision using coordinator (applies delay based on noLongDelay)
                 # If coordinator not available, fall back to direct client call
-                if bot_state.coordinator:
-                    response_xml = bot_state.coordinator.post_decision(
-                        game_id, current_cn,
-                        decision_result.decision_id, decision_result.value,
-                        no_long_delay=decision_result.no_long_delay
-                    )
-                else:
-                    response_xml = client.post_decision(
-                        game_id, current_cn,
-                        decision_result.decision_id, decision_result.value
-                    )
+                # Retry on failure (timeout, network error) with exponential backoff
+                response_xml = None
+                max_decision_retries = 3
+                for retry_attempt in range(max_decision_retries):
+                    if bot_state.coordinator:
+                        response_xml = bot_state.coordinator.post_decision(
+                            game_id, current_cn,
+                            decision_result.decision_id, decision_result.value,
+                            no_long_delay=decision_result.no_long_delay
+                        )
+                    else:
+                        response_xml = client.post_decision(
+                            game_id, current_cn,
+                            decision_result.decision_id, decision_result.value
+                        )
+
+                    if response_xml:
+                        break  # Success!
+
+                    # Failed - retry with backoff
+                    if retry_attempt < max_decision_retries - 1:
+                        delay = 2 ** retry_attempt  # 1s, 2s, 4s
+                        logger.warning(f"⚠️ Decision post failed, retrying in {delay}s (attempt {retry_attempt + 2}/{max_decision_retries})...")
+                        socketio.sleep(delay)
+                    else:
+                        # All retries failed - raise to trigger outer recovery
+                        logger.error(f"❌ Decision post failed after {max_decision_retries} attempts!")
+                        raise requests.RequestException(f"Decision post failed after {max_decision_retries} retries")
+
                 if response_xml:
                     logger.debug(f"  [Iter {iteration}] 📦 Decision response: {len(response_xml)} bytes")
                     # Log the XML for debugging when there might be issues
@@ -945,9 +971,13 @@ def bot_worker():
                                     chat_registered, initial_chat_msg_id = bot_state.client.register_chat(bot_state.game_id)
                                 if chat_registered:
                                     logger.info(f"💬 Registered with chat system (last_msg_id={initial_chat_msg_id})")
+                                    # Store for continuous polling to maintain chat presence
+                                    bot_state._chat_msg_id = initial_chat_msg_id
+                                    bot_state._last_chat_poll_time = time.time()
                                 else:
                                     logger.warning("⚠️ Failed to register with chat system - commands won't work")
                                     initial_chat_msg_id = 0
+                                    bot_state._chat_msg_id = 0
 
                                 # Initialize chat manager for this game
                                 if bot_state.chat_manager:
@@ -1306,6 +1336,10 @@ def bot_worker():
                     bot_state.state = GameState.IN_LOBBY  # Go back to lobby, it will auto-create table
                     socketio.emit('state_update', bot_state.to_dict(), namespace='/')
                     # Note: Table will be auto-created by IN_LOBBY state handler
+
+                # NOTE: Chat polling disabled - was causing decision timeouts due to GEMP's
+                # long-polling blocking the game loop. The bot may lose chat room presence
+                # but gameplay is more important. TODO: Run chat polling in separate greenlet.
 
                 # Use shorter poll interval during fast action phases (draw/activate)
                 phase = bot_state.board_state.current_phase if bot_state.board_state else ""

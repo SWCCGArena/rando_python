@@ -45,9 +45,18 @@ class MockBoardState:
         self.dark_attrition_remaining = 0
         self.light_attrition_remaining = 0
         self.cards_in_play = {}
+        self.hit_cards = set()  # Track cards that have been "hit" in battle
 
     def add_card(self, card: MockCardInPlay):
         self.cards_in_play[card.card_id] = card
+
+    def is_card_hit(self, card_id: str) -> bool:
+        """Check if a card has been hit this battle"""
+        return card_id in self.hit_cards
+
+    def mark_card_hit(self, card_id: str):
+        """Mark a card as hit"""
+        self.hit_cards.add(card_id)
 
 
 def create_forfeit_context(board_state, card_ids: List[str], attrition=0):
@@ -397,6 +406,108 @@ class TestMetadataFallback:
         # The forfeit value should have been loaded
         action = actions[0]
         assert "Forfeit value 7" in ' '.join(action.reasoning)
+
+
+class TestHitCardPrioritization:
+    """Tests that hit cards are forfeited first"""
+
+    def test_hit_card_forfeited_first(self):
+        """A card that has been 'hit' in weapons segment should be forfeited first"""
+        bs = MockBoardState()
+
+        # Card with high forfeit but HIT
+        vader = MockCardInPlay(
+            card_id="1",
+            blueprint_id="108_6",
+            card_title="Darth Vader With Lightsaber",
+            forfeit=7,
+            power=6
+        )
+        # Card with low forfeit, NOT hit
+        stormtrooper = MockCardInPlay(
+            card_id="2",
+            blueprint_id="1_300",
+            card_title="Stormtrooper",
+            forfeit=2,
+            power=2
+        )
+
+        bs.add_card(vader)
+        bs.add_card(stormtrooper)
+
+        # Mark Vader as hit!
+        bs.mark_card_hit("1")
+
+        context = create_forfeit_context(bs, ["1", "2"])
+
+        evaluator = CardSelectionEvaluator()
+        actions = evaluator.evaluate(context)
+
+        vader_action = next(a for a in actions if a.action_id == "1")
+        stormtrooper_action = next(a for a in actions if a.action_id == "2")
+
+        # Despite Vader having higher forfeit, he should score higher because he's HIT
+        assert vader_action.score > stormtrooper_action.score, \
+            f"Hit Vader ({vader_action.score}) should score > unhit Stormtrooper ({stormtrooper_action.score})"
+
+        # Check reasoning mentions "HIT"
+        vader_reasoning = ' '.join(vader_action.reasoning)
+        assert 'ALREADY HIT' in vader_reasoning, \
+            f"Expected 'ALREADY HIT' in reasoning, got: {vader_reasoning}"
+
+    def test_multiple_hit_cards_prefer_lowest_forfeit(self):
+        """When multiple cards are hit, still prefer the one with lowest forfeit"""
+        bs = MockBoardState()
+
+        # High forfeit, hit
+        vader = MockCardInPlay(
+            card_id="1",
+            blueprint_id="108_6",
+            card_title="Darth Vader With Lightsaber",
+            forfeit=7,
+            power=6
+        )
+        # Low forfeit, hit
+        trooper = MockCardInPlay(
+            card_id="2",
+            blueprint_id="1_300",
+            card_title="Stormtrooper",
+            forfeit=2,
+            power=2
+        )
+        # Medium forfeit, NOT hit
+        veers = MockCardInPlay(
+            card_id="3",
+            blueprint_id="200_81",
+            card_title="General Veers",
+            forfeit=5,
+            power=3
+        )
+
+        bs.add_card(vader)
+        bs.add_card(trooper)
+        bs.add_card(veers)
+
+        # Mark both Vader and Trooper as hit
+        bs.mark_card_hit("1")
+        bs.mark_card_hit("2")
+
+        context = create_forfeit_context(bs, ["1", "2", "3"])
+
+        evaluator = CardSelectionEvaluator()
+        actions = evaluator.evaluate(context)
+
+        vader_action = next(a for a in actions if a.action_id == "1")
+        trooper_action = next(a for a in actions if a.action_id == "2")
+        veers_action = next(a for a in actions if a.action_id == "3")
+
+        # Both hit cards should score higher than unhit Veers
+        assert vader_action.score > veers_action.score
+        assert trooper_action.score > veers_action.score
+
+        # Among hit cards, the one with lower forfeit should score higher
+        assert trooper_action.score > vader_action.score, \
+            f"Hit Trooper (forfeit 2) should score > Hit Vader (forfeit 7)"
 
 
 if __name__ == "__main__":

@@ -30,6 +30,18 @@ class GEMPClient:
         self.logged_in = False
         self.parser = XMLParser()
 
+        # Set default headers to match real browser client
+        # This helps with Cloudflare and server compatibility
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/xml, text/xml, */*; q=0.01',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+        })
+
         # Set a reasonable timeout for all requests
         self.timeout = 15
 
@@ -105,10 +117,6 @@ class GEMPClient:
             response = self.session.get(
                 f"{self.server_url}/hall",
                 params={'participantId': 'null'},
-                headers={
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Accept': 'application/xml, text/xml, */*; q=0.01'
-                },
                 timeout=self.timeout
             )
 
@@ -163,10 +171,6 @@ class GEMPClient:
             response = self.session.post(
                 f"{self.server_url}/hall/update",
                 data=request_data,
-                headers={
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Accept': 'application/xml, text/xml, */*; q=0.01'
-                },
                 timeout=20  # Match web client timeout
             )
 
@@ -710,12 +714,19 @@ class GEMPClient:
                 if messages:
                     logger.debug(f"📨 Received {len(messages)} new chat messages")
                 return messages, new_last_id
-            else:
-                # HTTP 410 (Gone) is normal when game ends - don't warn
-                if response.status_code == 410:
-                    logger.debug(f"Chat room gone (game ended): HTTP 410")
+            elif response.status_code == 410:
+                # HTTP 410 means we were removed from chat room due to inactivity
+                # Re-register with GET to rejoin the room
+                logger.warning(f"⚠️ Removed from chat room (410) - re-registering...")
+                success, new_msg_id = self.register_chat(game_id)
+                if success:
+                    logger.info(f"✅ Re-registered with chat room (last_msg_id={new_msg_id})")
+                    return [], new_msg_id  # Return new msg_id so we don't miss messages
                 else:
-                    logger.warning(f"Failed to get chat: HTTP {response.status_code}")
+                    logger.error(f"❌ Failed to re-register with chat room")
+                    return [], last_msg_id
+            else:
+                logger.warning(f"Failed to get chat: HTTP {response.status_code}")
                 return [], last_msg_id
 
         except requests.RequestException as e:
