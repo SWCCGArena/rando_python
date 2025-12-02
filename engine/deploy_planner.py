@@ -239,6 +239,62 @@ class DeployPhasePlanner:
         self._last_phase = ""
         self._last_turn = -1
 
+    def _get_dynamic_threshold(self, locations: List['LocationAnalysis'],
+                                is_space: bool, turn_number: int) -> int:
+        """
+        Calculate dynamic deploy threshold based on game state.
+
+        Early game (turn < 4) with no contested locations: use relaxed threshold.
+        Later game OR contested locations: use full threshold.
+
+        Ground and space are tracked SEPARATELY:
+        - Contested ground doesn't raise space threshold
+        - Contested space doesn't raise ground threshold
+
+        This allows the bot to deploy more freely in the domain the opponent
+        isn't contesting, while being conservative where needed.
+
+        Args:
+            locations: All analyzed locations on board
+            is_space: True for space threshold, False for ground
+            turn_number: Current turn number
+
+        Returns:
+            Deploy threshold to use (full or relaxed)
+        """
+        # After turn 4, always use full threshold - game is developed
+        if turn_number >= 4:
+            logger.debug(f"   📊 Dynamic threshold: turn {turn_number} >= 4, using full {self.deploy_threshold}")
+            return self.deploy_threshold
+
+        # Check for contested locations in the relevant domain only
+        has_contested = False
+        for loc in locations:
+            # Skip locations without both players present
+            if loc.my_power <= 0 or loc.their_power <= 0:
+                continue
+
+            # Check the appropriate domain
+            if is_space and loc.is_space:
+                has_contested = True
+                logger.debug(f"   📊 Contested space found: {loc.name} ({loc.my_power} vs {loc.their_power})")
+                break
+            elif not is_space and loc.is_ground:
+                has_contested = True
+                logger.debug(f"   📊 Contested ground found: {loc.name} ({loc.my_power} vs {loc.their_power})")
+                break
+
+        if has_contested:
+            logger.debug(f"   📊 Dynamic threshold ({'space' if is_space else 'ground'}): "
+                        f"contested location found, using full {self.deploy_threshold}")
+            return self.deploy_threshold
+
+        # Relaxed threshold: -2 from base (6 -> 4)
+        relaxed = max(3, self.deploy_threshold - 2)
+        logger.debug(f"   📊 Dynamic threshold ({'space' if is_space else 'ground'}): "
+                    f"turn {turn_number}, no contest, using relaxed {relaxed}")
+        return relaxed
+
     def _calculate_plan_reserve(self, instructions: List['DeploymentInstruction'],
                                  locations: List['LocationAnalysis'],
                                  flee_count: int = 0) -> int:
@@ -781,7 +837,8 @@ class DeployPhasePlanner:
                                     ground_targets: List[LocationAnalysis],
                                     force_budget: int,
                                     locations: List[LocationAnalysis],
-                                    pilots: List[Dict] = None) -> List[Tuple[List[DeploymentInstruction], int, float]]:
+                                    pilots: List[Dict] = None,
+                                    ground_threshold: int = None) -> List[Tuple[List[DeploymentInstruction], int, float]]:
         """
         Generate multiple ground plans - one for EACH target location.
 
@@ -791,6 +848,10 @@ class DeployPhasePlanner:
         If pilots are provided, will also generate vehicle+pilot combo plans
         for unpiloted ground vehicles (like Blizzard 1). Any pilot (warrior or pure)
         can drive a vehicle.
+
+        Args:
+            ground_threshold: Dynamic threshold for establishing ground presence.
+                              Uses self.deploy_threshold if not specified.
 
         Returns list of (instructions, force_remaining, score) tuples.
         """
@@ -819,7 +880,8 @@ class DeployPhasePlanner:
         if not all_deployable and not (affordable_unpiloted_vehicles and available_pilots):
             return plans
 
-        MIN_ESTABLISH_POWER = self.deploy_threshold
+        # Use dynamic threshold if provided, otherwise fall back to default
+        MIN_ESTABLISH_POWER = ground_threshold if ground_threshold is not None else self.deploy_threshold
 
         # === GENERATE PLANS FOR EACH CARD × LOCATION COMBINATION ===
         # For multi-location establishment to work, we need separate plans
@@ -1501,7 +1563,8 @@ class DeployPhasePlanner:
                                    space_targets: List[LocationAnalysis],
                                    force_budget: int,
                                    all_pilots: List[Dict],
-                                   locations: List[LocationAnalysis]) -> List[Tuple[List[DeploymentInstruction], int, float]]:
+                                   locations: List[LocationAnalysis],
+                                   space_threshold: int = None) -> List[Tuple[List[DeploymentInstruction], int, float]]:
         """
         Generate multiple space plans - one for EACH target location.
 
@@ -1514,6 +1577,8 @@ class DeployPhasePlanner:
             force_budget: Available force for deploying
             all_pilots: List of ALL pilot characters (not just pure pilots)
             locations: All analyzed locations for scoring
+            space_threshold: Dynamic threshold for establishing space presence.
+                             Uses self.deploy_threshold if not specified.
 
         Returns list of (instructions, force_remaining, score) tuples.
         """
@@ -1564,7 +1629,8 @@ class DeployPhasePlanner:
         if not all_deployable_space:
             return plans
 
-        MIN_ESTABLISH_POWER = self.deploy_threshold
+        # Use dynamic threshold if provided, otherwise fall back to default
+        MIN_ESTABLISH_POWER = space_threshold if space_threshold is not None else self.deploy_threshold
 
         # === GENERATE A PLAN FOR EACH TARGET LOCATION ===
         # This is the key change: try each location independently
@@ -1880,6 +1946,15 @@ class DeployPhasePlanner:
             logger.info(f"      - {loc.name}: {loc_type}, my={loc.my_power}, their={loc.their_power}, my_icons={loc.my_icons}, their_icons={loc.their_icons}")
 
         # =================================================================
+        # Calculate DYNAMIC thresholds for ground and space separately
+        # Early game (turn < 4) with no contested locations: relaxed threshold (4)
+        # Later game OR contested locations: full threshold (6)
+        # =================================================================
+        ground_threshold = self._get_dynamic_threshold(locations, is_space=False, turn_number=current_turn)
+        space_threshold = self._get_dynamic_threshold(locations, is_space=True, turn_number=current_turn)
+        logger.info(f"   📊 Dynamic thresholds: ground={ground_threshold}, space={space_threshold} (turn {current_turn})")
+
+        # =================================================================
         # STEP 1: DEPLOY LOCATIONS FIRST
         # This is CRITICAL - locations open new tactical options
         # =================================================================
@@ -1930,14 +2005,13 @@ class DeployPhasePlanner:
         # STEP 2B: IDENTIFY WEAK PRESENCE LOCATIONS (below threshold)
         # Locations where we have presence but power < deploy_threshold
         # These need reinforcement BEFORE we establish at new locations!
+        # Uses dynamic thresholds calculated above (ground vs space separate)
         # =================================================================
-        MIN_ESTABLISH_POWER = self.deploy_threshold
-
         weak_presence_ground = [
             loc for loc in locations
             if loc.my_power > 0  # We have presence
             and loc.their_power == 0  # No enemy (not contested)
-            and loc.my_power < MIN_ESTABLISH_POWER  # Below threshold
+            and loc.my_power < ground_threshold  # Below dynamic ground threshold
             and loc.is_ground  # Ground location
             and loc.my_icons > 0  # Skip 0-icon locations (low value to reinforce)
             and loc.their_icons > 0  # Skip if opponent can't deploy here (safe location!)
@@ -1946,7 +2020,7 @@ class DeployPhasePlanner:
             loc for loc in locations
             if loc.my_power > 0  # We have presence
             and loc.their_power == 0  # No enemy (not contested)
-            and loc.my_power < MIN_ESTABLISH_POWER  # Below threshold
+            and loc.my_power < space_threshold  # Below dynamic space threshold
             and loc.is_space  # Space location
             and loc.my_icons > 0  # Skip 0-icon locations (low value to reinforce)
             and loc.their_icons > 0  # Skip if opponent can't deploy here (safe location!)
@@ -2052,12 +2126,12 @@ class DeployPhasePlanner:
             is_weak_presence = loc.their_power == 0 and loc.my_power > 0
             if is_weak_presence:
                 # Weak presence: need to reach threshold
-                power_needed = MIN_ESTABLISH_POWER - loc.my_power
+                power_needed = ground_threshold - loc.my_power
                 if power_needed <= 0:
                     # Already at or above threshold, skip
                     continue
                 log_tag = "WEAK"
-                logger.info(f"   🔧 {log_tag}: {loc.name} (have {loc.my_power}, need +{power_needed} to reach {MIN_ESTABLISH_POWER})")
+                logger.info(f"   🔧 {log_tag}: {loc.name} (have {loc.my_power}, need +{power_needed} to reach {ground_threshold})")
             else:
                 # Contested: need to beat enemy
                 deficit = abs(loc.power_differential)
@@ -2129,12 +2203,12 @@ class DeployPhasePlanner:
             is_weak_presence = loc.their_power == 0 and loc.my_power > 0
             if is_weak_presence:
                 # Weak presence: need to reach threshold
-                power_needed = MIN_ESTABLISH_POWER - loc.my_power
+                power_needed = space_threshold - loc.my_power
                 if power_needed <= 0:
                     # Already at or above threshold, skip
                     continue
                 log_tag = "WEAK SPACE"
-                logger.info(f"   🔧 {log_tag}: {loc.name} (have {loc.my_power}, need +{power_needed} to reach {MIN_ESTABLISH_POWER})")
+                logger.info(f"   🔧 {log_tag}: {loc.name} (have {loc.my_power}, need +{power_needed} to reach {space_threshold})")
             else:
                 # Contested: need to beat enemy
                 deficit = abs(loc.power_differential)
@@ -2192,8 +2266,8 @@ class DeployPhasePlanner:
         # =================================================================
         # STEP 5: COMPARE GROUND vs SPACE PLANS
         # Generate each plan INDEPENDENTLY with full budget, then pick the best
+        # (Uses dynamic thresholds: ground_threshold, space_threshold)
         # =================================================================
-        MIN_ESTABLISH_POWER = self.deploy_threshold  # From config, default 6
 
         # Prepare vehicle variables for later use in STEP 5C
         available_vehicles = vehicles.copy()
@@ -2320,6 +2394,7 @@ class DeployPhasePlanner:
         # =================================================================
         # Generate MULTIPLE plans for each deployable card and compare
         # This ensures we consider all viable deployment options
+        # (Dynamic thresholds already calculated earlier: ground_threshold, space_threshold)
         # =================================================================
 
         # Generate all ground plans (one per affordable character)
@@ -2327,14 +2402,16 @@ class DeployPhasePlanner:
         # by earlier steps. Step 5 generates INDEPENDENT plans for comparison.
         # Pass ALL pilots (not just pure) for vehicle+pilot combos - any pilot can drive!
         all_ground_plans = self._generate_all_ground_plans(
-            characters.copy(), vehicles.copy(), char_ground_targets, force_remaining, locations, all_pilots
+            characters.copy(), vehicles.copy(), char_ground_targets, force_remaining, locations, all_pilots,
+            ground_threshold=ground_threshold
         )
 
         # Generate all space plans (one per affordable starship)
         # Uses space_targets which includes both uncontested AND contested space locations
         # CRITICAL: Pass ALL pilots (not just pure pilots) - any pilot can fly ships!
         all_space_plans = self._generate_all_space_plans(
-            starships.copy(), space_targets, force_remaining, all_pilots, locations
+            starships.copy(), space_targets, force_remaining, all_pilots, locations,
+            space_threshold=space_threshold
         )
 
         # Log all plans for debugging
@@ -2574,7 +2651,7 @@ class DeployPhasePlanner:
                                     break
                                 # Find affordable ships that meet threshold
                                 affordable = [s for s in piloted_ships
-                                             if s['cost'] <= force_remaining and s['power'] >= MIN_ESTABLISH_POWER]
+                                             if s['cost'] <= force_remaining and s['power'] >= space_threshold]
                                 if not affordable:
                                     continue
                                 # Pick best ship
@@ -2602,7 +2679,7 @@ class DeployPhasePlanner:
                                 if force_remaining <= 0:
                                     break
                                 # Find optimal character combination for this location
-                                power_goal = max(MIN_ESTABLISH_POWER, loc.their_power + 1)
+                                power_goal = max(ground_threshold, loc.their_power + 1)
                                 chars_for_loc, power_allocated, cost_used = self._find_optimal_combination(
                                     available_chars, force_remaining, power_goal, must_exceed=(loc.their_power > 0)
                                 )
@@ -2611,7 +2688,7 @@ class DeployPhasePlanner:
                                 # Check if we meet requirements
                                 if loc.their_power > 0 and power_allocated <= loc.their_power:
                                     continue
-                                if loc.their_power == 0 and power_allocated < MIN_ESTABLISH_POWER:
+                                if loc.their_power == 0 and power_allocated < ground_threshold:
                                     continue
                                 # Deploy characters
                                 for char in chars_for_loc:
@@ -2692,17 +2769,15 @@ class DeployPhasePlanner:
 
         logger.info(f"   🎯 Ground targets for vehicles (exterior): {[loc.name for loc in ground_targets]}")
 
-        # Apply deploy threshold to vehicles too
-        MIN_ESTABLISH_POWER = self.deploy_threshold
-
         # Deploy piloted combos (vehicle + pilot together)
+        # Uses ground_threshold since vehicles deploy to ground locations
         for loc in ground_targets:
             if not piloted_combos or force_remaining <= 0:
                 break
 
             # At contested locations: just beat opponent
             # At uncontested locations: must meet threshold to establish
-            power_needed = loc.their_power + 1 if loc.their_power > 0 else MIN_ESTABLISH_POWER
+            power_needed = loc.their_power + 1 if loc.their_power > 0 else ground_threshold
             affordable_combos = [c for c in piloted_combos if c['cost'] <= force_remaining]
 
             if not affordable_combos:
@@ -2756,7 +2831,7 @@ class DeployPhasePlanner:
 
             # At contested locations: just beat opponent
             # At uncontested locations: must meet threshold to establish
-            power_needed = loc.their_power + 1 if loc.their_power > 0 else MIN_ESTABLISH_POWER
+            power_needed = loc.their_power + 1 if loc.their_power > 0 else ground_threshold
 
             for vehicle in piloted_vehicles[:]:  # Copy to allow removal
                 if vehicle['cost'] > force_remaining:
@@ -2882,7 +2957,9 @@ class DeployPhasePlanner:
                 )
 
                 # Only reinforce if we're at/near threshold (not already heavily fortified)
-                if planned_power >= MIN_ESTABLISH_POWER + 4:
+                # Use appropriate threshold for location type
+                loc_threshold = space_threshold if loc.is_space else ground_threshold
+                if planned_power >= loc_threshold + 4:
                     logger.debug(f"   ⏭️ Skip {loc.name}: already well-fortified ({planned_power} power)")
                     continue
 

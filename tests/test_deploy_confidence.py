@@ -77,6 +77,7 @@ class TestThresholdEnforcement:
             ScenarioBuilder("Below Threshold - Hold Back")
             .as_side("dark")
             .with_force(10)
+            .with_turn(4)  # Turn 4+ uses full threshold (6)
             .with_deploy_threshold(6)
             .add_ground_location("Mos Eisley", my_icons=2, their_icons=2, exterior=True)
             .add_character("Weak Trooper", power=5, deploy_cost=3)

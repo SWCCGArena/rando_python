@@ -396,16 +396,18 @@ class DecisionTracker:
     """
 
     # Thresholds for escalating loop response
-    LOOP_RANDOMIZE_THRESHOLD = 3   # After 3 sequence repeats: add randomness
-    LOOP_FORCE_DIFFERENT = 10      # After 10 repeats: force different choice
-    LOOP_CRITICAL = 20             # After 20 repeats: consider conceding
+    # Lowered from 3 to 2 for faster detection - a 2-decision loop with
+    # threshold 3 takes 6 decisions before detection (too slow, bot appears hung)
+    LOOP_RANDOMIZE_THRESHOLD = 2   # After 2 sequence repeats: add randomness
+    LOOP_FORCE_DIFFERENT = 6       # After 6 repeats: force different choice
+    LOOP_CRITICAL = 12             # After 12 repeats: consider conceding
 
     def __init__(self, max_history: int = 100):
         self.history: List[dict] = []
         self.max_history = max_history
 
         # Sequence tracking for multi-decision loops
-        self.sequence: List[Tuple[str, str]] = []  # (decision_key, response) pairs
+        self.sequence: List[Tuple[str, str, str]] = []  # (decision_key, response, state_hash) triples
         self.sequence_repeat_count: int = 0
         self.detected_loop_length: int = 0
 
@@ -415,10 +417,44 @@ class DecisionTracker:
         # Track current game phase for reset
         self.last_phase: str = ""
 
+        # Track game state for distinguishing state-changing actions from loops
+        self.last_state_hash: str = ""
+
     def _decision_key(self, decision_type: str, decision_text: str) -> str:
         """Create a unique key for a decision"""
         # Use first 60 chars of text to identify the decision
         return f"{decision_type}:{decision_text[:60]}"
+
+    def update_state(self, board_state) -> None:
+        """
+        Update tracked game state. Call this before recording decisions.
+
+        If state changes (e.g., hand size increases after drawing), the sequence
+        tracking resets because state-changing actions are not loops.
+        """
+        if board_state is None:
+            return
+
+        # Create a state hash from key game attributes
+        hand_size = getattr(board_state, 'hand_size', 0)
+        force_pile = getattr(board_state, 'force_pile', 0)
+        reserve_deck = getattr(board_state, 'reserve_deck', 0)
+        turn = getattr(board_state, 'turn_number', 0)
+
+        # Also track cards in play - prevents false positives when playing
+        # multiple cards from effects like "Anger, Fear, Aggression"
+        cards_in_play = len(board_state.cards_in_play) if hasattr(board_state, 'cards_in_play') else 0
+
+        new_hash = f"{hand_size}:{force_pile}:{reserve_deck}:{turn}:{cards_in_play}"
+
+        if new_hash != self.last_state_hash:
+            if self.last_state_hash and self.sequence_repeat_count > 0:
+                # State changed during a potential loop - it's not a real loop
+                logger.debug(f"State changed ({self.last_state_hash} → {new_hash}) - resetting loop detection")
+                self.sequence_repeat_count = 0
+                self.detected_loop_length = 0
+                # Don't clear blocked_responses immediately - keep some memory
+            self.last_state_hash = new_hash
 
     def record_decision(self, decision_type: str, decision_text: str,
                        decision_id: str, response: str) -> None:
@@ -445,7 +481,8 @@ class DecisionTracker:
         # 3. Multiple "Optional responses" windows during battle are normal
         # Only actual actions (non-empty responses) can cause loops.
         if response != "":
-            self.sequence.append((key, response))
+            # Include state hash in sequence to distinguish state-changing actions
+            self.sequence.append((key, response, self.last_state_hash))
 
             # Keep sequence reasonable length (enough to detect loops of 2-4 decisions)
             if len(self.sequence) > 20:
@@ -501,11 +538,13 @@ class DecisionTracker:
                         logger.warning(
                             f"🔄 LOOP DETECTED: {loop_len}-decision sequence repeated {repeat_count}x"
                         )
-                        for i, (k, r) in enumerate(recent):
+                        for i, entry in enumerate(recent):
+                            k, r = entry[0], entry[1]  # Unpack (key, response, state_hash)
                             logger.warning(f"   Step {i+1}: {k[:50]} → '{r}'")
 
                         # Block the responses that are causing the loop
-                        for k, r in recent:
+                        for entry in recent:
+                            k, r = entry[0], entry[1]
                             if k not in self.blocked_responses:
                                 self.blocked_responses[k] = set()
                             self.blocked_responses[k].add(r)
@@ -542,6 +581,48 @@ class DecisionTracker:
         blocked = self.blocked_responses.get(key, set())
         # Never block empty response (pass) - passing can't cause loops
         return blocked - {"", None}
+
+    def should_cancel_target_selection(self, decision_type: str, decision_text: str) -> bool:
+        """
+        Check if we should cancel a target selection instead of selecting.
+
+        This detects the pattern where:
+        1. We selected an action
+        2. We selected a target
+        3. Action failed, we're back at target selection
+
+        In this case, we should cancel instead of selecting the same target again.
+        """
+        if decision_type != 'ARBITRARY_CARDS':
+            return False
+
+        # Check if "cancel" is an option
+        text_lower = decision_text.lower()
+        if "cancel" not in text_lower and "done" not in text_lower:
+            return False
+
+        # Look at recent sequence - did we just make a target selection?
+        if len(self.sequence) < 2:
+            return False
+
+        # Get last two entries
+        # Format: (decision_key, response, state_hash)
+        last = self.sequence[-1]
+        prev = self.sequence[-2]
+
+        last_key = last[0]
+        last_response = last[1]
+        prev_response = prev[1]
+
+        # If our last response was non-empty (we selected something) and
+        # we're back at a similar decision, the action likely failed
+        current_key = self._decision_key(decision_type, decision_text)
+
+        if last_response and last_response != "" and last_key == current_key:
+            logger.info(f"🎯 Target selection returned after selecting '{last_response}' - action likely failed, should cancel")
+            return True
+
+        return False
 
     def get_loop_severity(self) -> str:
         """

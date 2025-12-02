@@ -121,10 +121,22 @@ class DecisionHandler:
         delay_str = f"quick ({delay_reason})" if no_long_delay else "normal"
         logger.info(f"🤔 Decision: type={decision_type}, delay={delay_str}, {turn_info}, text='{decision_text[:60]}...'" if len(decision_text) > 60 else f"🤔 Decision: type={decision_type}, delay={delay_str}, {turn_info}, text='{decision_text}'")
 
+        # Update state tracking for loop detection
+        # If game state changed (e.g., hand size after draw), it's not a loop
+        _decision_tracker.update_state(board_state)
+
         # Check for potential infinite loop (now detects MULTI-DECISION loops!)
         is_loop, count = _decision_tracker.check_for_loop(decision_type, decision_text)
         loop_severity = _decision_tracker.get_loop_severity()
         blocked_responses = _decision_tracker.get_blocked_responses(decision_type, decision_text)
+
+        # === EARLY LOOP BREAK: Cancel failed target selection ===
+        # For ARBITRARY_CARDS with cancel option: if we just made a selection and
+        # we're back at the same decision, the action failed - cancel immediately
+        if _decision_tracker.should_cancel_target_selection(decision_type, decision_text):
+            logger.warning(f"🎯 Target selection failed - canceling to break potential loop")
+            _decision_tracker.record_decision(decision_type, decision_text, decision_id, "")
+            return DecisionResult(decision_id=decision_id, value="", no_long_delay=no_long_delay)
 
         # Get available options for forced choice
         params = DecisionSafety.parse_decision_params(decision_element)
@@ -165,12 +177,27 @@ class DecisionHandler:
         if loop_severity == 'severe' and blocked_responses and all_options:
             available = [opt for opt in all_options if opt not in blocked_responses]
             if available:
+                # Check if this is a critical selection where passing would break game mechanics
+                text_lower = decision_text.lower()
+                is_critical_selection = (
+                    "highest-ability character" in text_lower or
+                    "highest ability character" in text_lower or
+                    "must choose" in text_lower or
+                    "you must" in text_lower
+                )
+
                 # Prefer pass (empty string) as an escape hatch from loops
-                if '' in available:
+                # BUT not for critical selections!
+                if '' in available and not is_critical_selection:
                     forced = ''
                     logger.warning(f"⚠️  SEVERE LOOP ({count}x) - passing to break loop")
                 else:
-                    forced = random.choice(available)
+                    # For critical selections, pick a non-empty option
+                    non_empty = [opt for opt in available if opt != '']
+                    if non_empty:
+                        forced = random.choice(non_empty)
+                    else:
+                        forced = random.choice(available)
                     logger.warning(f"⚠️  SEVERE LOOP ({count}x) - forcing different: {forced}")
                 _decision_tracker.record_decision(decision_type, decision_text, decision_id, forced)
                 return DecisionResult(decision_id=decision_id, value=forced, no_long_delay=no_long_delay)
@@ -179,11 +206,27 @@ class DecisionHandler:
         use_random_to_break_loop = loop_severity in ['mild', 'severe']
         if use_random_to_break_loop:
             logger.warning(f"🔄 Loop detected ({count}x) - will penalize blocked responses: {blocked_responses}")
+
+            # CRITICAL: Some decisions must NEVER randomly pass to break loops!
+            # Passing these would cancel important game mechanics.
+            text_lower = decision_text.lower()
+            is_critical_selection = (
+                # Sense/Alter cancellation - MUST select a character
+                "highest-ability character" in text_lower or
+                "highest ability character" in text_lower or
+                # Other critical selections that shouldn't randomly pass
+                "must choose" in text_lower or
+                "you must" in text_lower
+            )
+
             # In mild loops, add 50% chance to just pass if we can - this breaks many loops
-            if can_pass and loop_severity == 'mild' and random.random() < 0.5:
+            # BUT not for critical selections where passing would break game mechanics!
+            if can_pass and loop_severity == 'mild' and random.random() < 0.5 and not is_critical_selection:
                 logger.warning(f"🔄 Mild loop - randomly passing to break pattern")
                 _decision_tracker.record_decision(decision_type, decision_text, decision_id, "")
                 return DecisionResult(decision_id=decision_id, value="", no_long_delay=no_long_delay)
+            elif is_critical_selection:
+                logger.info(f"🔄 Loop detected but this is a critical selection - must choose, not pass")
 
         result = None
 

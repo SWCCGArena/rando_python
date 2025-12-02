@@ -254,6 +254,9 @@ class MockCardMetadata:
     # Deploy restriction (e.g., ["Tatooine"] for Jawas that can only deploy to Tatooine)
     deploy_restriction_systems: list = None
 
+    # Matching pilot/ship preferences (list of ship/pilot names this card prefers)
+    matching: list = None
+
     def __post_init__(self):
         if self.deploy_restriction_systems is None:
             self.deploy_restriction_systems = []
@@ -273,6 +276,26 @@ class MockCardMetadata:
         sub_lower = self.sub_type.lower()
         return sub_lower in ("automated", "artillery", "death star", "death star ii")
 
+    def is_matching_pilot_for(self, ship_title: str) -> bool:
+        """Check if this pilot has a matching preference for a specific ship."""
+        if not self.is_pilot or not self.matching:
+            return False
+        ship_lower = ship_title.lower() if ship_title else ""
+        for match_name in self.matching:
+            if match_name and match_name.lower() in ship_lower:
+                return True
+        return False
+
+    def is_matching_ship_for(self, pilot_title: str) -> bool:
+        """Check if this ship has a matching preference for a specific pilot."""
+        if (not self.is_starship and not self.is_vehicle) or not self.matching:
+            return False
+        pilot_lower = pilot_title.lower() if pilot_title else ""
+        for match_name in self.matching:
+            if match_name and match_name.lower() in pilot_lower:
+                return True
+        return False
+
 
 def mock_get_card(blueprint_id: str) -> Optional[MockCardMetadata]:
     """Mock version of card_loader.get_card"""
@@ -282,19 +305,33 @@ def mock_get_card(blueprint_id: str) -> Optional[MockCardMetadata]:
 # Patch the card_loader in deploy_planner
 import engine.deploy_planner as planner_module
 original_get_card = None
+original_planner_get_card = None
 
 def patch_card_loader():
-    """Patch the card loader to use our mock database"""
-    global original_get_card
+    """Patch the card loader to use our mock database.
+
+    IMPORTANT: Must patch both engine.card_loader.get_card AND the already-imported
+    reference in engine.deploy_planner (which has a module-level import).
+    """
+    global original_get_card, original_planner_get_card
     import engine.card_loader as card_loader
+    import engine.deploy_planner as deploy_planner
+
     original_get_card = card_loader.get_card
+    original_planner_get_card = deploy_planner.get_card
+
     card_loader.get_card = mock_get_card
+    deploy_planner.get_card = mock_get_card
 
 def unpatch_card_loader():
     """Restore the original card loader"""
     import engine.card_loader as card_loader
+    import engine.deploy_planner as deploy_planner
+
     if original_get_card:
         card_loader.get_card = original_get_card
+    if original_planner_get_card:
+        deploy_planner.get_card = original_planner_get_card
 
 
 # =============================================================================
@@ -1171,11 +1208,16 @@ def test_contested_location_reinforce():
 
 
 def test_below_deploy_threshold_hold_back():
-    """Test that bot holds back when combined power is below threshold (5 < 6)"""
+    """Test that bot holds back when combined power is below threshold (5 < 6)
+
+    Turn 4+ uses full threshold (6), so 5 power should hold back.
+    Early game (turn < 4) uses relaxed threshold (4), which 5 power would meet.
+    """
     scenario = (
         ScenarioBuilder("Below Deploy Threshold - Hold Back")
         .as_side("dark")
         .with_force(10)
+        .with_turn(4)  # Turn 4+ uses full threshold (6)
         .add_ground_location("Target", my_icons=2, their_icons=2)
         .add_character("Weak1", power=2, deploy_cost=2)
         .add_character("Weak2", power=3, deploy_cost=3)
@@ -1184,8 +1226,8 @@ def test_below_deploy_threshold_hold_back():
     )
     result = run_scenario(scenario)
     assert result.passed, f"Failed: {result.failures}"
-    # Verify no deployments - combined power 5 is below threshold 6
-    assert len(result.plan.instructions) == 0, "Should hold back with only 5 combined power"
+    # Verify no deployments - combined power 5 is below threshold 6 at turn 4+
+    assert len(result.plan.instructions) == 0, "Should hold back with only 5 combined power at turn 4+"
     assert result.plan.strategy == DeployStrategy.HOLD_BACK
 
 
@@ -1556,7 +1598,7 @@ def test_multiple_small_ships_combine():
 def test_deploy_efficient_power_to_threshold():
     """Test that planner deploys EFFICIENTLY to reach threshold, not max power.
 
-    With threshold=6, should pick cheapest combo that reaches 6, not max power.
+    With threshold=6 (turn 4+), should pick cheapest combo that reaches 6, not max power.
     Small Ship 1 + Small Ship 2 = 8 power for 6 cost (most efficient >= 6)
     NOT Big Ship (8 power, 8 cost) or all 4 ships (20 power, 17 cost)
     """
@@ -1564,6 +1606,7 @@ def test_deploy_efficient_power_to_threshold():
         ScenarioBuilder("Efficient Power")
         .as_side("dark")
         .with_force(20)
+        .with_turn(4)  # Turn 4+ uses full threshold
         .with_deploy_threshold(6)
         .add_space_location("Space", my_icons=2, their_icons=3)
         # Multiple ships available - should pick cheapest combo >= 6 power
@@ -1708,12 +1751,14 @@ def test_just_above_threshold():
 def test_just_below_threshold():
     """Test that deployment doesn't happen when just below threshold.
 
-    Edge case: combined power is 5, threshold is 6.
+    Edge case: combined power is 5, full threshold is 6.
+    Turn 4+ uses full threshold; early game uses relaxed threshold (4).
     """
     scenario = (
         ScenarioBuilder("Just Below Threshold")
         .as_side("dark")
         .with_force(10)
+        .with_turn(4)  # Turn 4+ uses full threshold (6)
         .add_ground_location("Target", my_icons=2, their_icons=2)
         .add_character("Weak1", power=2, deploy_cost=1)
         .add_character("Weak2", power=2, deploy_cost=1)
@@ -2394,17 +2439,19 @@ def test_vehicle_vs_character_choice():
     """Test that planner chooses better option between vehicle and character.
 
     Given exterior location, should pick higher power option.
+    At turn 4+, threshold is 6 so AT-AT (7 power) beats Officer (5 power).
     """
     scenario = (
         ScenarioBuilder("Vehicle vs Character")
         .as_side("dark")
         .with_force(10)
+        .with_turn(4)  # Turn 4+ uses full threshold (6)
         .add_ground_location("Target", my_icons=2, their_icons=2, exterior=True)
-        # Character with 5 power
+        # Character with 5 power - below threshold at turn 4+
         .add_character("Officer", power=5, deploy_cost=4)
-        # Vehicle with 7 power - better option
+        # Vehicle with 7 power - above threshold
         .add_vehicle("AT-AT", power=7, deploy_cost=6, has_permanent_pilot=True)
-        # Should choose vehicle (higher power)
+        # Should choose vehicle (meets threshold, higher power)
         .expect_deployment("AT-AT")
         .expect_target("Target")
         .build()
@@ -2495,6 +2542,7 @@ def test_combination_lock_six_cards():
         ScenarioBuilder("Combination Lock - 6 Cards")
         .as_side("dark")
         .with_force(6)  # Limited force - just enough for cheapest combo (no excess for reinforcing)
+        .with_turn(4)  # Turn 4+ uses full threshold
         .with_deploy_threshold(6)
         .add_ground_location("Target", my_icons=2, their_icons=3)
         # 3 efficient troopers
@@ -2774,6 +2822,7 @@ def test_eight_card_mega_combo():
         ScenarioBuilder("Eight Card Mega Combo")
         .as_side("dark")
         .with_force(6)  # Limited force - just enough for cheapest combo (no excess for reinforcing)
+        .with_turn(4)  # Turn 4+ uses full threshold (6)
         .add_ground_location("Grand Arena", my_icons=2, their_icons=3)
         # 4 cheap troopers
         .add_character("Trooper1", power=2, deploy_cost=1)
@@ -2918,6 +2967,7 @@ def test_vader_plus_troopers_vs_troopers_alone():
         ScenarioBuilder("Vader vs Trooper Army")
         .as_side("dark")
         .with_force(10)
+        .with_turn(4)  # Turn 4+ uses full threshold (6)
         .add_ground_location("Battleground", my_icons=2, their_icons=2)
         # The "trap" - iconic but inefficient
         .add_character("Darth Vader", power=6, deploy_cost=6)
@@ -2969,6 +3019,7 @@ def test_exactly_at_budget_boundary():
         ScenarioBuilder("Budget Boundary Test")
         .as_side("dark")
         .with_force(8)  # 6 usable
+        .with_turn(4)  # Turn 4+ uses full threshold (6)
         .add_ground_location("Tight Budget Zone", my_icons=2, their_icons=2)
         .add_character("Card A", power=3, deploy_cost=3)
         .add_character("Card B", power=3, deploy_cost=3)
@@ -3270,7 +3321,7 @@ def test_below_threshold_empty_location_no_deploy():
     """Don't deploy below threshold even to empty location.
 
     Empty location (no enemy).
-    Threshold is 6.
+    Full threshold is 6 (at turn 4+).
     Our character has 4 power.
     4 < 6 threshold, so don't deploy!
     """
@@ -3278,7 +3329,8 @@ def test_below_threshold_empty_location_no_deploy():
         ScenarioBuilder("Below Threshold Empty - No Deploy")
         .as_side("dark")
         .with_force(10)
-        .with_deploy_threshold(6)  # High threshold
+        .with_turn(4)  # Turn 4+ uses full threshold
+        .with_deploy_threshold(6)  # Full threshold
         # Empty location - but threshold is 6
         .add_ground_location("Empty Site", my_icons=2, their_icons=2)
         # Only 4 power - below threshold
