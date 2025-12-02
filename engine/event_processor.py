@@ -29,6 +29,8 @@ class EventProcessor:
         self._on_battle_damage_callbacks = []
         # Callbacks for battle start events
         self._on_battle_start_callbacks = []
+        # Callbacks for side detection (for delayed welcome message)
+        self._on_side_detected_callbacks = []
         # Flag to indicate we're processing historical events (catching up)
         # When True, skip chat-related callbacks to avoid re-posting old messages
         self.catching_up = False
@@ -59,6 +61,24 @@ class EventProcessor:
         Callback signature: callback()
         """
         self._on_battle_start_callbacks.append(callback)
+
+    def register_side_detected_callback(self, callback):
+        """
+        Register a callback to be called when our side (light/dark) is detected.
+
+        Callback signature: callback(my_side: str, opponent_side: str)
+        """
+        self._on_side_detected_callbacks.append(callback)
+
+    def _notify_side_detected(self, my_side: str):
+        """Notify all registered callbacks that our side was detected"""
+        opponent_side = "light" if my_side == "dark" else "dark"
+        # Don't skip for catching_up - we want the welcome message even if catching up
+        for callback in self._on_side_detected_callbacks:
+            try:
+                callback(my_side, opponent_side)
+            except Exception as e:
+                logger.error(f"Error in side detected callback: {e}")
 
     def _notify_battle_start(self):
         """Notify all registered callbacks that a battle started"""
@@ -238,6 +258,8 @@ class EventProcessor:
                         self.board_state.strategy_controller.my_side = self.board_state.my_side
                         if self.board_state.strategy_controller.game_strategy:
                             self.board_state.strategy_controller.game_strategy.my_side = self.board_state.my_side
+                    # Notify callbacks (e.g., for delayed welcome message)
+                    self._notify_side_detected(self.board_state.my_side)
 
         # Notify callbacks (for achievements, etc.)
         self._notify_card_placed(card_title, blueprint_id, zone, owner)

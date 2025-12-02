@@ -168,7 +168,7 @@ class ChatManager:
     # =========================================================================
 
     def on_game_start(self):
-        """Send welcome message when game starts"""
+        """Send welcome message when game starts (if side is known)"""
         if not self.brain or not self.opponent_name:
             return
 
@@ -177,6 +177,31 @@ class ChatManager:
         if was_welcome_sent():
             logger.info("⏭️ Skipping welcome message - already sent this game")
             return
+
+        # If side is unknown, defer welcome until side is detected
+        if not self.my_side or self.my_side == "unknown":
+            logger.info("⏳ Deferring welcome message until side is detected")
+            return
+
+        self._send_welcome_now()
+
+    def on_side_detected(self, my_side: str, opponent_side: str):
+        """Called when our side is detected - send welcome if not yet sent"""
+        self.my_side = my_side
+        self.opponent_side = opponent_side
+
+        # Check if welcome was already sent
+        from engine.table_manager import was_welcome_sent
+        if was_welcome_sent():
+            return
+
+        # Now send the welcome with correct side info
+        logger.info(f"🎭 Side detected ({my_side}) - sending welcome now")
+        self._send_welcome_now()
+
+    def _send_welcome_now(self):
+        """Internal method to send welcome message"""
+        from engine.table_manager import mark_welcome_sent
 
         message = self.brain.get_welcome_message(
             opponent_name=self.opponent_name,

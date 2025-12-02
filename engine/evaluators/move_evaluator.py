@@ -280,6 +280,8 @@ class MoveEvaluator(ActionEvaluator):
           - Empty location: need 6+ power to establish
           - Contested location: need to beat enemy + 4 power margin
 
+        Prioritizes locations with opponent icons (enables force drains!).
+
         Returns dict with:
             viable: bool
             reason: str
@@ -287,6 +289,7 @@ class MoveEvaluator(ActionEvaluator):
         """
         ESTABLISH_THRESHOLD = 6  # Power needed to establish presence
         CONTEST_MARGIN = 4  # Extra power needed to safely contest
+        ICON_BONUS = 15.0  # Score bonus per opponent icon (force drain value)
 
         force_available = board_state.force_pile
         if force_available < 1:
@@ -332,7 +335,18 @@ class MoveEvaluator(ActionEvaluator):
             our_power_there = board_state.my_power_at_location(adj_idx)
             potential_power = our_power_there + max_moveable_power
 
-            logger.debug(f"   Adj loc {adj_idx}: their_power={their_power}, our_power={our_power_there}")
+            # Get opponent icons at this location (enables force drains!)
+            their_icons = 0
+            if adj_idx < len(board_state.locations):
+                adj_loc = board_state.locations[adj_idx]
+                their_icons_str = adj_loc.their_icons or ""
+                if their_icons_str and their_icons_str != "0":
+                    try:
+                        their_icons = int(their_icons_str.replace("*", "").strip() or "0")
+                    except ValueError:
+                        their_icons = 0
+
+            logger.debug(f"   Adj loc {adj_idx}: their_power={their_power}, our_power={our_power_there}, their_icons={their_icons}")
 
             # Treat negative power as 0 (GEMP may send -1 for invalid/empty)
             if their_power < 0:
@@ -346,16 +360,25 @@ class MoveEvaluator(ActionEvaluator):
             if their_power == 0:
                 # Empty location - can we establish?
                 if potential_power >= ESTABLISH_THRESHOLD:
-                    # Great - can establish!
+                    # Base score for establishing
                     score = GOOD_DELTA * 2
+                    # Add bonus for opponent icons (force drain potential!)
+                    icon_score = their_icons * ICON_BONUS
+                    score += icon_score
                     cards_needed = max(1, int((ESTABLISH_THRESHOLD - our_power_there) / avg_power_per_card + 0.5))
+
+                    reason = f"Can establish at empty location (move {cards_needed} cards, {int(cards_needed * avg_power_per_card)} power)"
+                    if their_icons > 0:
+                        reason += f" - {their_icons} opponent icon(s) = force drain!"
+
                     opportunity = {
                         'adj_idx': adj_idx,
                         'their_power': 0,
+                        'their_icons': their_icons,
                         'action': 'establish',
                         'cards_needed': cards_needed,
                         'score': score,
-                        'reason': f"Can establish at empty location (move {cards_needed} cards, {int(cards_needed * avg_power_per_card)} power)"
+                        'reason': reason
                     }
                     if score > best_score:
                         best_score = score
@@ -364,17 +387,26 @@ class MoveEvaluator(ActionEvaluator):
                 # Contested - can we beat them with margin?
                 power_needed = their_power + CONTEST_MARGIN
                 if potential_power >= power_needed:
-                    # Can contest!
-                    score = GOOD_DELTA * 3 + their_power / 2  # Bonus for contesting stronger enemies
+                    # Base score for contesting (+ bonus for contesting stronger enemies)
+                    score = GOOD_DELTA * 3 + their_power / 2
+                    # Add bonus for opponent icons (force drain potential!)
+                    icon_score = their_icons * ICON_BONUS
+                    score += icon_score
                     cards_needed = max(1, int((power_needed - our_power_there) / avg_power_per_card + 0.5))
                     cards_needed = min(cards_needed, max_cards_to_move)
+
+                    reason = f"Can contest loc with {their_power} enemies (move {cards_needed}+ cards)"
+                    if their_icons > 0:
+                        reason += f" - {their_icons} opponent icon(s) = force drain!"
+
                     opportunity = {
                         'adj_idx': adj_idx,
                         'their_power': their_power,
+                        'their_icons': their_icons,
                         'action': 'contest',
                         'cards_needed': cards_needed,
                         'score': score,
-                        'reason': f"Can contest loc with {their_power} enemies (move {cards_needed}+ cards)"
+                        'reason': reason
                     }
                     if score > best_score:
                         best_score = score

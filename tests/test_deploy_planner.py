@@ -37,6 +37,7 @@ class MockCard:
     deploy: int = 0
     ability: int = 0
     location_index: int = -1
+    attached_cards: List = field(default_factory=list)  # Cards attached (weapons, devices, etc.)
 
     def load_metadata(self):
         pass
@@ -237,6 +238,7 @@ class MockCardMetadata:
     is_warrior: bool = False
     is_unique: bool = True
     has_permanent_pilot: bool = False
+    pilot_adds_power: int = 0  # "Adds X to power of anything" from gametext (0 if not a pilot)
 
     # Starship attributes
     hyperspeed: int = 0  # For space flee calculations
@@ -255,6 +257,21 @@ class MockCardMetadata:
     def __post_init__(self):
         if self.deploy_restriction_systems is None:
             self.deploy_restriction_systems = []
+
+    @property
+    def is_targeted_weapon(self) -> bool:
+        """Check if this weapon needs to attach to a character/vehicle/starship"""
+        return self.weapon_target_type is not None
+
+    @property
+    def is_standalone_weapon(self) -> bool:
+        """Check if this weapon can be used without attaching to a target"""
+        if not self.is_weapon:
+            return False
+        if not self.sub_type:
+            return True
+        sub_lower = self.sub_type.lower()
+        return sub_lower in ("automated", "artillery", "death star", "death star ii")
 
 
 def mock_get_card(blueprint_id: str) -> Optional[MockCardMetadata]:
@@ -443,7 +460,8 @@ class ScenarioBuilder:
     def add_character(self, name: str, power: int, deploy_cost: int,
                       is_pilot: bool = False, is_warrior: bool = True,
                       is_unique: bool = True,
-                      deploy_restriction_systems: List[str] = None) -> 'ScenarioBuilder':
+                      deploy_restriction_systems: List[str] = None,
+                      pilot_adds_power: int = None) -> 'ScenarioBuilder':
         """Add a character to hand.
 
         Args:
@@ -451,6 +469,8 @@ class ScenarioBuilder:
                        In SWCCG, unique cards have • prefix in their name.
             deploy_restriction_systems: List of system names this card can deploy to.
                        E.g., ["Tatooine"] for Jawas means they can only go to Tatooine sites.
+            pilot_adds_power: For pilots, "Adds X to power of anything" from gametext.
+                       Defaults to 2 if is_pilot=True and not specified.
         """
         card_id = f"card_{self._card_counter}"
         bp_id = f"char_bp_{self._card_counter}"
@@ -466,6 +486,10 @@ class ScenarioBuilder:
         )
         self.board.cards_in_hand.append(card)
 
+        # Default pilot_adds_power to 2 for pilots (common value)
+        if pilot_adds_power is None:
+            pilot_adds_power = 2 if is_pilot else 0
+
         # Register metadata
         register_mock_card(bp_id,
             title=name,
@@ -478,6 +502,7 @@ class ScenarioBuilder:
             is_warrior=is_warrior,
             is_unique=is_unique,
             deploy_restriction_systems=deploy_restriction_systems or [],
+            pilot_adds_power=pilot_adds_power,
         )
 
         return self
@@ -2243,6 +2268,81 @@ def test_unpiloted_vehicle_needs_pilot():
     assert result.passed, f"Failed: {result.failures}"
     # Verify threshold met with vehicle + pilot combo
     assert_threshold_met(result.plan, "Target")
+
+
+def test_unpiloted_vehicle_combo_beats_characters_at_contested():
+    """Test that unpiloted vehicle + pilot combo is preferred at contested locations.
+
+    At CONTESTED locations, higher power is preferred over efficiency because
+    you want to crush the opponent (favorable battle bonus).
+
+    Scenario: Enemy has 4 power at exterior location
+    - Characters: 6 power vs 4 = +2 advantage (marginal fight, risky)
+    - Vehicle+pilot: 9 power vs 4 = +5 advantage (favorable fight, crush!)
+
+    The vehicle combo should win because it gets FAVORABLE fight bonus (+4 or more).
+
+    Note: For unpiloted vehicles, power_value (passed as power=) becomes base_power
+    in the planner. The planner sets effective_power=0 for has_permanent_pilot=False.
+    """
+    scenario = (
+        ScenarioBuilder("Vehicle+Pilot Combo Crushes Contested")
+        .as_side("dark")
+        .with_force(8)  # 6 for combo + 1 reserve + 1 for battle
+        .add_ground_location("Target", my_icons=2, their_icons=2, exterior=True, their_power=4)
+        # Unpiloted vehicle - 7 base power, needs pilot (effective power=0 until piloted)
+        .add_vehicle("Blizzard 1", power=7, deploy_cost=4, has_permanent_pilot=False)
+        # Pure pilot - will add ability to vehicle (estimated +2)
+        .add_character("AT-AT Pilot", power=2, deploy_cost=2, is_pilot=True, is_warrior=False)
+        # Two weak characters as alternative (6 power total vs 9 for vehicle+pilot)
+        .add_character("General Nevar", power=3, deploy_cost=2, is_pilot=False)
+        .add_character("Admiral Ozzel", power=3, deploy_cost=1, is_pilot=False)
+        # Should prefer vehicle+pilot (9 power, favorable) over characters (6 power, marginal)
+        .expect_deployment("Blizzard 1")
+        .expect_deployment("AT-AT Pilot")
+        .expect_target("Target")
+        .build()
+    )
+    result = run_scenario(scenario)
+    assert result.passed, f"Failed: {result.failures}"
+    # Verify vehicle + pilot combo was chosen (higher power for crush)
+    deployed_cards = [inst.card_name for inst in result.plan.instructions]
+    assert "Blizzard 1" in deployed_cards, f"Blizzard 1 should be deployed, got {deployed_cards}"
+    assert "AT-AT Pilot" in deployed_cards, f"AT-AT Pilot should deploy aboard Blizzard 1, got {deployed_cards}"
+
+
+def test_warrior_pilot_can_drive_vehicle():
+    """Test that warrior-pilots (not just pure pilots) can drive vehicles.
+
+    This is the Tarkin/Blizzard 1 scenario: Tarkin is a warrior-pilot (is_pilot=True
+    AND is_warrior=True), but he can still drive an unpiloted vehicle.
+
+    Previously, only pure pilots (is_pilot=True AND is_warrior=False) were considered
+    for vehicle combos, which was a bug.
+    """
+    scenario = (
+        ScenarioBuilder("Warrior-Pilot Drives Vehicle")
+        .as_side("dark")
+        .with_force(12)
+        .add_ground_location("Contested Site", my_icons=2, their_icons=2, exterior=True, their_power=6)
+        # Unpiloted vehicle - needs a pilot
+        .add_vehicle("Blizzard 1", power=7, deploy_cost=6, has_permanent_pilot=False)
+        # Warrior-pilot (Tarkin is both pilot AND warrior) - should be able to drive!
+        .add_character("Grand Moff Tarkin", power=4, deploy_cost=4, is_pilot=True, is_warrior=True, pilot_adds_power=3)
+        # Non-pilot warrior for comparison
+        .add_character("P-59", power=4, deploy_cost=4, is_pilot=False, is_warrior=True)
+        # Vehicle + Tarkin = 7+3=10 power vs 6 = favorable (+4)
+        # Without vehicle: Tarkin + P-59 = 8 power vs 6 = marginal (+2)
+        .expect_deployment("Blizzard 1")
+        .expect_deployment("Grand Moff Tarkin")
+        .expect_target("Contested Site")
+        .build()
+    )
+    result = run_scenario(scenario)
+    assert result.passed, f"Failed: {result.failures}"
+    deployed_cards = [inst.card_name for inst in result.plan.instructions]
+    assert "Blizzard 1" in deployed_cards, f"Blizzard 1 should be deployed, got {deployed_cards}"
+    assert "Grand Moff Tarkin" in deployed_cards, f"Tarkin should pilot Blizzard 1, got {deployed_cards}"
 
 
 def test_vehicle_plus_character_combo():
@@ -6379,6 +6479,622 @@ def test_icon_tiebreaker_with_contested_locations():
         assert len(loc_b_deploys) > 0, \
             f"Should deploy to Location B (more bot icons), got: {loc_b_deploys}"
 
+    finally:
+        unpatch_card_loader()
+
+
+# =============================================================================
+# VEHICLE WEAPON TESTS
+# =============================================================================
+
+def test_vehicle_weapon_not_deployed_without_vehicle():
+    """
+    Vehicle weapons (like AT-AT Cannon) should NOT be deployed if there's
+    no vehicle at the location - even if there's a character like Vader.
+
+    Regression test for: Vader at North Ridge should not get AT-AT Cannon
+    strapped to him like he's a walking tank (even if he kind of is).
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Vehicle weapon requires vehicle")
+            .as_side("dark")
+            .with_force(7)
+            # Location with Vader (character, not vehicle)
+            .add_ground_location("Hoth: North Ridge", my_icons=2, their_icons=1)
+            .add_character_in_play("Darth Vader", power=6, location_name="Hoth: North Ridge")
+            # Enemy location we can't contest
+            .add_ground_location("Hoth: Defensive Perimeter", my_icons=2, their_icons=1, their_power=12)
+            # Vehicle weapon in hand
+            .add_weapon("AT-AT Cannon", deploy_cost=0, target_type="vehicle")
+            # Some characters we could deploy
+            .add_character("Kir Kanos", power=5, deploy_cost=3)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # AT-AT Cannon should NOT be in the plan (no vehicle to mount it on)
+        plan_cards = [inst.card_name for inst in result.plan.instructions]
+        logger.info(f"   📋 Plan cards: {plan_cards}")
+
+        assert "AT-AT Cannon" not in plan_cards, \
+            f"Vehicle weapon should not deploy without a vehicle! Plan: {plan_cards}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_vehicle_weapon_deployed_with_vehicle_in_play():
+    """
+    Vehicle weapons should be deployed when there's a vehicle at the location.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Vehicle weapon with vehicle present")
+            .as_side("dark")
+            .with_force(7)
+            # Location with an AT-AT vehicle
+            .add_ground_location("Hoth: North Ridge", my_icons=2, their_icons=1)
+            .add_vehicle_in_play("Blizzard 1", power=8, location_name="Hoth: North Ridge")
+            # Vehicle weapon in hand
+            .add_weapon("AT-AT Cannon", deploy_cost=0, target_type="vehicle")
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # AT-AT Cannon SHOULD be in the plan (vehicle is available)
+        plan_cards = [inst.card_name for inst in result.plan.instructions]
+        logger.info(f"   📋 Plan cards: {plan_cards}")
+
+        assert "AT-AT Cannon" in plan_cards, \
+            f"Vehicle weapon should deploy when vehicle is present! Plan: {plan_cards}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_vehicle_weapon_deployed_with_vehicle_in_plan():
+    """
+    Vehicle weapons should be deployed when a vehicle is being deployed
+    in the same plan (even if not yet on board).
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Vehicle weapon with vehicle in plan")
+            .as_side("dark")
+            .with_force(10)
+            # Empty exterior location where we can deploy vehicle
+            .add_ground_location("Hoth: North Ridge", my_icons=2, their_icons=1)
+            # Vehicle in hand (with permanent pilot so it can deploy alone)
+            .add_vehicle("Blizzard 4", power=8, deploy_cost=5, has_permanent_pilot=True)
+            # Vehicle weapon in hand
+            .add_weapon("AT-AT Cannon", deploy_cost=0, target_type="vehicle")
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        plan_cards = [inst.card_name for inst in result.plan.instructions]
+        logger.info(f"   📋 Plan cards: {plan_cards}")
+
+        # Both vehicle and weapon should be in the plan
+        assert "Blizzard 4" in plan_cards, \
+            f"Vehicle should be deployed! Plan: {plan_cards}"
+        assert "AT-AT Cannon" in plan_cards, \
+            f"Vehicle weapon should deploy with vehicle in same plan! Plan: {plan_cards}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_reinforce_friendly_uncontested_location():
+    """
+    Should be able to deploy to a friendly uncontested location
+    (where we have presence but no enemy) to reinforce.
+
+    This is useful for:
+    1. Building up forces before attacking adjacent locations
+    2. Deploying vehicles that can then have weapons attached
+
+    Regression test for: Bot had Vader at North Ridge but couldn't
+    deploy Blizzard 4 there because the location wasn't in targets.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Reinforce friendly uncontested location")
+            .as_side("dark")
+            .with_force(10)
+            # Friendly uncontested location with Vader (has enemy icons = strategically valuable)
+            .add_ground_location("Hoth: North Ridge", my_icons=2, their_icons=1)
+            .add_character_in_play("Darth Vader", power=6, location_name="Hoth: North Ridge")
+            # Enemy stronghold we can't contest
+            .add_ground_location("Hoth: Defensive Perimeter", my_icons=2, their_icons=1, their_power=12)
+            # Vehicle we could deploy to reinforce North Ridge
+            .add_vehicle("Blizzard 4", power=8, deploy_cost=5, has_permanent_pilot=True)
+            # Vehicle weapon that could go on the vehicle
+            .add_weapon("AT-AT Cannon", deploy_cost=0, target_type="vehicle")
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        plan_cards = [inst.card_name for inst in result.plan.instructions]
+        plan_targets = [(inst.card_name, inst.target_location_name) for inst in result.plan.instructions]
+        logger.info(f"   📋 Plan: {plan_targets}")
+
+        # Blizzard 4 should deploy to North Ridge (reinforce friendly position)
+        blizzard_deploy = next(
+            (t for n, t in plan_targets if "Blizzard" in n),
+            None
+        )
+        assert blizzard_deploy is not None, \
+            f"Blizzard 4 should be deployed! Plan: {plan_cards}"
+        assert "North Ridge" in blizzard_deploy, \
+            f"Blizzard 4 should deploy to North Ridge (friendly), not {blizzard_deploy}"
+
+        # AT-AT Cannon should also deploy (vehicle is in plan)
+        assert "AT-AT Cannon" in plan_cards, \
+            f"AT-AT Cannon should deploy to arm the Blizzard! Plan: {plan_cards}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_no_reinforce_if_no_enemy_icons():
+    """
+    Friendly locations WITHOUT enemy icons should not be reinforced
+    (they're not strategically valuable - no drain happening there).
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("No reinforce without enemy icons")
+            .as_side("dark")
+            .with_force(10)
+            # Friendly location with NO enemy icons (not valuable)
+            .add_ground_location("Hoth: Ice Plains", my_icons=2, their_icons=0)
+            .add_character_in_play("Darth Vader", power=6, location_name="Hoth: Ice Plains")
+            # Location with enemy icons (this is where we should go)
+            .add_ground_location("Hoth: North Ridge", my_icons=2, their_icons=1)
+            # Character we could deploy
+            .add_character("Kir Kanos", power=5, deploy_cost=3)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        plan_targets = [(inst.card_name, inst.target_location_name) for inst in result.plan.instructions]
+        logger.info(f"   📋 Plan: {plan_targets}")
+
+        # Should deploy to North Ridge (enemy icons), NOT Ice Plains (no strategic value)
+        kanos_deploy = next(
+            (t for n, t in plan_targets if "Kanos" in n),
+            None
+        )
+        if kanos_deploy:
+            assert "Ice Plains" not in kanos_deploy, \
+                f"Should not reinforce location without enemy icons: {kanos_deploy}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_reinforce_to_win_overrides_flee():
+    """
+    When we can flip a losing battle to winning by reinforcing,
+    should_flee should be overridden and we should reinforce.
+
+    Scenario from bug report:
+    - Vader (6 power) at North Ridge
+    - Enemy has 12 power at North Ridge
+    - Power differential is -6 (triggers should_flee normally)
+    - But we have 11+ power to deploy (Xizor 5, Mara 4, Baron 2)
+    - After reinforcing: 6 + 11 = 17 vs 12 = +5 (favorable!)
+    - Bot should reinforce, not flee
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Reinforce to win overrides flee")
+            .as_side("dark")
+            .with_force(15)  # Enough for deploy + battle
+            # Contested location - we have 6, enemy has 12 (diff = -6)
+            .add_ground_location("Hoth: North Ridge", my_icons=2, their_icons=2,
+                                 my_power=6, their_power=12)
+            # Safe adjacent location for potential flee target
+            .add_ground_location("Hoth: Ice Plains", my_icons=2, their_icons=1)
+            # CRITICAL: Must set adjacency for flee analysis to work!
+            .set_adjacent("Hoth: North Ridge", "Hoth: Ice Plains")
+            # Characters we can deploy to reinforce (5+4+2 = 11 power)
+            .add_character("Xizor", power=5, deploy_cost=4)
+            .add_character("Mara Jade", power=4, deploy_cost=3)
+            .add_character("Baron Fel", power=2, deploy_cost=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        plan_targets = [(inst.card_name, inst.target_location_name) for inst in result.plan.instructions]
+        logger.info(f"   📋 Plan: {plan_targets}")
+
+        # We should deploy AT LEAST some characters to North Ridge to reinforce
+        north_ridge_deploys = [
+            name for name, loc in plan_targets
+            if loc and "North Ridge" in loc
+        ]
+
+        # With 17 power (6+5+4+2) vs 12, we can WIN
+        # So we should be reinforcing, not fleeing
+        assert len(north_ridge_deploys) > 0, \
+            f"Should reinforce at North Ridge to win battle, but got: {plan_targets}"
+
+        # The plan should include enough power to beat the enemy
+        # At minimum Xizor (5) should be deployed there
+        assert any("Xizor" in name for name in north_ridge_deploys), \
+            f"Should deploy Xizor to North Ridge for the win, but got: {plan_targets}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_should_flee_when_cannot_win():
+    """
+    When we can't flip a losing battle to winning even with all reinforcements,
+    should_flee should remain True and we shouldn't reinforce.
+
+    Scenario:
+    - Vader (6 power) at North Ridge
+    - Enemy has 20 power at North Ridge
+    - Power differential is -14
+    - We have only 3 power to deploy (nowhere near enough)
+    - After reinforcing: 6 + 3 = 9 vs 20 = -11 (still losing badly)
+    - Bot should flee, not reinforce uselessly
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Should flee when cannot win")
+            .as_side("dark")
+            .with_force(10)
+            # Contested location - we have 6, enemy has 20 (diff = -14)
+            .add_ground_location("Hoth: North Ridge", my_icons=2, their_icons=2,
+                                 my_power=6, their_power=20)
+            # Safe adjacent location for flee target
+            .add_ground_location("Hoth: Ice Plains", my_icons=2, their_icons=1)
+            # CRITICAL: Must set adjacency for flee analysis to work!
+            .set_adjacent("Hoth: North Ridge", "Hoth: Ice Plains")
+            # Only one weak character to deploy - not enough to win
+            .add_character("Imperial Trooper", power=3, deploy_cost=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        plan_targets = [(inst.card_name, inst.target_location_name) for inst in result.plan.instructions]
+        logger.info(f"   📋 Plan: {plan_targets}")
+
+        # We should NOT deploy to North Ridge - it's a lost cause
+        north_ridge_deploys = [
+            name for name, loc in plan_targets
+            if loc and "North Ridge" in loc
+        ]
+
+        # We can't win (6 + 3 = 9 vs 20), so don't waste the trooper there
+        assert len(north_ridge_deploys) == 0, \
+            f"Should NOT reinforce at North Ridge when can't win, but got: {plan_targets}"
+
+    finally:
+        unpatch_card_loader()
+
+
+# =============================================================================
+# OVERKILL PREVENTION EDGE CASES
+# These tests ensure we don't pile excessive power onto single locations
+# =============================================================================
+
+def test_extreme_overkill_contested_20_power_advantage():
+    """
+    CRITICAL: Don't deploy to contested location with extreme overkill (+20 advantage).
+
+    This catches the "34 power at one location" bug scenario.
+    Even if it's the only contested location, we should NOT add more power.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Extreme Overkill Prevention")
+            .as_side("dark")
+            .with_force(15)
+            # Extreme overkill: 24 vs 4 = +20 advantage
+            .add_ground_location("Dominated Site", my_icons=2, their_icons=2,
+                                my_power=24, their_power=4)
+            # Another location with enemy (we could fight here instead)
+            .add_ground_location("Contested Site", my_icons=2, their_icons=1,
+                                my_power=0, their_power=6)
+            .set_adjacent("Dominated Site", "Contested Site")
+            # Characters to deploy
+            .add_character("Stormtrooper", power=4, deploy_cost=3)
+            .add_character("Officer", power=3, deploy_cost=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        dominated_deploys = [i for i in result.plan.instructions
+                            if i.target_location_name == "Dominated Site"]
+
+        logger.info(f"   📊 Dominated Site (+20 advantage): {len(dominated_deploys)} deploys")
+
+        # Should NEVER deploy to +20 advantage location
+        assert len(dominated_deploys) == 0, \
+            f"Should NOT deploy to extreme overkill (+20)! Got: {[i.card_name for i in dominated_deploys]}"
+    finally:
+        unpatch_card_loader()
+
+
+def test_extreme_uncontested_30_power():
+    """
+    CRITICAL: Don't deploy to uncontested location with 30+ power.
+
+    Even if we control a location, 30 power is absurd overkill.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Extreme Uncontested Power")
+            .as_side("dark")
+            .with_force(15)
+            # Uncontested but already has 30 power (absurd)
+            .add_ground_location("Fortress", my_icons=2, their_icons=2,
+                                my_power=30, their_power=0)
+            # Another location we could establish at
+            .add_ground_location("New Target", my_icons=2, their_icons=1)
+            # Characters to deploy
+            .add_character("Trooper", power=4, deploy_cost=3)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        fortress_deploys = [i for i in result.plan.instructions
+                           if i.target_location_name == "Fortress"]
+
+        logger.info(f"   📊 Fortress (30 power uncontested): {len(fortress_deploys)} deploys")
+
+        # Should NEVER deploy to 30 power uncontested location
+        assert len(fortress_deploys) == 0, \
+            f"Should NOT deploy to 30-power location! Got: {[i.card_name for i in fortress_deploys]}"
+    finally:
+        unpatch_card_loader()
+
+
+def test_hold_back_when_only_overkill_available():
+    """
+    When the ONLY deployment target is already overkill, hold back.
+
+    Don't waste cards on a location we're already dominating.
+    Better to keep them for future turns.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Hold Back When Only Overkill")
+            .as_side("dark")
+            .with_force(10)
+            # Only location is already overkill: 15 vs 5 = +10
+            .add_ground_location("Only Option", my_icons=2, their_icons=1,
+                                my_power=15, their_power=5)
+            # Character we could deploy
+            .add_character("Trooper", power=3, deploy_cost=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        only_option_deploys = [i for i in result.plan.instructions
+                              if i.target_location_name == "Only Option"]
+
+        logger.info(f"   📊 Only Option (+10 advantage): {len(only_option_deploys)} deploys")
+        logger.info(f"   📋 Strategy: {result.plan.strategy}")
+
+        # Should hold back, not deploy to overkill
+        assert len(only_option_deploys) == 0, \
+            f"Should hold back when only option is overkill! Got: {[i.card_name for i in only_option_deploys]}"
+    finally:
+        unpatch_card_loader()
+
+
+def test_uncontested_exactly_at_threshold():
+    """
+    Edge case: Uncontested location with exactly 10 power (threshold).
+
+    Should NOT reinforce - we're at the threshold, not below it.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Exactly At Threshold")
+            .as_side("dark")
+            .with_force(10)
+            # Exactly 10 power (the threshold)
+            .add_ground_location("At Threshold", my_icons=2, their_icons=2,
+                                my_power=10, their_power=0)
+            # Another location
+            .add_ground_location("Empty Target", my_icons=2, their_icons=1)
+            # Character to deploy
+            .add_character("Trooper", power=3, deploy_cost=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        at_threshold_deploys = [i for i in result.plan.instructions
+                               if i.target_location_name == "At Threshold"]
+        empty_deploys = [i for i in result.plan.instructions
+                        if i.target_location_name == "Empty Target"]
+
+        logger.info(f"   📊 At Threshold (10 power): {len(at_threshold_deploys)} deploys")
+        logger.info(f"   📊 Empty Target: {len(empty_deploys)} deploys")
+
+        # Should NOT reinforce location at exactly threshold
+        assert len(at_threshold_deploys) == 0, \
+            f"Should NOT reinforce at-threshold location! Got: {[i.card_name for i in at_threshold_deploys]}"
+    finally:
+        unpatch_card_loader()
+
+
+def test_contested_exactly_at_overkill_threshold():
+    """
+    Edge case: Contested location with exactly +8 advantage (overkill threshold).
+
+    +8 IS overkill - should NOT reinforce.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Exactly At Overkill Threshold")
+            .as_side("dark")
+            .with_force(10)
+            # Exactly +8 advantage (10 vs 2)
+            .add_ground_location("Exactly Overkill", my_icons=2, their_icons=2,
+                                my_power=10, their_power=2)
+            # Another location
+            .add_ground_location("Empty Target", my_icons=2, their_icons=1)
+            # Character to deploy
+            .add_character("Trooper", power=3, deploy_cost=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        overkill_deploys = [i for i in result.plan.instructions
+                           if i.target_location_name == "Exactly Overkill"]
+
+        logger.info(f"   📊 Exactly Overkill (+8): {len(overkill_deploys)} deploys")
+
+        # +8 IS overkill, should NOT reinforce
+        assert len(overkill_deploys) == 0, \
+            f"Should NOT reinforce at +8 (overkill threshold)! Got: {[i.card_name for i in overkill_deploys]}"
+    finally:
+        unpatch_card_loader()
+
+
+# =============================================================================
+# PURE PILOT REINFORCEMENT TESTS
+# Pure pilots should be saved for ships, not wasted on reinforcement
+# =============================================================================
+
+def test_pure_pilot_not_used_for_reinforcement():
+    """
+    Pure pilots should NOT be wasted on above-threshold reinforcement.
+
+    They CAN help reach threshold (first 6 power), but shouldn't pile on
+    when we're already at threshold. Save them for ships!
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Pure Pilot Reinforcement")
+            .as_side("dark")
+            .with_force(10)
+            # Location ALREADY AT THRESHOLD (6+ power) - reinforcement above threshold
+            .add_ground_location("Friendly Base", my_icons=2, their_icons=2,
+                                my_power=7, their_power=0)  # Already at 7 power
+            # Empty location (establish target)
+            .add_ground_location("Empty Target", my_icons=2, their_icons=1)
+            # Pure pilot (only has pilot skill, not warrior)
+            .add_character("Pure Pilot", power=2, deploy_cost=2, is_pilot=True, is_warrior=False)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        reinforcement_deploys = [i for i in result.plan.instructions
+                                if i.target_location_name == "Friendly Base"]
+
+        logger.info(f"   📊 Reinforcement (7 power): {len(reinforcement_deploys)} deploys")
+        logger.info(f"   📋 Strategy: {result.plan.strategy}")
+
+        # Pure pilot should NOT be used for above-threshold reinforcement
+        pure_pilot_to_friendly = [i for i in reinforcement_deploys if "Pilot" in i.card_name]
+        assert len(pure_pilot_to_friendly) == 0, \
+            f"Pure pilot should NOT reinforce above threshold! Got: {[i.card_name for i in pure_pilot_to_friendly]}"
+    finally:
+        unpatch_card_loader()
+
+
+def test_pure_pilot_can_establish():
+    """
+    Pure pilots CAN be used for establishing new presence.
+
+    Only reinforcement (adding to existing presence) is restricted.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Pure Pilot Establish")
+            .as_side("dark")
+            .with_force(10)
+            # Empty location (establish target) with enemy icons
+            .add_ground_location("Empty Target", my_icons=2, their_icons=1)
+            # Pure pilot with enough power to establish (6+ threshold)
+            .add_character("Strong Pilot", power=6, deploy_cost=4, is_pilot=True, is_warrior=False)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        establish_deploys = [i for i in result.plan.instructions
+                            if i.target_location_name == "Empty Target"]
+
+        logger.info(f"   📊 Empty Target: {len(establish_deploys)} deploys")
+        logger.info(f"   📋 Strategy: {result.plan.strategy}")
+
+        # Pure pilot CAN establish at new location
+        assert len(establish_deploys) > 0, \
+            f"Pure pilot should be able to establish! Strategy: {result.plan.strategy}"
+    finally:
+        unpatch_card_loader()
+
+
+def test_warrior_pilot_can_reinforce():
+    """
+    Warrior-pilots (have both skills) CAN reinforce.
+
+    Only PURE pilots (pilot but not warrior) are restricted.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Warrior Pilot Reinforcement")
+            .as_side("dark")
+            .with_force(10)
+            # Location with existing presence (reinforcement target)
+            .add_ground_location("Friendly Base", my_icons=2, their_icons=2,
+                                my_power=5, their_power=0)
+            # Warrior-pilot (has both skills)
+            .add_character("Warrior Pilot", power=4, deploy_cost=3, is_pilot=True, is_warrior=True)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        reinforcement_deploys = [i for i in result.plan.instructions
+                                if i.target_location_name == "Friendly Base"]
+
+        logger.info(f"   📊 Reinforcement (5 power): {len(reinforcement_deploys)} deploys")
+        logger.info(f"   📋 Strategy: {result.plan.strategy}")
+
+        # Warrior-pilot CAN reinforce (they're not pure pilots)
+        warrior_pilot_deploys = [i for i in reinforcement_deploys if "Warrior" in i.card_name]
+        assert len(warrior_pilot_deploys) > 0, \
+            f"Warrior-pilot should be able to reinforce! Strategy: {result.plan.strategy}"
     finally:
         unpatch_card_loader()
 

@@ -550,6 +550,9 @@ class DeployEvaluator(ActionEvaluator):
         if deploying_card:
             logger.debug(f"Deploying {deploying_card.title}: starship={is_starship}, vehicle={is_vehicle}, weapon={is_weapon}, pilot={is_pilot}, droid={is_droid}")
 
+        # Log available deploy targets from GEMP
+        logger.info(f"   📍 GEMP offered card_ids: {context.card_ids}")
+
         # Each card_id represents a target where we can deploy (location or card)
         for card_id in context.card_ids:
             action = EvaluatedAction(
@@ -574,6 +577,21 @@ class DeployEvaluator(ActionEvaluator):
                     action.add_reasoning(f"Not planned target (want {planned_target_name})", -100.0)
                 else:
                     # Planned target is NOT available - check for backup
+                    # DEBUG: Log why we think primary is unavailable
+                    if card_id == context.card_ids[0]:  # Only log once (first card)
+                        logger.warning(f"🔍 DEBUG: Primary target '{planned_target_name}' (id={planned_target_id}, type={type(planned_target_id).__name__}) NOT in context.card_ids")
+                        logger.warning(f"🔍 DEBUG: context.card_ids = {context.card_ids} (types: {[type(cid).__name__ for cid in context.card_ids]})")
+                        # Also log what locations we have in board_state for comparison
+                        if bs:
+                            bs_loc_ids = [(loc.card_id, loc.site_name or loc.system_name) for loc in bs.locations if loc and loc.card_id]
+                            logger.warning(f"🔍 DEBUG: board_state locations = {bs_loc_ids}")
+                            # Check if the planned_target_id exists in board_state
+                            matching_loc = next((loc for loc in bs.locations if loc and loc.card_id == planned_target_id), None)
+                            if matching_loc:
+                                logger.warning(f"🔍 DEBUG: planned_target_id {planned_target_id} FOUND in board_state at index {matching_loc.location_index}")
+                            else:
+                                logger.warning(f"🔍 DEBUG: planned_target_id {planned_target_id} NOT found in board_state locations!")
+
                     backup_id = instruction.backup_location_id if instruction else None
                     backup_name = instruction.backup_location_name if instruction else None
                     backup_reason = instruction.backup_reason if instruction else None

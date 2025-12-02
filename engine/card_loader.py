@@ -102,6 +102,30 @@ class Card:
             return 0
 
     @property
+    def pilot_adds_power(self) -> int:
+        """Get the power this pilot adds when piloting a vehicle/starship.
+
+        Parses gametext like "Adds 3 to power of anything he pilots" or
+        "Adds 2 to the power of anything she pilots".
+
+        Returns the numeric value, or 1 as fallback if pilot but no gametext found.
+        Returns 0 if not a pilot.
+        """
+        if not self.is_pilot:
+            return 0
+
+        if not self.gametext:
+            return 1  # Fallback for pilots without gametext
+
+        # Match patterns like "Adds 2 to power" or "Adds 3 to the power"
+        import re
+        match = re.search(r'Adds\s+(\d+)\s+to\s+(?:the\s+)?power\s+of\s+anything', self.gametext, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+
+        return 1  # Fallback if pilot but pattern not found
+
+    @property
     def is_character(self) -> bool:
         return self.card_type == "Character"
 

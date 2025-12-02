@@ -780,32 +780,43 @@ class DeployPhasePlanner:
     def _generate_all_ground_plans(self, characters: List[Dict], vehicles: List[Dict],
                                     ground_targets: List[LocationAnalysis],
                                     force_budget: int,
-                                    locations: List[LocationAnalysis]) -> List[Tuple[List[DeploymentInstruction], int, float]]:
+                                    locations: List[LocationAnalysis],
+                                    pilots: List[Dict] = None) -> List[Tuple[List[DeploymentInstruction], int, float]]:
         """
         Generate multiple ground plans - one for EACH target location.
 
         CRITICAL: Generate a plan for each location independently and score them.
         This ensures we consider crushing contested locations vs establishing at empty.
 
+        If pilots are provided, will also generate vehicle+pilot combo plans
+        for unpiloted ground vehicles (like Blizzard 1). Any pilot (warrior or pure)
+        can drive a vehicle.
+
         Returns list of (instructions, force_remaining, score) tuples.
         """
         plans = []
+        available_pilots = (pilots or []).copy()
 
         # Filter to affordable characters
         affordable_chars = [c for c in characters if c['cost'] <= force_budget]
 
         # Filter to affordable vehicles WITH permanent pilots (can deploy alone)
-        # Vehicles without permanent pilots need a pilot character, handled separately
         affordable_piloted_vehicles = [
             v for v in vehicles
             if v['cost'] <= force_budget and v.get('has_permanent_pilot', False)
+        ]
+
+        # Filter to unpiloted vehicles that we could potentially deploy with a pilot
+        affordable_unpiloted_vehicles = [
+            v for v in vehicles
+            if v['cost'] <= force_budget and v.get('needs_pilot', False)
         ]
 
         # Combine characters and piloted vehicles into one pool of deployable cards
         # Both can contribute power to reach threshold
         all_deployable = affordable_chars + affordable_piloted_vehicles
 
-        if not all_deployable:
+        if not all_deployable and not (affordable_unpiloted_vehicles and available_pilots):
             return plans
 
         MIN_ESTABLISH_POWER = self.deploy_threshold
@@ -859,6 +870,13 @@ class DeployPhasePlanner:
                         location_deployables.append(card)
                 else:
                     # Characters can deploy anywhere (interior/exterior check done in target filtering)
+                    # BUT: Pure pilots should NOT be wasted on OVER-THRESHOLD reinforcement
+                    # They CAN help reach threshold (first 6 power), but shouldn't pile on above that
+                    # Reinforcement = we're already at/above threshold AND no enemy presence
+                    is_above_threshold = target_loc.my_power >= MIN_ESTABLISH_POWER and target_loc.their_power == 0
+                    if is_above_threshold and card.get('is_pure_pilot'):
+                        # Skip pure pilots for above-threshold reinforcement - save them for ships!
+                        continue
                     location_deployables.append(card)
 
             if not location_deployables:
@@ -971,6 +989,117 @@ class DeployPhasePlanner:
                 score = self._score_plan(instructions, locations)
                 plans.append((instructions, force_remaining, score))
 
+        # === GENERATE VEHICLE + PILOT COMBO PLANS ===
+        # For unpiloted ground vehicles (like Blizzard 1), generate combo plans
+        # with a pilot character that will board the vehicle
+        # Any pilot (warrior or pure) can drive, but prefer pure pilots when available
+        if affordable_unpiloted_vehicles and available_pilots:
+            cheapest_pilot_cost = min(p['cost'] for p in available_pilots)
+
+            for vehicle in affordable_unpiloted_vehicles:
+                # Combined cost must fit in budget
+                combined_cost = vehicle['cost'] + cheapest_pilot_cost
+                if combined_cost > force_budget:
+                    continue
+
+                # Find all pilots that can afford to combo with this vehicle
+                affordable_pilots_for_vehicle = [p for p in available_pilots if vehicle['cost'] + p['cost'] <= force_budget]
+                if not affordable_pilots_for_vehicle:
+                    continue
+
+                # Pick best pilot: highest pilot_adds_power, with pure pilots preferred as tiebreaker
+                best_pilot = max(affordable_pilots_for_vehicle,
+                                key=lambda p: (p.get('pilot_adds_power', 1), p.get('is_pure_pilot', False)))
+                actual_combined_cost = vehicle['cost'] + best_pilot['cost']
+                # Vehicle power = base_power + pilot's "Adds X to power" (from gametext)
+                pilot_contribution = best_pilot.get('pilot_adds_power', 1)
+                actual_estimated_power = vehicle.get('base_power', 0) + pilot_contribution
+
+                # Generate a plan for each exterior ground target
+                for target_loc in ground_targets:
+                    # Vehicles can only deploy to exterior locations
+                    if not target_loc.is_exterior:
+                        continue
+
+                    # Check deploy system restrictions for vehicle
+                    restrictions = vehicle.get('deploy_restriction_systems', [])
+                    if restrictions:
+                        loc_clean = target_loc.name.lstrip('•').strip()
+                        can_deploy = False
+                        for system in restrictions:
+                            system_lower = system.lower()
+                            loc_lower = loc_clean.lower()
+                            if loc_lower.startswith(system_lower):
+                                can_deploy = True
+                                break
+                            if ':' in loc_clean:
+                                loc_system = loc_clean.split(':')[0].strip().lower()
+                                if loc_system == system_lower:
+                                    can_deploy = True
+                                    break
+                        if not can_deploy:
+                            continue
+
+                    # Adjust budget for contested locations
+                    if target_loc.their_power > 0:
+                        loc_budget = force_budget - 1
+                    else:
+                        loc_budget = force_budget
+
+                    if actual_combined_cost > loc_budget:
+                        continue
+
+                    # Calculate total power at location
+                    existing_power = target_loc.my_power if target_loc.my_power > 0 else 0
+                    total_power = existing_power + actual_estimated_power
+
+                    # Check if this meets thresholds
+                    if target_loc.their_power > 0:
+                        if total_power < target_loc.their_power + MIN_CONTEST_ADVANTAGE:
+                            continue
+                        if total_power < MIN_ESTABLISH_POWER:
+                            continue
+                    elif total_power < MIN_ESTABLISH_POWER:
+                        continue
+
+                    # Build vehicle + pilot combo plan
+                    if target_loc.their_power > 0:
+                        power_advantage = total_power - target_loc.their_power
+                        if power_advantage >= BATTLE_FAVORABLE_THRESHOLD:
+                            reason = f"Ground: Crush {target_loc.name} with vehicle ({total_power} vs {target_loc.their_power})"
+                        else:
+                            reason = f"Ground: Reinforce {target_loc.name} with vehicle ({total_power} vs {target_loc.their_power})"
+                    else:
+                        reason = f"Ground: Establish at {target_loc.name} with vehicle ({total_power} power)"
+
+                    instructions = [
+                        DeploymentInstruction(
+                            card_blueprint_id=vehicle['blueprint_id'],
+                            card_name=vehicle['name'],
+                            target_location_id=target_loc.card_id,
+                            target_location_name=target_loc.name,
+                            priority=2,
+                            reason=reason,
+                            power_contribution=vehicle.get('base_power', 0),
+                            deploy_cost=vehicle['cost'],
+                        ),
+                        DeploymentInstruction(
+                            card_blueprint_id=best_pilot['blueprint_id'],
+                            card_name=best_pilot['name'],
+                            target_location_id=target_loc.card_id,
+                            target_location_name=target_loc.name,
+                            priority=3,  # After vehicle
+                            reason=f"Pilot aboard {vehicle['name']}",
+                            power_contribution=best_pilot.get('power', 2),
+                            deploy_cost=best_pilot['cost'],
+                        )
+                    ]
+
+                    force_remaining = force_budget - actual_combined_cost
+                    score = self._score_plan(instructions, locations)
+                    plans.append((instructions, force_remaining, score))
+                    logger.debug(f"   🚗 Vehicle+pilot plan: {vehicle['name']} + {best_pilot['name']} at {target_loc.name} (power={actual_estimated_power}, cost={actual_combined_cost}, score={score:.0f})")
+
         return plans
 
     def _generate_ground_plan(self, characters: List[Dict], vehicles: List[Dict],
@@ -1024,19 +1153,20 @@ class DeployPhasePlanner:
     def _generate_space_plan(self, starships: List[Dict],
                               space_targets: List[LocationAnalysis],
                               force_budget: int,
-                              pure_pilots: List[Dict] = None) -> Tuple[List[DeploymentInstruction], int]:
+                              pilots: List[Dict] = None) -> Tuple[List[DeploymentInstruction], int]:
         """
         Generate a space-focused deployment plan using full budget.
 
-        If pure_pilots are provided, will try to include them boarding starships.
+        If pilots are provided, will try to include them boarding starships.
+        Any pilot (warrior or pure) can fly ships, but pure pilots are preferred.
 
         IMPORTANT: Ships needing pilots have 0 power until piloted. When we have
-        available pilots, we estimate piloted ship power as base_power + 2 (typical pilot ability).
+        available pilots, we estimate piloted ship power as base_power + pilot_adds_power.
         """
         instructions = []
         force_remaining = force_budget
         available_ships = starships.copy()
-        available_pure_pilots = (pure_pilots or []).copy()
+        available_pilots = (pilots or []).copy()
 
         MIN_ESTABLISH_POWER = self.deploy_threshold
 
@@ -1046,11 +1176,12 @@ class DeployPhasePlanner:
         ships_with_estimated_power = []
         for ship in available_ships:
             ship_copy = ship.copy()
-            if ship.get('needs_pilot') and available_pure_pilots:
-                # Estimate piloted power: base_power + typical pilot ability (2)
+            if ship.get('needs_pilot') and available_pilots:
+                # Estimate piloted power: base_power + best pilot's "Adds X to power" (from gametext)
                 # Include cheapest pilot cost in ship cost for budget calculation
-                cheapest_pilot_cost = min(p['cost'] for p in available_pure_pilots)
-                ship_copy['power'] = ship.get('base_power', 0) + 2  # Typical pilot adds ~2 ability
+                cheapest_pilot_cost = min(p['cost'] for p in available_pilots)
+                best_pilot_power = max(p.get('pilot_adds_power', 1) for p in available_pilots)
+                ship_copy['power'] = ship.get('base_power', 0) + best_pilot_power
                 ship_copy['original_cost'] = ship['cost']  # Save original for actual deployment
                 ship_copy['cost'] = ship['cost'] + cheapest_pilot_cost  # Include pilot cost
                 logger.debug(f"   🚀 {ship['name']}: estimated piloted power={ship_copy['power']}, "
@@ -1104,14 +1235,16 @@ class DeployPhasePlanner:
 
                 # After deploying a starship that needs a pilot, deploy a pilot aboard it
                 # This is REQUIRED for unpiloted ships, not optional
-                if ship.get('needs_pilot') and available_pure_pilots:
-                    # Find affordable pure pilot
-                    affordable_pilots = [p for p in available_pure_pilots if p['cost'] <= force_remaining]
-                    if affordable_pilots:
-                        # Pick best pilot (highest power, with bonus for matching pilot/ship)
-                        best_pilot = max(affordable_pilots, key=lambda p: _pilot_score_for_ship(p, ship))
+                # Any pilot can fly, but prefer pure pilots (they're specialized)
+                if ship.get('needs_pilot') and available_pilots:
+                    # Find affordable pilots
+                    affordable_pilots_here = [p for p in available_pilots if p['cost'] <= force_remaining]
+                    if affordable_pilots_here:
+                        # Pick best pilot: score for ship match, with pure pilots preferred
+                        best_pilot = max(affordable_pilots_here,
+                                        key=lambda p: (_pilot_score_for_ship(p, ship), p.get('is_pure_pilot', False)))
                         force_remaining -= best_pilot['cost']
-                        available_pure_pilots.remove(best_pilot)
+                        available_pilots.remove(best_pilot)
 
                         instructions.append(DeploymentInstruction(
                             card_blueprint_id=best_pilot['blueprint_id'],
@@ -1124,13 +1257,14 @@ class DeployPhasePlanner:
                             deploy_cost=best_pilot['cost'],
                         ))
                         logger.info(f"   👨‍✈️ Plan: Deploy pilot {best_pilot['name']} aboard {ship['name']}")
-                elif available_pure_pilots and not ship.get('has_permanent_pilot'):
+                elif ship.get('has_permanent_pilot') and available_pilots:
                     # Ship has permanent pilot but we can still add another pilot for extra power
-                    affordable_pilots = [p for p in available_pure_pilots if p['cost'] <= force_remaining]
-                    if affordable_pilots:
-                        best_pilot = max(affordable_pilots, key=lambda p: _pilot_score_for_ship(p, ship))
+                    affordable_pilots_here = [p for p in available_pilots if p['cost'] <= force_remaining]
+                    if affordable_pilots_here:
+                        best_pilot = max(affordable_pilots_here,
+                                        key=lambda p: (_pilot_score_for_ship(p, ship), p.get('is_pure_pilot', False)))
                         force_remaining -= best_pilot['cost']
-                        available_pure_pilots.remove(best_pilot)
+                        available_pilots.remove(best_pilot)
 
                         instructions.append(DeploymentInstruction(
                             card_blueprint_id=best_pilot['blueprint_id'],
@@ -1149,15 +1283,16 @@ class DeployPhasePlanner:
     def _generate_space_plan_for_ship(self, ship: Dict, other_ships: List[Dict],
                                        space_targets: List[LocationAnalysis],
                                        force_budget: int,
-                                       pure_pilots: List[Dict] = None) -> Tuple[List[DeploymentInstruction], int]:
+                                       pilots: List[Dict] = None) -> Tuple[List[DeploymentInstruction], int]:
         """
         Generate a space plan starting with a specific starship.
 
         This allows comparing plans that prioritize different starships.
+        Any pilot (warrior or pure) can fly, but pure pilots are preferred.
         """
         instructions = []
         force_remaining = force_budget
-        available_pure_pilots = (pure_pilots or []).copy()
+        available_pilots = (pilots or []).copy()
 
         if ship['cost'] > force_remaining:
             return instructions, force_remaining
@@ -1197,13 +1332,14 @@ class DeployPhasePlanner:
         ))
         force_remaining -= ship['cost']
 
-        # Add pure pilot aboard if available
-        if available_pure_pilots:
-            affordable_pilots = [p for p in available_pure_pilots if p['cost'] <= force_remaining]
-            if affordable_pilots:
-                best_pilot = max(affordable_pilots, key=lambda p: _pilot_score_for_ship(p, ship))
+        # Add pilot aboard if available (prefer pure pilots)
+        if available_pilots:
+            affordable_pilots_here = [p for p in available_pilots if p['cost'] <= force_remaining]
+            if affordable_pilots_here:
+                best_pilot = max(affordable_pilots_here,
+                                key=lambda p: (_pilot_score_for_ship(p, ship), p.get('is_pure_pilot', False)))
                 force_remaining -= best_pilot['cost']
-                available_pure_pilots.remove(best_pilot)
+                available_pilots.remove(best_pilot)
                 instructions.append(DeploymentInstruction(
                     card_blueprint_id=best_pilot['blueprint_id'],
                     card_name=best_pilot['name'],
@@ -1257,17 +1393,18 @@ class DeployPhasePlanner:
     def _generate_combined_space_plan(self, starships: List[Dict],
                                        space_targets: List[LocationAnalysis],
                                        force_budget: int,
-                                       pure_pilots: List[Dict] = None) -> Tuple[List[DeploymentInstruction], int]:
+                                       pilots: List[Dict] = None) -> Tuple[List[DeploymentInstruction], int]:
         """
         Generate a space plan using optimal combinations at each location.
 
         This considers deploying MULTIPLE starships + pilots to the SAME location
         to maximize power, potentially beating a single big ship strategy.
+        Any pilot (warrior or pure) can fly, but pure pilots are preferred.
         """
         instructions = []
         force_remaining = force_budget
         available_ships = starships.copy()
-        available_pilots = (pure_pilots or []).copy()
+        available_pilots = (pilots or []).copy()
 
         MIN_ESTABLISH_POWER = self.deploy_threshold
 
@@ -1527,6 +1664,8 @@ class DeployPhasePlanner:
                     pilot = ship_entry['pilot']
 
                     # Add ship instruction
+                    # CRITICAL: Use base_power for unpiloted ships (power is 0 until piloted)
+                    ship_power = actual_ship.get('base_power', actual_ship['power'])
                     instructions.append(DeploymentInstruction(
                         card_blueprint_id=actual_ship['blueprint_id'],
                         card_name=actual_ship['name'],
@@ -1534,7 +1673,7 @@ class DeployPhasePlanner:
                         target_location_name=target_loc.name,
                         priority=2,
                         reason=reason,
-                        power_contribution=actual_ship['power'],
+                        power_contribution=ship_power,
                         deploy_cost=actual_ship['cost'],
                     ))
 
@@ -1563,8 +1702,10 @@ class DeployPhasePlanner:
                         deploy_cost=ship_entry['cost'],
                     ))
 
-            # Add additional pilots if available and affordable (for piloted ships that could use boost)
-            if all_pilots and force_remaining > 0:
+            # Add additional pilots ONLY for ships with permanent pilots (power boost)
+            # Unpiloted ships already got their required pilot via combos - don't add more!
+            has_piloted_ships = any(not ship_entry.get('is_combo') for ship_entry in ships_for_loc)
+            if has_piloted_ships and all_pilots and force_remaining > 0:
                 for pilot in all_pilots:
                     if pilot['blueprint_id'] in pilots_already_added:
                         continue  # Already included via combo
@@ -2111,6 +2252,28 @@ class DeployPhasePlanner:
                 char_ground_targets.insert(0, loc)  # Contested locations first (higher priority)
                 logger.info(f"   ⚔️ Crushable ground: {loc.name} ({loc.my_power} vs {loc.their_power})")
 
+        # Include FRIENDLY uncontested ground locations for reinforcement
+        # These have our presence but NO enemy presence - good for:
+        # 1. Building up forces before attacking adjacent locations
+        # 2. Deploying vehicles that can then have weapons attached (e.g., AT-AT + AT-AT Cannon)
+        # Lower priority than contested/crushable, but still valid deployment targets
+        # IMPORTANT: Require my_icons > 0 so this is "our" location, not just presence-based
+        # IMPORTANT: Don't reinforce if already well-fortified (10+ power) - save cards for future!
+        UNCONTESTED_FORTIFIED_THRESHOLD = 10  # Don't pile on if already this much power
+        reinforceable_ground = [
+            loc for loc in locations
+            if loc.my_power > 0  # We have presence
+            and loc.their_power == 0  # Enemy has NO presence (uncontested by us)
+            and loc.is_ground  # Ground location
+            and loc.their_icons > 0  # Has enemy icons (strategically valuable)
+            and loc.my_icons > 0  # Has our icons (it's "our" location, not just presence)
+            and loc.my_power < UNCONTESTED_FORTIFIED_THRESHOLD  # Not already fortified
+        ]
+        for loc in reinforceable_ground:
+            if loc not in char_ground_targets:
+                char_ground_targets.append(loc)  # Lower priority - append to end
+                logger.info(f"   🏰 Reinforceable friendly: {loc.name} (my power: {loc.my_power}, enemy icons: {loc.their_icons})")
+
         # Include contested/crushable space locations for starship reinforcement
         # These have our presence (can deploy via presence rule even without icons)
         # CRITICAL: This includes locations where we're WINNING but can crush further
@@ -2162,8 +2325,9 @@ class DeployPhasePlanner:
         # Generate all ground plans (one per affordable character)
         # CRITICAL: Use fresh copy of `characters`, NOT `available_chars` which was depleted
         # by earlier steps. Step 5 generates INDEPENDENT plans for comparison.
+        # Pass ALL pilots (not just pure) for vehicle+pilot combos - any pilot can drive!
         all_ground_plans = self._generate_all_ground_plans(
-            characters.copy(), vehicles.copy(), char_ground_targets, force_remaining, locations
+            characters.copy(), vehicles.copy(), char_ground_targets, force_remaining, locations, all_pilots
         )
 
         # Generate all space plans (one per affordable starship)
@@ -2829,12 +2993,55 @@ class DeployPhasePlanner:
             if warriors_at_location:
                 logger.info(f"      Warriors available: {warriors_at_location}")
 
+            # =================================================================
+            # VEHICLE TRACKING for vehicle weapons (e.g., AT-AT Cannon)
+            # Vehicle weapons can ONLY be attached to vehicles!
+            # Track available vehicles at each location (from plan + existing)
+            # =================================================================
+            vehicles_at_location: Dict[str, int] = {}  # loc_id -> count of available vehicles
+
+            # Count vehicles being deployed in this plan
+            for inst in plan.instructions:
+                if inst.target_location_id:
+                    vehicle_info = next((v for v in vehicles if v['blueprint_id'] == inst.card_blueprint_id), None)
+                    if vehicle_info:
+                        loc_id = inst.target_location_id
+                        vehicles_at_location[loc_id] = vehicles_at_location.get(loc_id, 0) + 1
+                        logger.debug(f"      Vehicle in plan: {inst.card_name} -> {inst.target_location_name}")
+
+            # Count existing vehicles at locations (from board state)
+            # Only count vehicles that DON'T already have vehicle weapons attached!
+            if board_state and hasattr(board_state, 'cards_in_play'):
+                from .card_loader import get_card
+                for card_id, card in board_state.cards_in_play.items():
+                    if card.owner == board_state.my_player_name and card.zone == "AT_LOCATION":
+                        loc_idx = getattr(card, 'location_index', -1)
+                        if loc_idx >= 0 and loc_idx < len(locations):
+                            metadata = get_card(card.blueprint_id)
+                            if metadata and metadata.card_type == 'Vehicle':
+                                # Check if this vehicle already has a weapon attached
+                                has_weapon = any(
+                                    get_card(ac.blueprint_id) and get_card(ac.blueprint_id).is_weapon
+                                    for ac in card.attached_cards
+                                )
+                                if has_weapon:
+                                    logger.debug(f"      Skip vehicle {card.card_title} - already has weapon")
+                                    continue
+                                loc_id = locations[loc_idx].card_id
+                                vehicles_at_location[loc_id] = vehicles_at_location.get(loc_id, 0) + 1
+                                logger.debug(f"      Available vehicle: {card.card_title} at loc {loc_idx}")
+
+            if vehicles_at_location:
+                logger.info(f"      Vehicles available: {vehicles_at_location}")
+
             if weapon_target_locs:
                 # Track which targets already have a weapon in the plan
                 # (to enforce 1 weapon max per target)
                 targets_with_planned_weapons: Set[str] = set()
                 # Track weapons allocated per location (for character weapons)
                 weapons_at_location: Dict[str, int] = {}
+                # Track vehicle weapons allocated per location
+                vehicle_weapons_at_location: Dict[str, int] = {}
 
                 for weapon in targeted_weapons:
                     if force_remaining < weapon['cost']:
@@ -2898,8 +3105,15 @@ class DeployPhasePlanner:
                             else:
                                 logger.debug(f"      Skip {loc.name}: no available warriors ({available_warriors} warriors, {allocated_weapons} weapons allocated)")
                         elif weapon_type == 'vehicle' and loc.is_ground and loc.is_exterior:
-                            target_loc = loc
-                            break
+                            # CRITICAL: Vehicle weapons require VEHICLES!
+                            # Check if there's an available vehicle at this location
+                            available_vehicles = vehicles_at_location.get(loc.card_id, 0)
+                            allocated_vweapons = vehicle_weapons_at_location.get(loc.card_id, 0)
+                            if available_vehicles > allocated_vweapons:
+                                target_loc = loc
+                                break
+                            else:
+                                logger.debug(f"      Skip {loc.name}: no available vehicles ({available_vehicles} vehicles, {allocated_vweapons} weapons allocated)")
                         elif weapon_type == 'starship' and loc.is_space:
                             target_loc = loc
                             break
@@ -2924,9 +3138,11 @@ class DeployPhasePlanner:
                     ))
                     force_remaining -= weapon['cost']
 
-                    # Track character weapons allocated (for warrior limit)
+                    # Track weapons allocated (for target limits)
                     if weapon_type == 'character':
                         weapons_at_location[target_loc.card_id] = weapons_at_location.get(target_loc.card_id, 0) + 1
+                    elif weapon_type == 'vehicle':
+                        vehicle_weapons_at_location[target_loc.card_id] = vehicle_weapons_at_location.get(target_loc.card_id, 0) + 1
 
                     logger.info(f"   🗡️ Plan: Deploy {weapon['name']} ({weapon_type} weapon, cost {weapon['cost']}) to {target_loc.name}")
             else:
@@ -2958,9 +3174,13 @@ class DeployPhasePlanner:
                 plan.reason = f"Establish at {len([i for i in plan.instructions if i.priority == 2])} locations"
 
             logger.info(f"📋 FINAL PLAN: {plan.strategy.value} - {len(plan.instructions)} deployments")
+            # Log all location card_ids for debugging deploy target matching
+            loc_card_ids = [(loc.card_id, loc.name) for loc in locations]
+            logger.info(f"   📍 Location card_ids: {loc_card_ids}")
             for i, inst in enumerate(plan.instructions):
-                backup_info = f" (backup: {inst.backup_location_name})" if inst.backup_location_id else ""
-                logger.info(f"   {i+1}. {inst.card_name} -> {inst.target_location_name or 'table'}: {inst.reason}{backup_info}")
+                backup_info = f" (backup: {inst.backup_location_name}, id={inst.backup_location_id})" if inst.backup_location_id else ""
+                target_info = f"{inst.target_location_name or 'table'} (id={inst.target_location_id})"
+                logger.info(f"   {i+1}. {inst.card_name} -> {target_info}: {inst.reason}{backup_info}")
         else:
             plan.strategy = DeployStrategy.HOLD_BACK
             # Build detailed reason why we're holding back
@@ -3157,6 +3377,7 @@ class DeployPhasePlanner:
                 'is_pilot': metadata.is_pilot,
                 'is_warrior': is_warrior,
                 'is_pure_pilot': is_pure_pilot,
+                'pilot_adds_power': getattr(metadata, 'pilot_adds_power', 1) if metadata.is_pilot else 0,
                 'is_weapon': metadata.is_weapon,
                 'is_device': metadata.is_device,
                 'has_permanent_pilot': has_permanent_pilot,
@@ -3373,7 +3594,13 @@ class DeployPhasePlanner:
                     # This is a battle opportunity if we can also afford to battle
                     if board_state.force_pile >= 3:  # Need force for deploy + battle
                         analysis.is_battle_opportunity = True
-                        logger.info(f"   ⚔️ {analysis.name}: BATTLE OPPORTUNITY (+{potential_diff} after deploy)")
+                        # CRITICAL: If we can WIN by reinforcing, DON'T flee!
+                        # Override the earlier should_flee decision
+                        if analysis.should_flee:
+                            analysis.should_flee = False
+                            logger.info(f"   ⚔️ {analysis.name}: BATTLE OPPORTUNITY (+{potential_diff} after deploy) - OVERRIDE FLEE, REINFORCE TO WIN!")
+                        else:
+                            logger.info(f"   ⚔️ {analysis.name}: BATTLE OPPORTUNITY (+{potential_diff} after deploy)")
 
             locations.append(analysis)
 

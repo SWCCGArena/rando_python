@@ -858,6 +858,11 @@ def bot_worker():
                                     bot_state.chat_manager.on_battle_start(bot_state.board_state)
                                 bot_state.event_processor.register_battle_start_callback(on_battle_start)
 
+                                # Register callback for side detection (delayed welcome message)
+                                def on_side_detected(my_side: str, opponent_side: str):
+                                    bot_state.chat_manager.on_side_detected(my_side, opponent_side)
+                                bot_state.event_processor.register_side_detected_callback(on_side_detected)
+
                             # Parse initial game state and events
                             try:
                                 import xml.etree.ElementTree as ET
