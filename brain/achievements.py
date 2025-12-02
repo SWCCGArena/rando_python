@@ -1,11 +1,11 @@
 """
 Achievements System
 
-Tracks 72 achievements (57 original + 15 new):
-- Single card appearances (26)
-- Card combinations (19)
+Tracks 139 achievements:
+- Single card appearances (53)
+- Ships/locations (18)
+- Card combinations (42)
 - Combat/damage (5)
-- Ships/locations (4)
 - Location-specific combos (2)
 - Route score achievements (4)
 - Gameplay achievements (5)
@@ -57,7 +57,7 @@ class AchievementDef:
 ACHIEVEMENTS: Dict[str, AchievementDef] = {}
 
 # -----------------------------------------------------------------------------
-# Single Card Appearances (26)
+# Single Card Appearances (53)
 # -----------------------------------------------------------------------------
 
 _single_cards = [
@@ -87,6 +87,43 @@ _single_cards = [
     ("achievement_lando", "Everything you've heard about me is true.", "lando", "Character"),
     ("achievement_gonk", "Gonk, Gonk.", "eegee", "Character"),
     ("achievement_k2so", "Jyn, I'll be there for you. Cassian said I had to.", "2so", None),
+    # NEW: Expanded Universe & Bounty Hunters
+    ("achievement_thrawn", "To defeat an enemy, you must know them. Not simply their battle tactics, but their history, philosophy, art.", "thrawn", "Character"),
+    ("achievement_marajane", "The last command was, 'You will kill Luke Skywalker.'", "mara jade", "Character"),
+    ("achievement_dash", "The name's Dash. Dash Rendar. Freelance.", "dash rendar", "Character"),
+    ("achievement_xizor", "Vader will pay for the death of my family.", "xizor", "Character"),
+    ("achievement_ig88", "Bounty hunting is a complicated profession.", "ig-88", "Character"),
+    ("achievement_dengar", "I've been waiting for this a long time, Solo.", "dengar", "Character"),
+    ("achievement_zuckuss", "The mists have shown me the way.", "zuckuss", "Character"),
+    ("achievement_4lom", "Protocol dictates I must inform you: you are worth more dead.", "4-lom", "Character"),
+    ("achievement_aurra", "I don't work for the Republic.", "aurra sing", "Character"),
+    ("achievement_cadbane", "I make a living. And I'm the best there is.", "cad bane", "Character"),
+    ("achievement_greedo", "Oota goota, Solo?", "greedo", "Character"),
+    # NEW: Prequel Era
+    ("achievement_grievous", "Your lightsabers will make a fine addition to my collection.", "grievous", "Character"),
+    ("achievement_mace", "This party's over.", "mace windu", "Character"),
+    ("achievement_ventress", "I am fear. I am the queen of a blood-soaked planet.", "ventress", "Character"),
+    ("achievement_rex", "In my book, experience outranks everything.", "captain rex", "Character"),
+    ("achievement_cody", "Blast him!", "commander cody", "Character"),
+    # NEW: Imperial Officers
+    ("achievement_piett", "Intensify forward firepower!", "piett", "Character"),
+    ("achievement_veers", "Maximum firepower!", "veers", "Character"),
+    # NEW: Sequel Era
+    ("achievement_phasma", "You were always scum.", "phasma", "Character"),
+    ("achievement_hux", "Today is the end of the Republic!", "general hux", "Character"),
+    # NEW: Mandalorian Era
+    ("achievement_mando", "This is the way.", "din djarin", "Character"),
+    ("achievement_grogu", "That's not a toy!", "grogu", "Character"),
+    ("achievement_gideon", "You have something I want.", "moff gideon", "Character"),
+    # NEW: Rebels Era
+    ("achievement_hera", "If all you do is fight for your own life, then your life is worth nothing.", "hera syndulla", "Character"),
+    ("achievement_ezra", "I'm Ezra Bridger, and this is my home.", "ezra bridger", "Character"),
+    ("achievement_kanan", "I lost my way for a long time, but now I have a chance to change that.", "kanan", "Character"),
+    # NEW: Miscellaneous Fan Favorites
+    ("achievement_hondo", "This effort is no longer profitable!", "hondo", "Character"),
+    ("achievement_aphra", "I'm not the good guy. Get it through your head.", "aphra", "Character"),
+    ("achievement_saw", "Save the Rebellion! Save the dream!", "saw gerrera", "Character"),
+    ("achievement_krennic", "We were on the verge of greatness. We were this close.", "krennic", "Character"),
 ]
 
 for key, quote, card_match, card_type in _single_cards:
@@ -99,7 +136,7 @@ for key, quote, card_match, card_type in _single_cards:
     )
 
 # -----------------------------------------------------------------------------
-# Ships/Locations (4)
+# Ships/Locations (18)
 # -----------------------------------------------------------------------------
 
 _ships_locations = [
@@ -107,6 +144,21 @@ _ships_locations = [
     ("achievement_deathstar", "That's no moon.", "death star"),
     ("achievement_lando_falcon", "I'll take good care of her. She won't get a scratch.", "lando in millennium falcon"),
     ("achievement_onewithforce", "I'm one with the Force. The Force is with me.", "chirrut"),
+    # NEW: Iconic Starships
+    ("achievement_executor", "The Emperor is not as forgiving as I am.", "executor"),
+    ("achievement_slavei", "Put Captain Solo in the cargo hold.", "slave i"),
+    ("achievement_ghost", "Spectre-1, standing by.", "ghost"),
+    ("achievement_tantive", "There'll be no escape for the Princess this time.", "tantive"),
+    ("achievement_outrider", "She may not look like much, but she's got it where it counts.", "outrider"),
+    ("achievement_chimaera", "Thrawn's flagship looms overhead.", "chimaera"),
+    ("achievement_homeone", "May the Force be with us.", "home one"),
+    ("achievement_profundity", "Rogue One, may the Force be with you.", "profundity"),
+    ("achievement_devastator", "There she is! Set for stun.", "devastator"),
+    ("achievement_wildkarrde", "Information is the galaxy's most valuable commodity.", "wild karrde"),
+    ("achievement_houndstooth", "Scorekeeper will be pleased.", "hound's tooth"),
+    ("achievement_scimitar", "At last we will reveal ourselves to the Jedi.", "scimitar"),
+    ("achievement_supremacy", "That's Snoke's ship. You think you got him?", "supremacy"),
+    ("achievement_starkiller", "It's another Death Star.", "starkiller base"),
 ]
 
 for key, quote, card_match in _ships_locations:
@@ -138,7 +190,7 @@ ACHIEVEMENTS["achievement_womprat"] = AchievementDef(
 )
 
 # -----------------------------------------------------------------------------
-# Card Combinations (19)
+# Card Combinations (42)
 # -----------------------------------------------------------------------------
 
 _card_combos = [
@@ -160,6 +212,30 @@ _card_combos = [
     ("achievement_leia_luke", "Aren't you a little short for a stormtrooper?", ["leia", "luke"]),
     ("achievement_vader_obi", "If you strike me down, I shall become more powerful than you can possibly imagine.", ["vader", "obi"]),
     ("achievement_werehome", "Chewie, we're home.", ["chew", "han", "falcon"]),
+    # NEW: Multi-card combos
+    ("achievement_fettlegacy", "I'm just a simple man, like my father before me.", ["jango", "boba"]),
+    ("achievement_501st", "We're just clones, sir. We're meant to be expendable.", ["rex", "cody"]),
+    ("achievement_order66", "Execute Order 66.", ["cody", "kenobi"]),
+    ("achievement_spectre", "Spectre team, standing by.", ["ezra", "hera"]),
+    ("achievement_mandalore", "Wherever I go, he goes.", ["din", "grogu"]),
+    ("achievement_maul_kenobi", "I have been waiting for you.", ["maul", "kenobi"]),
+    ("achievement_dooku_anakin", "I've been looking forward to this.", ["dooku", "anakin"]),
+    ("achievement_grievous_kenobi", "General Kenobi! You are a bold one.", ["grievous", "kenobi"]),
+    ("achievement_shadows", "Black Sun rises.", ["xizor", "guri"]),
+    ("achievement_bounty_hunters", "We don't need that scum.", ["bossk", "dengar"]),
+    ("achievement_protocol_bounty", "An odd couple, but effective.", ["4-lom", "zuckuss"]),
+    ("achievement_inquisitors", "There are some things far more frightening than death.", ["inquisitor", "fifth brother"]),
+    ("achievement_twin_suns", "Look sir, droids!", ["r2", "c-3"]),
+    # NEW: Vehicle/Ship Combos
+    ("achievement_stompy", "Imperial walkers on the north ridge!", ["blizzard 1", "blizzard 2"]),
+    ("achievement_walker_assault", "That armor's too strong for blasters.", ["blizzard", "blizzard 4"]),
+    ("achievement_bounty_fleet", "There will be a substantial reward.", ["slave i", "hound's tooth"]),
+    ("achievement_hunter_armada", "No disintegrations.", ["mist hunter", "punishing one"]),
+    ("achievement_rogue_squadron", "Lock S-foils in attack position.", ["red 5", "red leader"]),
+    ("achievement_gold_squadron", "Stay on target!", ["gold leader", "gold 1"]),
+    ("achievement_imperial_navy", "Concentrate all fire on that Super Star Destroyer!", ["executor", "chimaera"]),
+    ("achievement_blockade", "A communications disruption can only mean one thing.", ["blockade flagship", "droid control"]),
+    ("achievement_cloud_cars", "I've just made a deal that will keep the Empire out of here forever.", ["cloud car", "combat cloud car"]),
 ]
 
 for key, quote, cards in _card_combos:
@@ -345,7 +421,7 @@ class AchievementTracker:
     Checks game end for score/meta achievements.
     """
 
-    TOTAL_ACHIEVEMENTS = len(ACHIEVEMENTS)  # 72
+    TOTAL_ACHIEVEMENTS = len(ACHIEVEMENTS)  # 139
 
     def __init__(self, stats_repo: 'StatsRepository' = None):
         """

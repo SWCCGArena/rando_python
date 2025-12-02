@@ -957,7 +957,7 @@ def bot_worker():
                                             logger.debug(f"📝 Saved table state at game start: {deck_name}")
 
                                     my_side = bot_state.board_state.my_side or "unknown"
-                                    opponent_side = "Light" if my_side == "Dark" else "Dark"
+                                    opponent_side = "light" if my_side == "dark" else "dark"
 
                                     bot_state.chat_manager.reset_for_game(
                                         game_id=bot_state.game_id,

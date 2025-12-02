@@ -373,7 +373,7 @@ class AstrogatorBrain(StaticBrain):
         Explains the astrogation meta-game while making clear it's optional.
         """
         # Personalized side-based greeting
-        if opponent_side == 'light':
+        if opponent_side and opponent_side.lower() == 'light':
             greeting = random.choice([
                 f"Ah, {opponent_name}. Rebel scum, I see.",
                 f"{opponent_name}. A rebel. How original.",
