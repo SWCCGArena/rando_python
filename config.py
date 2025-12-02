@@ -28,7 +28,7 @@ class Config:
     BOT_MODE: str = 'astrogator'  # 'standard', 'astrogator', 'scrap_trader'
     GAME_POLL_INTERVAL: int = 1   # seconds between game update polls (fast)
     HALL_POLL_INTERVAL: int = 10  # seconds between hall/lobby polls (slow)
-    TABLE_NAME: str = 'Bot Table: Random'
+    TABLE_NAME: str = 'Bot Table'
     GAME_FORMAT: str = 'open'  # 'open', 'legacy', etc.
 
     # AI configuration - Basic

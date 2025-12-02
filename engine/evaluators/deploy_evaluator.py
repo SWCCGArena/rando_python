@@ -567,14 +567,53 @@ class DeployEvaluator(ActionEvaluator):
             # If planner specified a target, give big bonus to it
             # If primary unavailable but backup is, use backup
             # If neither available, hold back (don't deploy randomly)
+            #
+            # SPECIAL CASE: Weapons!
+            # - Plan stores LOCATION as target (where the vehicle/character is)
+            # - GEMP offers CARD as target (the actual vehicle/character)
+            # - We must check if the offered card is AT the planned location
             # =====================================================
             if planned_target_id:
-                if card_id == planned_target_id:
+                # For weapons, check if this card is AT the planned location
+                target_matches_plan = False
+                if is_weapon and bs:
+                    target_card = bs.cards_in_play.get(card_id)
+                    if target_card:
+                        # Get the location index of the target card
+                        target_loc_idx = getattr(target_card, 'location_index', -1)
+                        if target_loc_idx >= 0 and target_loc_idx < len(bs.locations):
+                            target_loc = bs.locations[target_loc_idx]
+                            if target_loc and target_loc.card_id == planned_target_id:
+                                target_matches_plan = True
+                                logger.info(f"✅ Weapon target {target_card.card_title} is at planned location {planned_target_name}")
+
+                if card_id == planned_target_id or target_matches_plan:
                     action.add_reasoning(f"PLANNED TARGET: {planned_target_name}", +200.0)
                     logger.info(f"✅ Card {card_id} is the PLANNED target (+200)")
                 elif planned_target_id in context.card_ids:
                     # Planned target IS available, so penalize this non-planned option
                     action.add_reasoning(f"Not planned target (want {planned_target_name})", -100.0)
+                elif is_weapon and bs:
+                    # For weapons, check if ANY offered card is at the planned location
+                    # before deciding to hold back
+                    any_match_at_planned_loc = False
+                    for other_card_id in context.card_ids:
+                        other_card = bs.cards_in_play.get(other_card_id)
+                        if other_card:
+                            other_loc_idx = getattr(other_card, 'location_index', -1)
+                            if other_loc_idx >= 0 and other_loc_idx < len(bs.locations):
+                                other_loc = bs.locations[other_loc_idx]
+                                if other_loc and other_loc.card_id == planned_target_id:
+                                    any_match_at_planned_loc = True
+                                    break
+
+                    if any_match_at_planned_loc and not target_matches_plan:
+                        # Another target at the planned location exists but this isn't it
+                        action.add_reasoning(f"Not at planned location (want {planned_target_name})", -100.0)
+                    elif not any_match_at_planned_loc:
+                        # No targets at planned location - allow deploying elsewhere
+                        logger.info(f"📋 No weapon targets at planned location {planned_target_name} - allowing other options")
+                        action.add_reasoning(f"Planned location has no valid targets - ok to deploy here", +50.0)
                 else:
                     # Planned target is NOT available - check for backup
                     # DEBUG: Log why we think primary is unavailable

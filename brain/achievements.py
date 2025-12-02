@@ -465,28 +465,34 @@ class AchievementTracker:
         """
         messages = []
 
-        # Get all cards currently on board
+        # Get all cards currently on board (dict of title -> type)
         cards_on_board = self._get_cards_on_board(board_state)
 
         # Check single card achievements
-        for card_title in cards_on_board:
-            messages.extend(self._check_single_card(card_title, board_state, opponent_name))
+        for card_title, card_type in cards_on_board.items():
+            messages.extend(self._check_single_card(card_title, card_type, board_state, opponent_name))
 
         # Check card combinations
         messages.extend(self._check_card_combos(board_state, opponent_name))
 
         # Check for killed cards (was on board, now isn't)
-        messages.extend(self._check_killed_cards(cards_on_board, board_state, opponent_name))
+        current_titles = set(cards_on_board.keys())
+        messages.extend(self._check_killed_cards(current_titles, board_state, opponent_name))
 
-        # Update tracking
-        self._cards_on_board_previously = cards_on_board.copy()
-        self._cards_seen_this_game.update(cards_on_board)
+        # Update tracking (just the titles for killed card detection)
+        self._cards_on_board_previously = current_titles.copy()
+        self._cards_seen_this_game.update(current_titles)
 
         return messages
 
-    def _get_cards_on_board(self, board_state: 'BoardState') -> Set[str]:
-        """Get all card titles currently on board"""
-        cards = set()
+    def _get_cards_on_board(self, board_state: 'BoardState') -> Dict[str, str]:
+        """
+        Get all cards currently on board with their types.
+
+        Returns:
+            Dict mapping card_title (lowercase) -> card_type
+        """
+        cards = {}
 
         # Cards at locations
         for loc in board_state.locations:
@@ -494,19 +500,19 @@ class AchievementTracker:
                 continue
             # Add location itself
             if loc.site_name:
-                cards.add(loc.site_name.lower())
+                cards[loc.site_name.lower()] = "Location"
             # Add cards at location
             for card in loc.my_cards:
                 if card.card_title:
-                    cards.add(card.card_title.lower())
+                    cards[card.card_title.lower()] = getattr(card, 'card_type', '') or ''
             for card in loc.their_cards:
                 if card.card_title:
-                    cards.add(card.card_title.lower())
+                    cards[card.card_title.lower()] = getattr(card, 'card_type', '') or ''
 
         return cards
 
-    def _check_single_card(self, card_title: str, board_state: 'BoardState',
-                          opponent_name: str) -> List[str]:
+    def _check_single_card(self, card_title: str, actual_card_type: str,
+                          board_state: 'BoardState', opponent_name: str) -> List[str]:
         """Check single-card achievements"""
         messages = []
         card_lower = card_title.lower()
@@ -519,8 +525,8 @@ class AchievementTracker:
             if not ach.card_match:
                 continue
 
-            # Check if card matches
-            if not self._card_matches(card_lower, ach.card_match, ach.card_type):
+            # Check if card matches (title AND type)
+            if not self._card_matches(card_lower, ach.card_match, ach.card_type, actual_card_type):
                 continue
 
             # Check ownership if required
@@ -538,21 +544,35 @@ class AchievementTracker:
 
         return messages
 
-    def _card_matches(self, card_title: str, card_match: str, card_type: str) -> bool:
+    def _card_matches(self, card_title: str, card_match: str,
+                      required_type: str, actual_type: str) -> bool:
         """
         Check if a card title matches the achievement criteria.
 
-        For Location-type achievements where card_match doesn't contain ':',
-        we require the card to be a System (no ':') not a Site.
-        This ensures "kamino" matches "Kamino" but not "Kamino: Clone Birthing Center".
+        Args:
+            card_title: The card's title (lowercase)
+            card_match: The substring to match in the title
+            required_type: The type required by the achievement (e.g., "Character")
+            actual_type: The actual card type from the board
+
+        Returns:
+            True if the card matches both title and type requirements
         """
         # Basic contains check
         if card_match not in card_title:
             return False
 
+        # Check type restriction if specified
+        if required_type:
+            # Normalize types for comparison (handle variations like "Character" vs "Characters")
+            req_lower = required_type.lower().rstrip('s')
+            act_lower = actual_type.lower().rstrip('s')
+            if req_lower != act_lower:
+                return False
+
         # For Location-type achievements, be stricter about Systems vs Sites
         # Systems don't have ':' in the name, Sites do (e.g., "Kamino: Clone Birthing Center")
-        if card_type == "Location" and ':' not in card_match:
+        if required_type == "Location" and ':' not in card_match:
             # Require the card to also be a System (no colon)
             if ':' in card_title:
                 return False

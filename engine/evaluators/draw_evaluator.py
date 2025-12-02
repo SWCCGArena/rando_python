@@ -116,8 +116,13 @@ class DrawEvaluator(ActionEvaluator):
 
             # Flexible matching for draw actions (case-insensitive)
             # Match any action containing "draw" (e.g., "Draw", "Draw card", "Draw card into hand from Force Pile")
+            # BUT exclude "draw destiny" - that's a random number mechanic, not card drawing!
             action_lower = action_text.lower()
             if "draw" not in action_lower:
+                continue
+            if "destiny" in action_lower:
+                # "Draw destiny to X" is NOT drawing cards - skip it
+                logger.debug(f"🎴 Skipping destiny draw action: '{action_text}'")
                 continue
 
             logger.info(f"🎴 Evaluating draw action: '{action_text}' (id={action_id})")

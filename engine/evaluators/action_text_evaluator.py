@@ -509,6 +509,10 @@ class ActionTextEvaluator(ActionEvaluator):
                   "your" not in text_lower):
                 action.action_type = ActionType.CANCEL
 
+                # Check if this is a destiny-based cancel (probabilistic, may fail)
+                # These can cause loops if we keep trying and failing
+                is_destiny_based = "draw destiny" in text_lower or "if destiny" in text_lower
+
                 # Use priority_cards system to check target value
                 from ..priority_cards import get_sense_target_value
                 is_high_value, target_score, matched_card = get_sense_target_value(action_text)
@@ -516,7 +520,18 @@ class ActionTextEvaluator(ActionEvaluator):
                 # Also check if during battle (canceling battle interrupts is valuable)
                 in_battle = bs and getattr(bs, 'in_battle', False)
 
-                if is_high_value and target_score >= 80:
+                # CRITICAL: Destiny-based cancels are unreliable - don't give big bonuses
+                # They can fail and cause loops. Only worth trying for CRITICAL targets.
+                if is_destiny_based:
+                    if is_high_value and target_score >= 80:
+                        # Only try destiny cancel for truly critical targets
+                        action.score = 10.0  # Low positive - worth one try
+                        action.add_reasoning(f"Destiny cancel critical target: {matched_card}", 10.0)
+                    else:
+                        # Not worth the risk for non-critical targets
+                        action.score = -10.0
+                        action.add_reasoning("Destiny-based cancel (unreliable, skip)", -10.0)
+                elif is_high_value and target_score >= 80:
                     # Critical targets (Houjix, Ghhhk, Sense, Barrier, etc.)
                     action.score = VERY_GOOD_DELTA + 20.0
                     action.add_reasoning(f"Cancel CRITICAL target: {matched_card}!", VERY_GOOD_DELTA + 20.0)
