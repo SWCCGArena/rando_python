@@ -639,6 +639,24 @@ class DeployEvaluator(ActionEvaluator):
                         # This IS the backup target
                         action.add_reasoning(f"BACKUP TARGET: {backup_name} ({backup_reason})", +150.0)
                         logger.info(f"✅ Card {card_id} is the BACKUP target (+150) - primary {planned_target_name} unavailable")
+
+                        # === SAFETY CHECK: Don't walk into a massacre! ===
+                        # Even if this is the backup, check if deploying our card there is suicidal
+                        backup_loc = bs.get_location_by_card_id(card_id) if bs else None
+                        if backup_loc and deploying_card:
+                            their_power = bs.their_power_at_location(backup_loc.location_index)
+                            my_power = bs.my_power_at_location(backup_loc.location_index)
+                            card_power = deploying_card.power_value or 0
+                            power_after = my_power + card_power
+                            deficit = their_power - power_after
+
+                            # Penalize heavily if we'd still be at a massive deficit
+                            if their_power > 0 and deficit > 8:
+                                action.add_reasoning(f"MASSACRE! {power_after} power vs {their_power} opponent", -300.0)
+                                logger.warning(f"⚠️ BACKUP MASSACRE: {deploying_card.title} ({card_power}p) at {backup_name} = {power_after} vs {their_power}")
+                            elif their_power > 0 and card_power > 0 and their_power >= card_power * 3 and my_power == 0:
+                                action.add_reasoning(f"Outmatched! {card_power} power vs {their_power} opponent", -200.0)
+                                logger.warning(f"⚠️ BACKUP OUTMATCHED: {deploying_card.title} ({card_power}p) alone vs {their_power}")
                     elif backup_id and backup_id in context.card_ids:
                         # Backup is available but this isn't it - penalize
                         action.add_reasoning(f"Not backup target (want {backup_name})", -100.0)

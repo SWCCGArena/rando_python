@@ -7152,6 +7152,141 @@ def test_warrior_pilot_can_reinforce():
 
 
 # =============================================================================
+# BACKUP TARGET MASSACRE PREVENTION TESTS
+# =============================================================================
+
+def test_backup_skips_massacre_location():
+    """Test that backup target selection skips locations with overwhelming opponent power.
+
+    Real scenario: Panaka (4 power) had primary target Throne Room unavailable,
+    and the backup was Crait with 14 opponent power - walking into a massacre!
+
+    The backup should skip locations where:
+    - Opponent has 3x+ our power AND we'd be alone, OR
+    - Power deficit would be > 8 after deploying
+
+    Setup:
+    - Character with 4 power (below threshold but combined with others meets it)
+    - Two characters totaling 7 power (meets threshold 6)
+    - Primary: empty location with best icons
+    - Massacre candidate: 15 opponent power (deficit = 11 for 4-power char, > 8)
+    - Safe backup: empty location with fewer icons
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Backup Skips Massacre")
+            .as_side("light")
+            .with_force(15)
+            # Primary target - empty location with best icons
+            .add_ground_location("Throne Room", my_icons=2, their_icons=3)
+            # MASSACRE location - 15 opponent power vs 4 power = deficit 11 > 8
+            .add_ground_location("Salt Plateau", my_icons=2, their_icons=2, their_power=15)
+            # Safe backup - empty, fewer icons (so not primary)
+            .add_ground_location("Courtyard", my_icons=2, their_icons=1)
+            # Two characters: 4 + 3 = 7 power (meets threshold 6)
+            .add_character("Panaka", power=4, deploy_cost=3)
+            .add_character("Guard", power=3, deploy_cost=2)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Find the instruction for Panaka (the 4-power character)
+        panaka_inst = next((i for i in result.plan.instructions if "Panaka" in i.card_name), None)
+        assert panaka_inst is not None, "Panaka should be in deployment plan"
+
+        logger.info(f"   📋 Panaka: primary={panaka_inst.target_location_name}, backup={panaka_inst.backup_location_name}")
+
+        # CRITICAL: Backup should NOT be the massacre location
+        # Panaka has 4 power, Salt Plateau has 15 opponent = deficit of 11 > 8
+        assert panaka_inst.backup_location_name != "Salt Plateau", \
+            f"Backup should NOT be Salt Plateau (15 power massacre) for 4-power Panaka! " \
+            f"Got backup={panaka_inst.backup_location_name}"
+    finally:
+        unpatch_card_loader()
+
+
+def test_backup_skips_triple_power_deficit():
+    """Test backup skips locations where opponent has 3x+ our deploying card's power.
+
+    Even if deficit is under 8, if opponent has 3x our power we can't compete.
+    E.g., 4 power character vs 12 opponent = 3x = skip.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Backup Skips 3x Power")
+            .as_side("dark")
+            .with_force(12)
+            # Primary target
+            .add_ground_location("Target A", my_icons=2, their_icons=2, their_power=5)
+            # 3x power location - 4 power char vs 12 opponent
+            .add_ground_location("Danger Zone", my_icons=2, their_icons=2, their_power=12)
+            # Safe alternative
+            .add_ground_location("Safe Zone", my_icons=2, their_icons=1, their_power=0)
+            # 4 power character
+            .add_character("Trooper", power=4, deploy_cost=3)
+            .expect_target("Target A")
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        trooper_inst = next((i for i in result.plan.instructions if "Trooper" in i.card_name), None)
+        assert trooper_inst is not None, "Trooper should be in deployment plan"
+
+        logger.info(f"   📋 Trooper: primary={trooper_inst.target_location_name}, backup={trooper_inst.backup_location_name}")
+
+        # Backup should NOT be Danger Zone (12 power = 3x our 4 power)
+        assert trooper_inst.backup_location_name != "Danger Zone", \
+            f"Backup should NOT be Danger Zone (3x power)! Got: {trooper_inst.backup_location_name}"
+    finally:
+        unpatch_card_loader()
+
+
+def test_backup_deficit_over_8_skipped():
+    """Test that backup skips locations where deficit would exceed 8.
+
+    Even if opponent doesn't have 3x our power, a deficit > 8 is too much.
+    E.g., 5 power character vs 14 opponent = deficit of 9 = skip.
+
+    Setup:
+    - Two characters: 5 + 3 = 8 power (meets threshold 6)
+    - Primary: empty location with best icons
+    - Lost Cause: 14 opponent vs 5 power = deficit of 9 > 8 (skip!)
+    - Manageable: 7 opponent vs 5 power = deficit of 2 (acceptable)
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Backup Skips High Deficit")
+            .as_side("light")
+            .with_force(15)
+            # Primary target - empty with best icons
+            .add_ground_location("Main Target", my_icons=2, their_icons=3)
+            # High deficit location - 14 opponent vs 5 power = deficit of 9 > 8
+            .add_ground_location("Lost Cause", my_icons=2, their_icons=2, their_power=14)
+            # Better option - 7 opponent vs 5 power = deficit of 2
+            .add_ground_location("Manageable", my_icons=2, their_icons=1, their_power=7)
+            # Two characters: 5 + 3 = 8 power (meets threshold)
+            .add_character("Captain", power=5, deploy_cost=4)
+            .add_character("Ensign", power=3, deploy_cost=2)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        captain_inst = next((i for i in result.plan.instructions if "Captain" in i.card_name), None)
+        assert captain_inst is not None, "Captain should be in deployment plan"
+
+        logger.info(f"   📋 Captain: primary={captain_inst.target_location_name}, backup={captain_inst.backup_location_name}")
+
+        # Backup should NOT be Lost Cause (deficit of 9 > 8)
+        assert captain_inst.backup_location_name != "Lost Cause", \
+            f"Backup should NOT be Lost Cause (deficit > 8)! Got: {captain_inst.backup_location_name}"
+    finally:
+        unpatch_card_loader()
+
+
+# =============================================================================
 # MAIN (for standalone execution)
 # =============================================================================
 

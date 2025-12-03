@@ -3330,18 +3330,47 @@ class DeployPhasePlanner:
             backup_candidates = ground_locs if primary_loc.is_ground else space_locs
 
             # Find first candidate that isn't the primary
+            # CRITICAL: Skip locations where we'd be walking into a massacre!
+            # Don't pick a backup where opponent has overwhelming power compared to what we're deploying
+            card_power = inst.power_contribution or 0
+
             for loc in backup_candidates:
-                if loc.card_id != inst.target_location_id:
-                    inst.backup_location_id = loc.card_id
-                    inst.backup_location_name = loc.name
-                    # Describe why this is the backup
-                    if loc.their_power > 0 and loc.my_power == 0:
-                        inst.backup_reason = f"establish against opponent ({loc.their_power} power)"
-                    elif loc.their_power > 0:
-                        inst.backup_reason = f"reinforce ({loc.my_power} vs {loc.their_power})"
-                    else:
-                        inst.backup_reason = f"establish presence ({loc.my_icons} icons)"
-                    break
+                if loc.card_id == inst.target_location_id:
+                    continue
+
+                # === POWER DEFICIT CHECK ===
+                # If opponent has presence and we'd be massively outpowered, skip this backup
+                if loc.their_power > 0 and loc.my_power == 0:
+                    # We'd be establishing alone against opponent
+                    # Skip if opponent has 3x+ our power OR deficit would be > 8
+                    power_after = card_power
+                    deficit = loc.their_power - power_after
+
+                    if deficit > 8 or (card_power > 0 and loc.their_power >= card_power * 3):
+                        logger.debug(f"   Skipping backup {loc.name}: {card_power} power vs {loc.their_power} opponent = MASSACRE")
+                        continue
+
+                elif loc.their_power > 0 and loc.my_power > 0:
+                    # Contested location - check if deploying here helps meaningfully
+                    power_after = loc.my_power + card_power
+                    deficit = loc.their_power - power_after
+
+                    # Skip if we'd STILL be at a huge deficit after deploying
+                    if deficit > 8:
+                        logger.debug(f"   Skipping backup {loc.name}: {power_after} vs {loc.their_power} = still losing badly")
+                        continue
+
+                # This location is viable as backup
+                inst.backup_location_id = loc.card_id
+                inst.backup_location_name = loc.name
+                # Describe why this is the backup
+                if loc.their_power > 0 and loc.my_power == 0:
+                    inst.backup_reason = f"establish against opponent ({loc.their_power} power)"
+                elif loc.their_power > 0:
+                    inst.backup_reason = f"reinforce ({loc.my_power} vs {loc.their_power})"
+                else:
+                    inst.backup_reason = f"establish presence ({loc.my_icons} icons)"
+                break
 
     def _get_all_deployable_cards(self, board_state) -> List[Dict]:
         """Get all cards we can deploy with their metadata.

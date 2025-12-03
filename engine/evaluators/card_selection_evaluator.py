@@ -338,11 +338,22 @@ class CardSelectionEvaluator(ActionEvaluator):
 
                             if is_pilot:
                                 # Pilot deploying aboard - check if vehicle needs pilot
+                                # Check BOTH attached pilots AND permanent pilot (like Gold Leader In Gold 1)
                                 has_pilot_aboard = bool(target_card.attached_cards)
-                                if not has_pilot_aboard:
+                                has_permanent_pilot = target_meta and getattr(target_meta, 'has_permanent_pilot', False)
+                                is_already_piloted = has_pilot_aboard or has_permanent_pilot
+
+                                # CRITICAL: Check if deploy plan says to go somewhere else!
+                                # If plan says "deploy to ground location X", don't pilot the ship!
+                                if planned_target_id and planned_target_id != card_id:
+                                    # Plan says go elsewhere - penalize boarding ship
+                                    action.add_reasoning(f"PLAN SAYS GO TO {planned_target_name} - not aboard ship!", -200.0)
+                                    logger.warning(f"⚠️ Plan wants {deploying_card.title if deploying_card else 'card'} at {planned_target_name}, not aboard {target_name}")
+                                elif not is_already_piloted:
                                     action.add_reasoning(f"Pilot aboard unpiloted {target_name} - GOOD!", VERY_GOOD_DELTA)
                                 else:
-                                    action.add_reasoning(f"Pilot aboard already-piloted {target_name}", -20.0)
+                                    reason = "permanent pilot" if has_permanent_pilot else "pilot aboard"
+                                    action.add_reasoning(f"Already piloted ({reason}) - extra pilot is marginal", -20.0)
                             else:
                                 # NON-PILOT deploying aboard = PASSENGER - almost always bad!
                                 # Characters as passengers waste their power and are vulnerable

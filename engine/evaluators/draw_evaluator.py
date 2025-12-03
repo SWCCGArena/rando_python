@@ -256,6 +256,84 @@ class DrawEvaluator(ActionEvaluator):
                 BAD_DELTA * 1.5
             )
 
+        # === FORCE-STARVED STRATEGY ===
+        # When activation is low (< 8/turn), hoarding cards is counterproductive.
+        # If we already have enough power in hand, stop drawing and SAVE force
+        # for next turn's deployment.
+        #
+        # Key insight: Forward-looking planning
+        # - Calculate: next_turn_force = current_force + activation
+        # - If next_turn_force < deploy_cost_for_6_power + 2, stop drawing!
+        FORCE_STARVED_ACTIVATION = 8  # Below this, we're force-starved
+        FORCE_STARVED_POWER_THRESHOLD = 6  # Need this much power to be "ready to deploy"
+        FORCE_STARVED_MAX_HAND = 8  # Don't exceed this hand size when force-starved
+
+        if force_generation < FORCE_STARVED_ACTIVATION:
+            # We're force-starved! Check if we have enough deployable power
+            deployable_power = 0
+            min_cost_for_threshold_power = 999
+            power_cost_pairs = []  # Track (power, cost) for efficient combo finding
+
+            if hasattr(board_state, 'cards_in_hand'):
+                for card in board_state.cards_in_hand:
+                    if card.blueprint_id:
+                        metadata = get_card(card.blueprint_id)
+                        if metadata:
+                            card_power = metadata.power_value or 0
+                            card_cost = metadata.deploy_value or 0
+                            # Only count characters/starships with power
+                            if card_power > 0 and card_cost > 0:
+                                deployable_power += card_power
+                                power_cost_pairs.append((card_power, card_cost))
+
+                # Find minimum cost to reach 6 power threshold
+                # Sort by efficiency (power/cost ratio descending)
+                power_cost_pairs.sort(key=lambda x: x[0]/x[1] if x[1] > 0 else 0, reverse=True)
+
+                cumulative_power = 0
+                cumulative_cost = 0
+                for power, cost in power_cost_pairs:
+                    cumulative_power += power
+                    cumulative_cost += cost
+                    if cumulative_power >= FORCE_STARVED_POWER_THRESHOLD:
+                        min_cost_for_threshold_power = cumulative_cost
+                        break
+
+            # If we have 6+ deployable power, apply force-starved logic
+            if deployable_power >= FORCE_STARVED_POWER_THRESHOLD:
+                # Forward-looking: can we afford to deploy next turn?
+                next_turn_force = force_pile + force_generation
+                force_needed = min_cost_for_threshold_power + 2  # +2 buffer for reactions
+
+                logger.info(f"🎴 FORCE-STARVED check: activation={force_generation}, "
+                           f"deployable_power={deployable_power}, min_cost={min_cost_for_threshold_power}, "
+                           f"next_turn_force={next_turn_force}, need={force_needed}")
+
+                if next_turn_force < force_needed:
+                    # We WON'T have enough force next turn - stop drawing!
+                    shortfall = force_needed - next_turn_force
+                    action.add_reasoning(
+                        f"FORCE-STARVED: Save force! ({deployable_power}p ready, need {force_needed} force, "
+                        f"will have {next_turn_force} → short {shortfall})",
+                        VERY_BAD_DELTA * 0.6  # Strong penalty but not absolute
+                    )
+                    logger.warning(f"🎴 FORCE-STARVED: Stopping draw to save force for deployment")
+
+                    # If hand already has 6+ cards, make the penalty even stronger
+                    if hand_size >= 6:
+                        action.add_reasoning(
+                            f"Already have {hand_size} cards - more won't help without force",
+                            BAD_DELTA * 2
+                        )
+                        return  # Exit early - definitely don't draw
+
+                # Even if we CAN afford next turn, don't over-draw when force-starved
+                if hand_size >= FORCE_STARVED_MAX_HAND:
+                    action.add_reasoning(
+                        f"Force-starved ({force_generation}/turn): hand {hand_size} is enough",
+                        BAD_DELTA * 3
+                    )
+
         # Determine if we have deployable cards (for dynamic soft cap)
         has_deployable_cards = affordable_cards_count > 0 or max_deployable_cost > 0
 
