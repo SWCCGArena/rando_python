@@ -343,9 +343,25 @@ class CardSelectionEvaluator(ActionEvaluator):
                                 has_permanent_pilot = target_meta and getattr(target_meta, 'has_permanent_pilot', False)
                                 is_already_piloted = has_pilot_aboard or has_permanent_pilot
 
-                                # CRITICAL: Check if deploy plan says to go somewhere else!
+                                # Check if this is a RE-PILOT plan (plan says "aboard:card_id:ship_name")
+                                is_repilot_plan = planned_target_name and planned_target_name.startswith("aboard:")
+                                if is_repilot_plan:
+                                    # Extract ship card_id from "aboard:card_id:ship_name" format
+                                    parts = planned_target_name.split(":", 2)
+                                    planned_ship_id = parts[1] if len(parts) > 1 else None
+                                    planned_ship_name = parts[2] if len(parts) > 2 else "ship"
+
+                                    if str(card_id) == str(planned_ship_id):
+                                        # This IS the ship the plan wants us to pilot!
+                                        action.add_reasoning(f"RE-PILOT PLAN: Deploy aboard {planned_ship_name}!", 150.0)
+                                        logger.info(f"🎯 Following RE-PILOT plan: {deploying_card.title if deploying_card else 'pilot'} → {planned_ship_name}")
+                                    else:
+                                        # Plan says pilot a DIFFERENT ship
+                                        action.add_reasoning(f"PLAN SAYS PILOT {planned_ship_name} - not this ship!", -200.0)
+                                        logger.warning(f"⚠️ Plan wants pilot aboard {planned_ship_name}, not {target_name}")
+                                # CRITICAL: Check if deploy plan says to go somewhere else (non-repilot plan)!
                                 # If plan says "deploy to ground location X", don't pilot the ship!
-                                if planned_target_id and planned_target_id != card_id:
+                                elif planned_target_id and planned_target_id != card_id:
                                     # Plan says go elsewhere - penalize boarding ship
                                     action.add_reasoning(f"PLAN SAYS GO TO {planned_target_name} - not aboard ship!", -200.0)
                                     logger.warning(f"⚠️ Plan wants {deploying_card.title if deploying_card else 'card'} at {planned_target_name}, not aboard {target_name}")

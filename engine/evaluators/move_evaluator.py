@@ -10,10 +10,11 @@ Decision factors:
 - Spreading out vs consolidating
 - Adjacent location analysis
 - Strategic retreat from dangerous locations (from GameStrategy)
+- OFFENSIVE ATTACKS from uncontested strongholds (NEW)
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 from ..game_strategy import GameStrategy, ThreatLevel
 
@@ -30,6 +31,12 @@ POWER_DIFF_FOR_FLEE = 2  # Their power advantage to trigger flee
 POWER_DIFF_FOR_BUILDUP = 12  # Our power advantage before spreading
 OVERKILL_THRESHOLD = 4  # Our power advantage considered "overkill" for movement purposes
 CONTEST_POWER_MARGIN = 2  # How much extra power we want when contesting
+
+# Offensive attack thresholds (NEW)
+ATTACK_POWER_ADVANTAGE = 4  # Minimum power advantage to consider attack
+ATTACK_MIN_POWER = 6  # Minimum power we need at source to consider attacking
+ATTACK_SCORE_BASE = 50.0  # Base score for attack moves (must beat pass bias ~38)
+ATTACK_CRUSH_BONUS = 25.0  # Bonus for overwhelming attacks (2x enemy power)
 
 
 class MoveEvaluator(ActionEvaluator):
@@ -135,19 +142,20 @@ class MoveEvaluator(ActionEvaluator):
 
         Ported from C# AICACHandler.RankMoveAction
         Enhanced with strategic retreat logic from GameStrategy.
+        Enhanced with offensive attack logic for moving from strongholds.
         """
         if loc_idx < 0 or loc_idx >= len(board_state.locations):
             action.add_reasoning("Invalid location index", BAD_DELTA)
             return
 
         my_power = board_state.my_power_at_location(loc_idx)
-        their_power = board_state.their_power_at_location(loc_idx)
+        their_power_raw = board_state.their_power_at_location(loc_idx)
         my_card_count = board_state.my_card_count_at_location(loc_idx) if hasattr(board_state, 'my_card_count_at_location') else 0
 
-        # Sanitize negative power values (GEMP may send -1 for empty/invalid)
-        if their_power < 0:
-            logger.debug(f"⚠️ Negative enemy power ({their_power}) at loc {loc_idx} - treating as 0")
-            their_power = 0
+        # IMPORTANT: -1 means "no cards present" vs 0 meaning "cards with 0 power"
+        # This distinction matters for attack decisions
+        their_has_cards = their_power_raw >= 0
+        their_power = max(0, their_power_raw)  # For calculations, treat as 0
 
         power_diff = my_power - their_power
 
@@ -237,6 +245,30 @@ class MoveEvaluator(ActionEvaluator):
             reason = flee_analysis['reason']
             action.add_reasoning(f"Want to flee but no good destination: {reason}", BAD_DELTA)
             return
+
+        # =================================================================
+        # OFFENSIVE ATTACK LOGIC (NEW)
+        # =================================================================
+        # If we're at an uncontested location with significant power,
+        # look for adjacent enemy locations we can attack and crush.
+        # This makes the bot more aggressive and interactive!
+        #
+        # Key scenario: 12 power at Location A (uncontested), enemy has 7 power
+        # at adjacent Location B. We should ATTACK by moving to crush them.
+        # =================================================================
+
+        if not their_has_cards and my_power >= ATTACK_MIN_POWER and my_card_count >= 2:
+            # We're at an uncontested location with a stronghold - look for attack targets
+            attack_analysis = self._analyze_attack_opportunity(
+                board_state, loc_idx, my_power, my_card_count
+            )
+
+            if attack_analysis['viable']:
+                reason = attack_analysis['reason']
+                score = attack_analysis['score']
+                action.add_reasoning(reason, score)
+                logger.info(f"⚔️ ATTACK opportunity: {reason} (score={score})")
+                return
 
         # Spread out / contest logic: we have power advantage
         # BUT we must check if spreading is actually viable:
@@ -331,9 +363,13 @@ class MoveEvaluator(ActionEvaluator):
         logger.debug(f"🔍 Spread analysis from loc {loc_idx}: adjacent={adjacent_locs}, my_power={our_power_here}, max_moveable={max_moveable_power}")
 
         for adj_idx in adjacent_locs:
-            their_power = board_state.their_power_at_location(adj_idx)
+            their_power_raw = board_state.their_power_at_location(adj_idx)
             our_power_there = board_state.my_power_at_location(adj_idx)
             potential_power = our_power_there + max_moveable_power
+
+            # IMPORTANT: -1 means "no cards present" vs 0 meaning "cards with 0 power"
+            their_has_cards = their_power_raw >= 0
+            their_power = max(0, their_power_raw)  # For calculations
 
             # Get opponent icons at this location (enables force drains!)
             their_icons = 0
@@ -346,17 +382,13 @@ class MoveEvaluator(ActionEvaluator):
                     except ValueError:
                         their_icons = 0
 
-            logger.debug(f"   Adj loc {adj_idx}: their_power={their_power}, our_power={our_power_there}, their_icons={their_icons}")
-
-            # Treat negative power as 0 (GEMP may send -1 for invalid/empty)
-            if their_power < 0:
-                logger.warning(f"⚠️ Negative enemy power ({their_power}) at loc {adj_idx} - treating as 0")
-                their_power = 0
+            logger.debug(f"   Adj loc {adj_idx}: their_power={their_power_raw} (has_cards={their_has_cards}), our_power={our_power_there}, their_icons={their_icons}")
 
             # Skip if we already have good presence
             if our_power_there >= ESTABLISH_THRESHOLD and their_power == 0:
                 continue
 
+            # Empty location (no cards OR 0-power cards)
             if their_power == 0:
                 # Empty location - can we establish?
                 if potential_power >= ESTABLISH_THRESHOLD:
@@ -446,6 +478,176 @@ class MoveEvaluator(ActionEvaluator):
                     }
 
         return {'viable': False, 'reason': 'no good adjacent locations'}
+
+    def _analyze_attack_opportunity(self, board_state, loc_idx: int,
+                                     our_power_here: int, our_card_count: int) -> dict:
+        """
+        Analyze if we can attack an adjacent enemy position from our stronghold.
+
+        This is OFFENSIVE logic - we're at an uncontested location and looking
+        to move to ATTACK enemies at adjacent locations.
+
+        Key criteria:
+        - We have significantly more power than them
+        - We can afford to move enough cards
+        - Moving would give us power advantage at the target
+        - We retain some presence at our source (optional but preferred)
+
+        Returns dict with:
+            viable: bool
+            reason: str
+            score: float (if viable)
+            target_idx: int (if viable)
+        """
+        ESTABLISH_THRESHOLD = 6
+        ICON_BONUS = 15.0  # Per opponent icon
+
+        force_available = board_state.force_pile
+        if force_available < 1:
+            return {'viable': False, 'reason': 'no force to move'}
+
+        # Estimate power per card
+        avg_power_per_card = our_power_here / max(our_card_count, 1)
+
+        # How many cards can we move? (limited by force and count)
+        # For attacks, we might want to move ALL cards if target is juicy enough
+        max_cards_to_move = min(force_available, our_card_count)
+        max_moveable_power = int(max_cards_to_move * avg_power_per_card)
+
+        # Also calculate conservative move (leave some behind)
+        cards_to_leave = 1 if our_card_count > 2 else 0
+        conservative_cards = min(force_available, our_card_count - cards_to_leave)
+        conservative_power = int(conservative_cards * avg_power_per_card)
+
+        # Find adjacent locations with enemies
+        adjacent_locs = board_state.find_adjacent_locations(loc_idx)
+        logger.debug(f"⚔️ Attack analysis from loc {loc_idx}: adjacent={adjacent_locs}, "
+                    f"my_power={our_power_here}, max_moveable={max_moveable_power}")
+
+        best_attack = None
+        best_score = 0
+
+        for adj_idx in adjacent_locs:
+            their_power_raw = board_state.their_power_at_location(adj_idx)
+
+            # -1 means no cards, 0 means 0-power cards present
+            their_has_cards = their_power_raw >= 0
+            their_power = max(0, their_power_raw)
+
+            # Skip empty locations (no one to attack) - use spread logic for those
+            if not their_has_cards or their_power == 0:
+                continue
+
+            our_power_there = board_state.my_power_at_location(adj_idx)
+
+            # Get opponent icons (affects score - attacking high-icon locations is valuable)
+            their_icons = 0
+            if adj_idx < len(board_state.locations):
+                adj_loc = board_state.locations[adj_idx]
+                their_icons_str = adj_loc.their_icons or ""
+                if their_icons_str and their_icons_str != "0":
+                    try:
+                        their_icons = int(their_icons_str.replace("*", "").strip() or "0")
+                    except ValueError:
+                        their_icons = 0
+
+            logger.debug(f"   Attack target loc {adj_idx}: their_power={their_power}, "
+                        f"our_power={our_power_there}, their_icons={their_icons}")
+
+            # Calculate attack scenarios
+
+            # Scenario 1: All-in attack (move everyone)
+            all_in_power = our_power_there + max_moveable_power
+            all_in_advantage = all_in_power - their_power
+
+            # Scenario 2: Conservative attack (leave some behind)
+            conservative_total = our_power_there + conservative_power
+            conservative_advantage = conservative_total - their_power
+
+            # Determine if attack is viable
+            # Need at least ATTACK_POWER_ADVANTAGE to make it worth it
+            if conservative_advantage >= ATTACK_POWER_ADVANTAGE:
+                # Good attack with conservative approach
+                cards_needed = max(1, int((their_power + ATTACK_POWER_ADVANTAGE - our_power_there) / avg_power_per_card + 0.5))
+                cards_needed = min(cards_needed, conservative_cards)
+
+                # Calculate score
+                score = ATTACK_SCORE_BASE
+                # Bonus for crushing attacks (2x their power)
+                if conservative_total >= their_power * 2:
+                    score += ATTACK_CRUSH_BONUS
+                    crush_text = "CRUSH "
+                else:
+                    crush_text = ""
+                # Bonus for opponent icons (force drain denial + potential flip)
+                score += their_icons * ICON_BONUS
+                # Bonus for bigger enemy forces (more impactful win)
+                score += their_power / 2
+
+                reason = (f"{crush_text}ATTACK {their_power} enemies with {conservative_total} power "
+                         f"(move {cards_needed} cards, +{conservative_advantage} advantage)")
+                if their_icons > 0:
+                    reason += f" - deny {their_icons} icon drain!"
+
+                attack = {
+                    'target_idx': adj_idx,
+                    'their_power': their_power,
+                    'their_icons': their_icons,
+                    'our_total_power': conservative_total,
+                    'advantage': conservative_advantage,
+                    'cards_needed': cards_needed,
+                    'all_in': False,
+                    'score': score,
+                    'reason': reason
+                }
+
+                if score > best_score:
+                    best_score = score
+                    best_attack = attack
+
+            elif all_in_advantage >= ATTACK_POWER_ADVANTAGE:
+                # Only viable with all-in attack - riskier but consider it
+                cards_needed = max_cards_to_move
+
+                score = ATTACK_SCORE_BASE - 10  # Slight penalty for all-in
+                if all_in_power >= their_power * 2:
+                    score += ATTACK_CRUSH_BONUS
+                    crush_text = "CRUSH "
+                else:
+                    crush_text = ""
+                score += their_icons * ICON_BONUS
+                score += their_power / 2
+
+                reason = (f"{crush_text}ALL-IN ATTACK {their_power} enemies with {all_in_power} power "
+                         f"(move ALL {cards_needed} cards, +{all_in_advantage} advantage)")
+                if their_icons > 0:
+                    reason += f" - deny {their_icons} icon drain!"
+
+                attack = {
+                    'target_idx': adj_idx,
+                    'their_power': their_power,
+                    'their_icons': their_icons,
+                    'our_total_power': all_in_power,
+                    'advantage': all_in_advantage,
+                    'cards_needed': cards_needed,
+                    'all_in': True,
+                    'score': score,
+                    'reason': reason
+                }
+
+                if score > best_score:
+                    best_score = score
+                    best_attack = attack
+
+        if best_attack:
+            return {
+                'viable': True,
+                'reason': best_attack['reason'],
+                'score': best_attack['score'],
+                'target_idx': best_attack['target_idx']
+            }
+
+        return {'viable': False, 'reason': 'no attackable enemies at adjacent locations'}
 
     def reset_pending_moves(self):
         """Reset pending move tracking (call at turn start)"""

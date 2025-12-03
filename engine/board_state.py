@@ -776,10 +776,11 @@ class BoardState:
         Determine if we should concede the game.
 
         Smarter concede conditions:
-        1. Total life force < 6 (nearly depleted)
-        2. Can't afford to deploy any cards in hand with available force
+        1. IMMEDIATE: Battle damage exceeds remaining life force (fatal damage)
+        2. Total life force < 6 (nearly depleted)
+        3. Can't afford to deploy any cards in hand with available force
            (available = total_lifeforce - 3, reserving 3 for draw phase)
-        3. No contested locations where a battle could turn things around
+        4. No contested locations where a battle could turn things around
 
         Returns:
             Tuple of (should_concede, reason)
@@ -788,6 +789,40 @@ class BoardState:
 
         my_life = self.total_reserve_force()
         their_life = self.their_total_life_force()
+
+        # ==============================================================
+        # IMMEDIATE CHECK: Fatal battle damage
+        # If we're in a battle and damage exceeds our life force, concede NOW
+        # This prevents making opponents wait while we process inevitable loss
+        # ==============================================================
+        my_side = getattr(self, 'my_side', 'dark')
+        if my_side == 'dark':
+            my_damage = self.dark_damage_remaining
+            my_attrition = self.dark_attrition_remaining
+        else:
+            my_damage = self.light_damage_remaining
+            my_attrition = self.light_attrition_remaining
+
+        # Total damage we need to lose from life force
+        # (attrition can be satisfied by forfeiting cards, but battle damage goes to life force)
+        total_fatal_damage = my_damage
+        if total_fatal_damage > 0 and total_fatal_damage >= my_life:
+            reason = f"Fatal battle damage! {total_fatal_damage} damage >= {my_life} life force remaining"
+            logger.info(f"🏳️ FATAL DAMAGE: {reason}")
+            return True, reason
+
+        # Also check if attrition is so high we can't survive
+        # Even if we forfeit all cards, leftover attrition goes to life force
+        # Rough estimate: if attrition > (cards_in_play * 3) + my_life, we're doomed
+        my_cards_in_play = sum(1 for c in self.cards_in_play.values()
+                               if c.owner == self.my_player_name)
+        max_forfeit_value = my_cards_in_play * 3  # Rough estimate of forfeit value
+        leftover_attrition = max(0, my_attrition - max_forfeit_value)
+        total_life_damage = my_damage + leftover_attrition
+        if total_life_damage > 0 and total_life_damage >= my_life:
+            reason = f"Unsurvivable damage! {my_damage} damage + ~{leftover_attrition} leftover attrition >= {my_life} life force"
+            logger.info(f"🏳️ UNSURVIVABLE: {reason}")
+            return True, reason
 
         # Don't concede if we still have reasonable life force
         if my_life >= 6:
@@ -1118,22 +1153,41 @@ class BoardState:
 
     def find_adjacent_locations(self, loc_idx: int) -> List[int]:
         """
-        Find locations adjacent to this one (index +/- 1).
+        Find locations adjacent to this one (index +/- 1 AND same system).
 
-        Ground movement is typically limited to adjacent locations.
+        In SWCCG, ground locations are only adjacent if:
+        1. They are physically next to each other on the board (index +/- 1)
+        2. They are in the SAME system (e.g., both "Tatooine:" locations)
+
+        A Naboo location is NEVER adjacent to a Tatooine location, even if
+        they happen to be next to each other on the board.
+
         Returns list of valid adjacent location indices.
         """
         adjacent = []
 
+        # Get our system name for comparison
+        our_system = self.get_system_name(loc_idx)
+        if not our_system:
+            return adjacent
+
         # Check left
         if loc_idx > 0 and loc_idx - 1 < len(self.locations):
-            if self.locations[loc_idx - 1]:
-                adjacent.append(loc_idx - 1)
+            left_loc = self.locations[loc_idx - 1]
+            if left_loc:
+                left_system = self.get_system_name(loc_idx - 1)
+                # Must be in the same system to be adjacent
+                if left_system == our_system:
+                    adjacent.append(loc_idx - 1)
 
         # Check right
         if loc_idx + 1 < len(self.locations):
-            if self.locations[loc_idx + 1]:
-                adjacent.append(loc_idx + 1)
+            right_loc = self.locations[loc_idx + 1]
+            if right_loc:
+                right_system = self.get_system_name(loc_idx + 1)
+                # Must be in the same system to be adjacent
+                if right_system == our_system:
+                    adjacent.append(loc_idx + 1)
 
         return adjacent
 

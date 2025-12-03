@@ -235,6 +235,12 @@ class EventProcessor:
         card_title = card.card_title if card else blueprint_id
         logger.debug(f"🃏 Card added: {card_title} ({blueprint_id}) to {zone}")
 
+        # === OPPONENT CARD TRACKING ===
+        # Log opponent deployments at INFO level for strategy analysis
+        is_opponent = owner != self.board_state.my_player_name
+        if is_opponent and zone == "AT_LOCATION":
+            self._log_opponent_deployment(card_title, blueprint_id, location_index)
+
         # Notify strategy controller of deployments at locations (for optimization)
         # This invalidates the location's cached cardInfo check so it will be re-checked
         if zone == "AT_LOCATION" and location_index >= 0:
@@ -348,6 +354,48 @@ class EventProcessor:
 
         # Notify callbacks (for achievements, etc.)
         self._notify_card_placed(site_name, blueprint_id, "LOCATIONS", owner)
+
+    def _log_opponent_deployment(self, card_title: str, blueprint_id: str, location_index: int):
+        """
+        Log opponent card deployment with card details for strategy analysis.
+
+        This helps us understand opponent strategy and prepare counter-measures.
+        """
+        card_meta = get_card(blueprint_id)
+        if not card_meta:
+            logger.info(f"👁️ OPPONENT DEPLOYED: {card_title} at location {location_index}")
+            return
+
+        # Build card info string
+        card_type = card_meta.card_type or "Unknown"
+        power = card_meta.power_value or 0
+        ability = card_meta.ability_value or 0
+
+        # Get location name if available
+        loc_name = f"location {location_index}"
+        if 0 <= location_index < len(self.board_state.locations):
+            loc = self.board_state.locations[location_index]
+            loc_name = loc.site_name or loc.system_name or loc_name
+
+        # Build traits list
+        traits = []
+        if card_meta.is_pilot:
+            traits.append("Pilot")
+        if card_meta.is_warrior:
+            traits.append("Warrior")
+        if getattr(card_meta, 'is_spy', False):
+            traits.append("Spy")
+        if card_meta.has_permanent_pilot:
+            traits.append("Perm-Pilot")
+
+        traits_str = f" [{', '.join(traits)}]" if traits else ""
+
+        if card_type == "Character":
+            logger.info(f"👁️ OPPONENT DEPLOYED: {card_title} (Power {power}, Ability {ability}){traits_str} → {loc_name}")
+        elif card_type in ["Starship", "Vehicle"]:
+            logger.info(f"👁️ OPPONENT DEPLOYED: {card_title} ({card_type}, Power {power}){traits_str} → {loc_name}")
+        else:
+            logger.info(f"👁️ OPPONENT DEPLOYED: {card_title} ({card_type}) → {loc_name}")
 
     def _handle_remove_card(self, event: ET.Element):
         """

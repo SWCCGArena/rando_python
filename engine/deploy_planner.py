@@ -239,13 +239,100 @@ class DeployPhasePlanner:
         self._last_phase = ""
         self._last_turn = -1
 
+    def _find_unpiloted_ships_in_play(self, board_state) -> List[Dict]:
+        """
+        Find all unpiloted starships/vehicles we have in play.
+
+        These are ships that had a pilot but the pilot was forfeited,
+        or ships that we deployed via special rules without a pilot.
+
+        Returns:
+            List of dicts with 'card_id', 'name', 'blueprint_id', 'location_id',
+            'location_name', 'base_power', 'is_starship', 'is_vehicle' keys.
+        """
+        unpiloted = []
+        if not board_state:
+            return unpiloted
+
+        my_player = getattr(board_state, 'my_player_name', None)
+        if not my_player:
+            return unpiloted
+
+        cards_in_play = getattr(board_state, 'cards_in_play', {})
+
+        for card_id, card in cards_in_play.items():
+            # Skip if not ours
+            if card.owner != my_player:
+                continue
+
+            # Skip placeholder blueprints (hidden cards)
+            if card.blueprint_id and card.blueprint_id.startswith('-1_'):
+                continue
+
+            metadata = get_card(card.blueprint_id) if card.blueprint_id else None
+            if not metadata:
+                continue
+
+            # Check if it's a starship or vehicle
+            if not (metadata.is_starship or metadata.is_vehicle):
+                continue
+
+            # Skip if it has permanent pilot
+            if metadata.has_permanent_pilot:
+                continue
+
+            # Check if it has a pilot aboard (attached)
+            has_pilot_aboard = False
+            for attached in card.attached_cards:
+                attached_meta = get_card(attached.blueprint_id) if attached.blueprint_id else None
+                if attached_meta and attached_meta.is_pilot:
+                    has_pilot_aboard = True
+                    break
+
+            if has_pilot_aboard:
+                continue
+
+            # This ship/vehicle is unpiloted!
+            # Get location info from card's location
+            location_id = card.location_index
+            location_name = None
+
+            # Try to find the location name from board state locations
+            locations = getattr(board_state, 'locations', [])
+            for loc in locations:
+                if hasattr(loc, 'card_id') and str(loc.card_id) == str(location_id):
+                    location_name = getattr(loc, 'name', None)
+                    break
+
+            # Get base power from metadata
+            base_power = metadata.power_value if metadata.power_value else 0
+
+            unpiloted.append({
+                'card_id': card_id,
+                'name': metadata.title,
+                'blueprint_id': card.blueprint_id,
+                'location_id': location_id,
+                'location_name': location_name,
+                'base_power': base_power,
+                'is_starship': metadata.is_starship,
+                'is_vehicle': metadata.is_vehicle,
+            })
+            logger.warning(f"🚀 Found UNPILOTED ship in play: {metadata.title} (#{card_id}) at {location_name or 'unknown'}")
+
+        return unpiloted
+
     def _get_dynamic_threshold(self, locations: List['LocationAnalysis'],
-                                is_space: bool, turn_number: int) -> int:
+                                is_space: bool, turn_number: int,
+                                life_force: int = 60) -> int:
         """
         Calculate dynamic deploy threshold based on game state.
 
-        Early game (turn < 4) with no contested locations: use relaxed threshold.
-        Later game OR contested locations: use full threshold.
+        Threshold adjustments (applied in order):
+        1. Early game (turn < 4) with no contested locations: -2 (relaxed)
+        2. Late game with low life force: additional decay
+           - life_force < 10: -3 (desperate - deploy anything)
+           - life_force < 20: -2 (critical - very aggressive)
+           - life_force < 30: -1 (urgent - somewhat aggressive)
 
         Ground and space are tracked SEPARATELY:
         - Contested ground doesn't raise space threshold
@@ -258,42 +345,63 @@ class DeployPhasePlanner:
             locations: All analyzed locations on board
             is_space: True for space threshold, False for ground
             turn_number: Current turn number
+            life_force: Total remaining life force (reserve + used + force pile)
 
         Returns:
-            Deploy threshold to use (full or relaxed)
+            Deploy threshold to use (minimum 1)
         """
-        # After turn 4, always use full threshold - game is developed
-        if turn_number >= 4:
-            logger.debug(f"   📊 Dynamic threshold: turn {turn_number} >= 4, using full {self.deploy_threshold}")
-            return self.deploy_threshold
+        threshold = self.deploy_threshold
+        domain = 'space' if is_space else 'ground'
 
-        # Check for contested locations in the relevant domain only
-        has_contested = False
-        for loc in locations:
-            # Skip locations without both players present
-            if loc.my_power <= 0 or loc.their_power <= 0:
-                continue
+        # EARLY GAME RELAXATION: Before turn 4 with no contested locations
+        early_game_relaxed = False
+        if turn_number < 4:
+            # Check for contested locations in the relevant domain only
+            has_contested = False
+            for loc in locations:
+                # Skip locations without both players present
+                if loc.my_power <= 0 or loc.their_power <= 0:
+                    continue
 
-            # Check the appropriate domain
-            if is_space and loc.is_space:
-                has_contested = True
-                logger.debug(f"   📊 Contested space found: {loc.name} ({loc.my_power} vs {loc.their_power})")
-                break
-            elif not is_space and loc.is_ground:
-                has_contested = True
-                logger.debug(f"   📊 Contested ground found: {loc.name} ({loc.my_power} vs {loc.their_power})")
-                break
+                # Check the appropriate domain
+                if is_space and loc.is_space:
+                    has_contested = True
+                    logger.debug(f"   📊 Contested space found: {loc.name} ({loc.my_power} vs {loc.their_power})")
+                    break
+                elif not is_space and loc.is_ground:
+                    has_contested = True
+                    logger.debug(f"   📊 Contested ground found: {loc.name} ({loc.my_power} vs {loc.their_power})")
+                    break
 
-        if has_contested:
-            logger.debug(f"   📊 Dynamic threshold ({'space' if is_space else 'ground'}): "
-                        f"contested location found, using full {self.deploy_threshold}")
-            return self.deploy_threshold
+            if not has_contested:
+                threshold = max(3, threshold - 2)
+                early_game_relaxed = True
 
-        # Relaxed threshold: -2 from base (6 -> 4)
-        relaxed = max(3, self.deploy_threshold - 2)
-        logger.debug(f"   📊 Dynamic threshold ({'space' if is_space else 'ground'}): "
-                    f"turn {turn_number}, no contest, using relaxed {relaxed}")
-        return relaxed
+        # LATE GAME LIFE FORCE DECAY: Lower threshold when losing badly
+        life_force_decay = 0
+        if life_force < 10:
+            life_force_decay = 3  # Desperate: deploy anything with power >= 1
+        elif life_force < 20:
+            life_force_decay = 2  # Critical: deploy anything with power >= 2
+        elif life_force < 30:
+            life_force_decay = 1  # Urgent: slightly more aggressive
+
+        if life_force_decay > 0:
+            threshold = max(1, threshold - life_force_decay)
+
+        # Build log message
+        adjustments = []
+        if early_game_relaxed:
+            adjustments.append(f"early game -2")
+        if life_force_decay > 0:
+            adjustments.append(f"life force {life_force} -{life_force_decay}")
+
+        if adjustments:
+            logger.debug(f"   📊 Dynamic threshold ({domain}): {threshold} ({', '.join(adjustments)})")
+        else:
+            logger.debug(f"   📊 Dynamic threshold ({domain}): {threshold} (full threshold, turn {turn_number})")
+
+        return threshold
 
     def _calculate_plan_reserve(self, instructions: List['DeploymentInstruction'],
                                  locations: List['LocationAnalysis'],
@@ -1627,6 +1735,32 @@ class DeployPhasePlanner:
         all_deployable_space = affordable_piloted_ships + ship_pilot_combos
 
         if not all_deployable_space:
+            # Log WHY no space plans can be generated (helps debugging)
+            if starships:
+                if affordable_piloted_ships:
+                    # This shouldn't happen - we have affordable piloted ships
+                    pass
+                elif affordable_unpiloted_ships:
+                    if not all_pilots:
+                        logger.info(f"   ⚠️ Space: {len(affordable_unpiloted_ships)} unpiloted ship(s) but NO pilots in hand")
+                    elif not affordable_pilots:
+                        logger.info(f"   ⚠️ Space: {len(affordable_unpiloted_ships)} unpiloted ship(s) but pilots too expensive (force={force_budget})")
+                    elif not ship_pilot_combos:
+                        # Have unpiloted ships and pilots, but combos exceed budget
+                        cheapest_combo = None
+                        for ship in affordable_unpiloted_ships:
+                            for pilot in affordable_pilots:
+                                cost = ship['cost'] + pilot['cost']
+                                if cheapest_combo is None or cost < cheapest_combo[2]:
+                                    cheapest_combo = (ship['name'], pilot['name'], cost)
+                        if cheapest_combo:
+                            logger.info(f"   ⚠️ Space: ship+pilot combos exceed budget "
+                                       f"(cheapest: {cheapest_combo[0]}+{cheapest_combo[1]}={cheapest_combo[2]}, have {force_budget})")
+                else:
+                    # Ships exist but none affordable
+                    cheapest = min(starships, key=lambda s: s['cost'])
+                    logger.info(f"   ⚠️ Space: starship(s) too expensive "
+                               f"(cheapest: {cheapest['name']} costs {cheapest['cost']}, have {force_budget})")
             return plans
 
         # Use dynamic threshold if provided, otherwise fall back to default
@@ -1945,14 +2079,19 @@ class DeployPhasePlanner:
                 loc_type = "GROUND"
             logger.info(f"      - {loc.name}: {loc_type}, my={loc.my_power}, their={loc.their_power}, my_icons={loc.my_icons}, their_icons={loc.their_icons}")
 
+        # === LOG OPPONENT BOARD STATE SUMMARY ===
+        self._log_opponent_board_summary(board_state, locations)
+
         # =================================================================
         # Calculate DYNAMIC thresholds for ground and space separately
         # Early game (turn < 4) with no contested locations: relaxed threshold (4)
         # Later game OR contested locations: full threshold (6)
+        # Late game with low life force: threshold decays further
         # =================================================================
-        ground_threshold = self._get_dynamic_threshold(locations, is_space=False, turn_number=current_turn)
-        space_threshold = self._get_dynamic_threshold(locations, is_space=True, turn_number=current_turn)
-        logger.info(f"   📊 Dynamic thresholds: ground={ground_threshold}, space={space_threshold} (turn {current_turn})")
+        life_force = board_state.total_reserve_force() if hasattr(board_state, 'total_reserve_force') else 60
+        ground_threshold = self._get_dynamic_threshold(locations, is_space=False, turn_number=current_turn, life_force=life_force)
+        space_threshold = self._get_dynamic_threshold(locations, is_space=True, turn_number=current_turn, life_force=life_force)
+        logger.info(f"   📊 Dynamic thresholds: ground={ground_threshold}, space={space_threshold} (turn {current_turn}, life={life_force})")
 
         # =================================================================
         # STEP 1: DEPLOY LOCATIONS FIRST
@@ -2392,6 +2531,72 @@ class DeployPhasePlanner:
                 logger.info(f"   👨‍✈️ Pure pilots (best for ships): {pure_names}")
 
         # =================================================================
+        # STEP 5-PRE: CHECK FOR UNPILOTED SHIPS IN PLAY
+        # If we have unpiloted ships on the board (pilot was forfeited),
+        # generate RE-PILOT plans to reclaim them. These are HIGH VALUE
+        # because we save the cost of deploying a new ship!
+        # =================================================================
+        unpiloted_ships = self._find_unpiloted_ships_in_play(board_state)
+        all_repilot_plans = []
+
+        if unpiloted_ships and all_pilots:
+            logger.info(f"   🚀 Found {len(unpiloted_ships)} UNPILOTED ships - generating re-pilot plans")
+
+            for ship in unpiloted_ships:
+                # Find affordable pilots for this ship
+                affordable_pilots_for_ship = [
+                    p for p in all_pilots if p['cost'] <= force_remaining
+                ]
+
+                if not affordable_pilots_for_ship:
+                    logger.info(f"      ⏭️ No affordable pilots for {ship['name']}")
+                    continue
+
+                # Score each pilot for this ship and pick the best
+                pilot_scores = []
+                for pilot in affordable_pilots_for_ship:
+                    score = _pilot_score_for_ship(pilot, ship)
+                    pilot_scores.append((pilot, score))
+
+                # Sort by score descending
+                pilot_scores.sort(key=lambda x: x[1], reverse=True)
+                best_pilot, pilot_score = pilot_scores[0]
+
+                # Calculate total power when piloted
+                # Ship's base_power + pilot's power (from ability score typically)
+                total_power = ship['base_power'] + best_pilot.get('power', 0)
+
+                # Generate re-pilot plan
+                # Target is the SHIP card_id, not a location!
+                # Use a special target format: "aboard:card_id:ship_name"
+                target_aboard = f"aboard:{ship['card_id']}:{ship['name']}"
+
+                instruction = DeploymentInstruction(
+                    card_blueprint_id=best_pilot['blueprint_id'],
+                    card_name=best_pilot['name'],
+                    target_location_id=ship['card_id'],  # The ship's card_id
+                    target_location_name=target_aboard,  # Special marker for aboard
+                    priority=1,  # High priority
+                    reason=f"RE-PILOT {ship['name']} (reclaim ship, {total_power} power!)",
+                    power_contribution=total_power,
+                    deploy_cost=best_pilot['cost'],
+                )
+
+                # Score: HIGH value because we're reclaiming an existing asset
+                # - Ship's base power value (we get this for free!)
+                # - Pilot power contribution
+                # - Bonus for matching pilot/ship
+                # - Big bonus for not having to pay for a new ship
+                reclaim_bonus = 60  # Saving a ship deployment is valuable!
+                base_score = ship['base_power'] * 10 + best_pilot.get('power', 0) * 5 + reclaim_bonus + pilot_score
+
+                force_left_after = force_remaining - best_pilot['cost']
+
+                all_repilot_plans.append(([instruction], force_left_after, base_score))
+                logger.info(f"      🔧 RE-PILOT plan: {best_pilot['name']} → {ship['name']} "
+                           f"(score={base_score:.0f}, cost={best_pilot['cost']}, power={total_power})")
+
+        # =================================================================
         # Generate MULTIPLE plans for each deployable card and compare
         # This ensures we consider all viable deployment options
         # (Dynamic thresholds already calculated earlier: ground_threshold, space_threshold)
@@ -2401,6 +2606,8 @@ class DeployPhasePlanner:
         # CRITICAL: Use fresh copy of `characters`, NOT `available_chars` which was depleted
         # by earlier steps. Step 5 generates INDEPENDENT plans for comparison.
         # Pass ALL pilots (not just pure) for vehicle+pilot combos - any pilot can drive!
+        # Log final target list for debugging (includes crushable locations added after initial log)
+        logger.info(f"   🎯 Final ground targets for planning: {[loc.name for loc in char_ground_targets]}")
         all_ground_plans = self._generate_all_ground_plans(
             characters.copy(), vehicles.copy(), char_ground_targets, force_remaining, locations, all_pilots,
             ground_threshold=ground_threshold
@@ -2415,17 +2622,46 @@ class DeployPhasePlanner:
         )
 
         # Log all plans for debugging
-        logger.info(f"   📊 Generated {len(all_ground_plans)} ground plans, {len(all_space_plans)} space plans")
+        repilot_count = len(all_repilot_plans)
+        if repilot_count > 0:
+            logger.info(f"   📊 Generated {len(all_ground_plans)} ground, {len(all_space_plans)} space, {repilot_count} RE-PILOT plans")
+        else:
+            logger.info(f"   📊 Generated {len(all_ground_plans)} ground plans, {len(all_space_plans)} space plans")
 
         for i, (instructions, force_left, score) in enumerate(all_ground_plans):
             cost = force_remaining - force_left
             cards = [inst.card_name for inst in instructions]
-            logger.info(f"      GROUND {i+1}: {cards} -> score={score:.0f}, cost={cost}")
+            # Show WHERE this plan deploys and WHY (the reason tells us establish/reinforce/crush)
+            target = instructions[0].target_location_name if instructions else "?"
+            reason_type = "establish"
+            if instructions and instructions[0].reason:
+                if "Crush" in instructions[0].reason:
+                    reason_type = "CRUSH"
+                elif "Reinforce" in instructions[0].reason:
+                    reason_type = "reinforce"
+            logger.info(f"      GROUND {i+1}: {cards} → {target} ({reason_type}) score={score:.0f}, cost={cost}")
 
         for i, (instructions, force_left, score) in enumerate(all_space_plans):
             cost = force_remaining - force_left
             cards = [inst.card_name for inst in instructions]
-            logger.info(f"      SPACE {i+1}: {cards} -> score={score:.0f}, cost={cost}")
+            target = instructions[0].target_location_name if instructions else "?"
+            reason_type = "establish"
+            if instructions and instructions[0].reason:
+                if "Crush" in instructions[0].reason:
+                    reason_type = "CRUSH"
+                elif "Reinforce" in instructions[0].reason:
+                    reason_type = "reinforce"
+            logger.info(f"      SPACE {i+1}: {cards} → {target} ({reason_type}) score={score:.0f}, cost={cost}")
+
+        for i, (instructions, force_left, score) in enumerate(all_repilot_plans):
+            cost = force_remaining - force_left
+            cards = [inst.card_name for inst in instructions]
+            # For re-pilot, target is "aboard:card_id:ship_name"
+            target = instructions[0].target_location_name if instructions else "?"
+            if target and target.startswith("aboard:"):
+                parts = target.split(":", 2)
+                target = parts[2] if len(parts) > 2 else target
+            logger.info(f"      RE-PILOT {i+1}: {cards} → aboard {target} score={score:.0f}, cost={cost}")
 
         # =================================================================
         # STEP 5B: GENERATE COMBINED GROUND+SPACE PLANS
@@ -2440,6 +2676,9 @@ class DeployPhasePlanner:
             all_plans.append(('ground', instructions, force_left, score))
         for instructions, force_left, score in all_space_plans:
             all_plans.append(('space', instructions, force_left, score))
+        # Add re-pilot plans (reclaiming unpiloted ships already in play)
+        for instructions, force_left, score in all_repilot_plans:
+            all_plans.append(('repilot', instructions, force_left, score))
 
         # Generate COMBINED ground+space plans
         # For each ground plan, check if we can add a compatible space plan
@@ -2620,6 +2859,24 @@ class DeployPhasePlanner:
                 # Sort by score descending, pick the best
                 valid_plans.sort(key=lambda x: x[3], reverse=True)
                 best_type, best_instructions, best_force_left, best_score, best_reserve = valid_plans[0]
+
+                # === LOG ALL CANDIDATE PLANS FOR ANALYSIS ===
+                if len(valid_plans) > 1:
+                    logger.info(f"   📊 PLAN COMPARISON ({len(valid_plans)} candidates):")
+                    for i, (ptype, pinst, pforce, pscore, preserve) in enumerate(valid_plans):
+                        marker = "→" if i == 0 else " "
+                        card_summary = ", ".join(inst.card_name for inst in pinst[:3])
+                        if len(pinst) > 3:
+                            card_summary += f", +{len(pinst)-3} more"
+                        # Show destination and strategy
+                        target = pinst[0].target_location_name if pinst else "?"
+                        reason_type = "establish"
+                        if pinst and pinst[0].reason:
+                            if "Crush" in pinst[0].reason:
+                                reason_type = "CRUSH"
+                            elif "Reinforce" in pinst[0].reason:
+                                reason_type = "reinforce"
+                        logger.info(f"      {marker} {ptype.upper()}: {card_summary} → {target} ({reason_type}) score={pscore:.0f}")
 
                 logger.info(f"   ✅ CHOSE {best_type.upper()} PLAN (score {best_score:.0f}, reserve {best_reserve})")
                 for inst in best_instructions:
@@ -3711,6 +3968,56 @@ class DeployPhasePlanner:
             locations.append(analysis)
 
         return locations
+
+    def _log_opponent_board_summary(self, board_state, locations: List['LocationAnalysis']):
+        """
+        Log a summary of opponent's board state for strategy analysis.
+
+        This helps track opponent patterns and prepare counter-strategies.
+        """
+        if not hasattr(board_state, 'cards_in_play') or not board_state.cards_in_play:
+            return
+
+        opponent_name = getattr(board_state, 'opponent_name', 'Opponent')
+        my_player_name = getattr(board_state, 'my_player_name', '')
+
+        # Collect opponent cards by location
+        opponent_by_location = {}  # location_name -> list of (card_name, power, card_type)
+        total_opponent_power = 0
+        opponent_card_count = 0
+
+        for card_id, card in board_state.cards_in_play.items():
+            if card.owner == my_player_name:
+                continue  # Skip our cards
+
+            if card.zone != "AT_LOCATION":
+                continue
+
+            # Get card metadata
+            card_meta = get_card(card.blueprint_id) if card.blueprint_id else None
+            card_name = card.card_title or card.blueprint_id or "Unknown"
+            power = card_meta.power_value if card_meta else 0
+            card_type = card_meta.card_type if card_meta else "Unknown"
+
+            # Find location name
+            loc_name = f"location_{card.location_index}"
+            if 0 <= card.location_index < len(board_state.locations):
+                loc = board_state.locations[card.location_index]
+                loc_name = loc.site_name or loc.system_name or loc_name
+
+            if loc_name not in opponent_by_location:
+                opponent_by_location[loc_name] = []
+            opponent_by_location[loc_name].append((card_name, power, card_type))
+            total_opponent_power += power
+            opponent_card_count += 1
+
+        # Log summary
+        if opponent_card_count > 0:
+            logger.info(f"   👁️ OPPONENT BOARD ({opponent_name}): {opponent_card_count} cards, {total_opponent_power} total power")
+            for loc_name, cards in sorted(opponent_by_location.items()):
+                loc_power = sum(p for _, p, _ in cards)
+                card_list = ", ".join(f"{n}({p})" for n, p, _ in cards)
+                logger.info(f"      - {loc_name}: {loc_power} power [{card_list}]")
 
     def get_card_score(self, blueprint_id: str, current_force: int = 0) -> Tuple[float, str]:
         """

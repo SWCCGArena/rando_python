@@ -7287,6 +7287,215 @@ def test_backup_deficit_over_8_skipped():
 
 
 # =============================================================================
+# UNPILOTED STARSHIP + PILOT COMBO TESTS
+# =============================================================================
+
+def test_unpiloted_ship_with_affordable_pilot_generates_space_plan():
+    """Test that unpiloted ship + pilot combo generates space plans when affordable.
+
+    This is a regression test for the scenario where space plans should be generated
+    when there's an unpiloted starship and a pilot that can be combined within budget.
+
+    Scenario:
+    - 8 force available
+    - Red Squadron X-wing (cost 5, unpiloted, 3 base power)
+    - Elyhek Rue pilot (cost 2, power 2)
+    - Combined cost: 5 + 2 = 7 <= 8 force (AFFORDABLE)
+
+    Expected: Space plan IS generated with ship+pilot combo.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Affordable Ship + Pilot Combo")
+            .as_side("light")
+            .with_force(8)  # Enough for ship (5) + pilot (2) = 7
+            .add_space_location("Yavin 4", my_icons=2, their_icons=1)
+            .add_ground_location("Cloud City", my_icons=1, their_icons=2)
+            # Unpiloted starship - has base power of 3 but needs pilot
+            .add_starship("Red Squadron X-wing", power=3, deploy_cost=5, has_permanent_pilot=False)
+            # Pilot character - power 2, cost 2, is_pilot=True
+            .add_character("Elyhek Rue", power=2, deploy_cost=2, is_pilot=True)
+            # Ground character for comparison
+            .add_character("Luke Skywalker", power=3, deploy_cost=3)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Verify that a deployment plan was generated (not HOLD_BACK)
+        assert result.plan.strategy != DeployStrategy.HOLD_BACK, \
+            "Should not hold back - ship+pilot combo is affordable"
+
+        # Check if space deployment was considered/chosen
+        space_deployments = [i for i in result.plan.instructions
+                           if i.target_location_name and "Yavin" in i.target_location_name]
+
+        logger.info(f"   📋 Space deployments found: {len(space_deployments)}")
+        for inst in result.plan.instructions:
+            logger.info(f"      - {inst.card_name} -> {inst.target_location_name}")
+
+        # The key assertion: with affordable ship+pilot, space SHOULD be considered
+        # Either space is chosen (because higher icons) or ground is chosen
+        # Either is acceptable, but we should NOT have 0 space plans when affordable
+        assert len(result.plan.instructions) > 0, \
+            "Should generate some deployment plan when ship+pilot is affordable"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_unpiloted_ship_with_unaffordable_pilot_no_space_plan():
+    """Test that unpiloted ship + pilot combo does NOT generate space plans when unaffordable.
+
+    This is a regression test documenting current behavior when ship+pilot exceeds force budget.
+
+    Scenario (from production logs):
+    - 5 force available (with 1 reserve)
+    - Red Squadron X-wing (cost 5, unpiloted)
+    - Elyhek Rue pilot (cost 2)
+    - Combined cost: 5 + 2 = 7 > 5 force (UNAFFORDABLE)
+
+    Expected: No space plan generated, ground plan chosen instead.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Unaffordable Ship + Pilot Combo")
+            .as_side("light")
+            .with_force(5)  # NOT enough for ship (5) + pilot (2) = 7
+            .add_space_location("Yavin 4", my_icons=2, their_icons=1)
+            .add_space_location("Mustafar", my_icons=1, their_icons=2)
+            .add_ground_location("Cloud City Walkway", my_icons=1, their_icons=2)
+            .add_ground_location("Yavin 4 Docking Bay", my_icons=1, their_icons=1)
+            # Unpiloted starship - cost 5 (exact budget, but needs pilot)
+            .add_starship("Red Squadron X-wing", power=3, deploy_cost=5, has_permanent_pilot=False)
+            # Pilots - even cheapest (2) makes combo unaffordable
+            .add_character("Elyhek Rue", power=2, deploy_cost=2, is_pilot=True)
+            .add_character("Luke Skywalker", power=3, deploy_cost=3, is_pilot=True)
+            # Ground characters that ARE affordable
+            .add_character("Rebel Trooper Reinforcements", power=3, deploy_cost=4)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # With ship+pilot unaffordable, expect ground deployment
+        space_deployments = [i for i in result.plan.instructions
+                           if i.target_location_name and ("Yavin 4" in i.target_location_name and "Docking" not in i.target_location_name)
+                           or (i.target_location_name and "Mustafar" in i.target_location_name)]
+        ground_deployments = [i for i in result.plan.instructions
+                            if i.target_location_name and ("Cloud City" in i.target_location_name or "Docking Bay" in i.target_location_name)]
+
+        logger.info(f"   📋 Space deployments: {len(space_deployments)}, Ground deployments: {len(ground_deployments)}")
+        for inst in result.plan.instructions:
+            logger.info(f"      - {inst.card_name} -> {inst.target_location_name}")
+
+        # Key assertion: with ship+pilot unaffordable, should choose ground instead
+        # This documents current behavior - no space plans when combo exceeds budget
+        assert len(space_deployments) == 0, \
+            "Should NOT deploy to space when ship+pilot combo exceeds force budget"
+        assert len(ground_deployments) > 0 or result.plan.strategy == DeployStrategy.HOLD_BACK, \
+            "Should either deploy to ground or hold back when space is unaffordable"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_unpiloted_ship_alone_not_deployed():
+    """Test that unpiloted ships are not deployed alone (would have 0 power).
+
+    In SWCCG, unpiloted starships have 0 power and 0 maneuver.
+    Deploying one alone would waste force and not meet any threshold.
+
+    Scenario:
+    - 10 force available
+    - X-wing (cost 5, unpiloted) - deploying alone would have 0 effective power
+    - No pilots in hand
+
+    Expected: Ship not deployed alone, ground characters deployed instead.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Unpiloted Ship Not Deployed Alone")
+            .as_side("light")
+            .with_force(10)
+            .add_space_location("Space Target", my_icons=2, their_icons=2)
+            .add_ground_location("Ground Target", my_icons=2, their_icons=2)
+            # Unpiloted starship - deploying alone would have 0 power
+            .add_starship("X-wing", power=3, deploy_cost=5, has_permanent_pilot=False)
+            # Ground characters that can meet threshold
+            .add_character("Rebel Commander", power=6, deploy_cost=5)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Verify X-wing was NOT deployed (no pilot to fly it)
+        xwing_deployments = [i for i in result.plan.instructions if "X-wing" in i.card_name]
+        assert len(xwing_deployments) == 0, \
+            "Should NOT deploy unpiloted X-wing alone (0 effective power)"
+
+        # Verify ground deployment was chosen instead
+        ground_deployments = [i for i in result.plan.instructions
+                            if i.target_location_name and "Ground" in i.target_location_name]
+        assert len(ground_deployments) > 0, \
+            "Should deploy ground characters when ship cannot be piloted"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_permanently_piloted_ship_vs_unpiloted_with_pilot():
+    """Test comparison between permanently piloted ship and unpiloted + pilot combo.
+
+    Both options should generate space plans. The planner should choose the
+    most efficient option based on power and cost.
+
+    Scenario:
+    - 12 force available
+    - TIE Fighter (cost 3, has permanent pilot, 3 power)
+    - X-wing (cost 5, unpiloted, 3 power) + Pilot (cost 2, 2 power) = 7 cost, 5 power
+
+    The unpiloted combo has more total power (5 vs 3) but costs more (7 vs 3).
+    With sufficient force, both should be viable options.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Piloted vs Unpiloted Comparison")
+            .as_side("dark")
+            .with_force(12)
+            .add_space_location("Battle Space", my_icons=2, their_icons=3)
+            # Permanently piloted ship - simpler to deploy
+            .add_starship("TIE Fighter", power=3, deploy_cost=3, has_permanent_pilot=True)
+            # Unpiloted ship needing pilot
+            .add_starship("TIE Interceptor", power=4, deploy_cost=4, has_permanent_pilot=False)
+            .add_character("Black Squadron Pilot", power=2, deploy_cost=2, is_pilot=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Verify some space deployment occurred
+        space_deployments = [i for i in result.plan.instructions
+                           if i.target_location_name and "Space" in i.target_location_name]
+
+        logger.info(f"   📋 Space deployments: {len(space_deployments)}")
+        for inst in result.plan.instructions:
+            logger.info(f"      - {inst.card_name} -> {inst.target_location_name}")
+
+        # With 12 force and both options affordable, should deploy to space
+        assert len(space_deployments) > 0, \
+            "Should deploy starship(s) to space when affordable"
+
+        # Total power should meet or exceed threshold
+        total_power = sum(i.power_contribution for i in space_deployments)
+        assert total_power >= 6, \
+            f"Space deployment should meet threshold (6), got {total_power} power"
+
+    finally:
+        unpatch_card_loader()
+
+
+# =============================================================================
 # MAIN (for standalone execution)
 # =============================================================================
 

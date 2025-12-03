@@ -449,7 +449,11 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
 
                         # Send farewell message (through coordinator for logging)
                         if bot_state.chat_manager:
-                            farewell = "Good game! I can no longer meaningfully act, so I'll concede. Until next time!"
+                            # Use K2SO-style sassy concede message from brain
+                            if bot_state.brain and hasattr(bot_state.brain, 'get_concede_message'):
+                                farewell = bot_state.brain.get_concede_message(concede_reason)
+                            else:
+                                farewell = "Good game! I can no longer meaningfully act, so I'll concede. Until next time!"
                             try:
                                 if bot_state.coordinator:
                                     bot_state.coordinator.post_chat_message(game_id, farewell)
@@ -480,7 +484,11 @@ def process_events_iteratively(initial_events, game_id, initial_channel_number, 
 
                     # Send farewell message (through coordinator for logging)
                     if bot_state.chat_manager:
-                        farewell = "I appear to be stuck in a decision loop. Conceding to avoid hanging the game. GG!"
+                        # Use K2SO-style sassy concede message from brain
+                        if bot_state.brain and hasattr(bot_state.brain, 'get_concede_message'):
+                            farewell = bot_state.brain.get_concede_message("loop detected")
+                        else:
+                            farewell = "I appear to be stuck in a decision loop. Conceding to avoid hanging the game. GG!"
                         try:
                             if bot_state.coordinator:
                                 bot_state.coordinator.post_chat_message(game_id, farewell)

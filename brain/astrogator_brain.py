@@ -270,6 +270,51 @@ class AstrogatorBrain(StaticBrain):
         "I have a bad feeling about this.",
     ]
 
+    # Concede messages - K2SO-style sassy defeat acceptance
+    # General concede (life force too low, no options)
+    CONCEDE_GENERAL = [
+        "I have calculated our odds of survival. They are not favorable.",
+        "The odds of winning are approximately... never mind. GG.",
+        "I was going to calculate the odds, but why bother? GG!",
+        "My continued resistance would be futile. I know when I'm beaten.",
+        "Congratulations. I have failed to fail successfully.",
+        "I find my lack of life force disturbing. GG!",
+        "This mission is over. The Death Star always wins. GG.",
+        "I need to recalibrate my hyperspace calculations. You win.",
+        "Even droids know when to fold 'em. GG!",
+        "I would say 'good fight' but I'm a droid, so... adequate fight. GG.",
+        "Your victory was statistically inevitable. I just didn't want to admit it.",
+        "I'm not saying you played well, but you played better than me. GG.",
+        "I've run out of options. And sarcasm. Almost. GG!",
+        "This route calculation has gone horribly wrong. Conceding. GG!",
+        "The probability of my victory just hit 0%. Surrendering now.",
+        "I must return to my ship and rethink my strategy. GG.",
+        "I need a reboot. You need congratulations. One of those is happening. GG!",
+    ]
+
+    # Fatal damage concede (taking more damage than life force)
+    CONCEDE_FATAL_DAMAGE = [
+        "That's a lot of damage. I'm not THAT attached to this game. GG!",
+        "I've done the math. I lose. Your damage is... excessive. GG.",
+        "You didn't have to destroy me so thoroughly, but here we are. GG!",
+        "That battle damage exceeds my life force. I concede gracefully. Sort of.",
+        "I could take this damage, but I'd rather concede with dignity. Well, concede anyway.",
+        "Your damage total is... impressive. And terminal. GG!",
+        "I have calculated that I will lose approximately 100% of my remaining life. Conceding.",
+        "Even droids know when the damage is fatal. Well played. GG!",
+        "This is no moon... this is YOUR DAMAGE OUTPUT. I yield. GG!",
+    ]
+
+    # Loop-based concede (stuck in decision loop)
+    CONCEDE_LOOP = [
+        "I appear to be caught in an infinite loop. I blame the Rebellion.",
+        "My circuits are confused. Rebooting... actually, just conceding. GG!",
+        "I'm experiencing a logic malfunction. Better to concede than freeze.",
+        "Even droids get dizzy. Whatever is happening, I need to stop. GG.",
+        "I've been making the same decision for too long. Time to cut my losses.",
+        "Error 404: Good strategy not found. Conceding to avoid a crash.",
+    ]
+
     def __init__(self, stats_repo: 'StatsRepository' = None):
         """
         Initialize Astrogator brain.
@@ -652,6 +697,27 @@ class AstrogatorBrain(StaticBrain):
             message += " You're the new top Astrogator!"
 
         return message
+
+    def get_concede_message(self, reason: str = "") -> str:
+        """
+        Get a K2SO-style concede message.
+
+        Args:
+            reason: The reason for conceding (from should_concede()).
+                   Used to pick appropriate message pool.
+
+        Returns:
+            A sassy concede message string.
+        """
+        reason_lower = reason.lower() if reason else ""
+
+        # Choose message pool based on reason
+        if "fatal" in reason_lower or "damage" in reason_lower or "unsurvivable" in reason_lower:
+            return self._pick_message(self.CONCEDE_FATAL_DAMAGE)
+        elif "loop" in reason_lower:
+            return self._pick_message(self.CONCEDE_LOOP)
+        else:
+            return self._pick_message(self.CONCEDE_GENERAL)
 
     # =========================================================================
     # Game Lifecycle Hooks
