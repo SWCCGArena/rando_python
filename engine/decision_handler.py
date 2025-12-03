@@ -117,9 +117,20 @@ class DecisionHandler:
         else:
             turn_info = "no board state"
 
-        # Log with clear delay source
+        # Parse decision parameters early for logging
+        params = DecisionSafety.parse_decision_params(decision_element)
+        no_pass = params.get('no_pass', False)
+        min_val = params.get('min', 0)
+        max_val = params.get('max', 0)
+        action_ids = params.get('action_ids', [])
+
+        # Log with clear delay source and decision parameters
         delay_str = f"quick ({delay_reason})" if no_long_delay else "normal"
-        logger.info(f"🤔 Decision: type={decision_type}, delay={delay_str}, {turn_info}, text='{decision_text[:60]}...'" if len(decision_text) > 60 else f"🤔 Decision: type={decision_type}, delay={delay_str}, {turn_info}, text='{decision_text}'")
+        param_str = f"noPass={no_pass}, min={min_val}, max={max_val}, actions={len(action_ids)}"
+        if len(decision_text) > 60:
+            logger.info(f"🤔 Decision: type={decision_type}, delay={delay_str}, {turn_info}, {param_str}, text='{decision_text[:60]}...'")
+        else:
+            logger.info(f"🤔 Decision: type={decision_type}, delay={delay_str}, {turn_info}, {param_str}, text='{decision_text}'")
 
         # Update state tracking for loop detection
         # If game state changed (e.g., hand size after draw), it's not a loop

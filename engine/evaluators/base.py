@@ -172,6 +172,9 @@ class PassEvaluator(ActionEvaluator):
 
     Used when we want to pass/cancel instead of taking an action.
     Score is typically low (0-10) unless we really want to pass.
+
+    IMPORTANT: For ACTION_CHOICE decisions, empty string may not be valid!
+    We need to find a "Cancel" or "Done" action from available options instead.
     """
 
     def __init__(self):
@@ -185,13 +188,70 @@ class PassEvaluator(ActionEvaluator):
         min_required = context.extra.get('min', 0)
         return not context.no_pass and min_required == 0
 
+    def _find_cancel_action(self, context: DecisionContext) -> Optional[str]:
+        """
+        Find a "Cancel" or "Done" action from available actions.
+
+        For ACTION_CHOICE decisions, we can't use empty string to pass.
+        Instead, we need to find and select a cancel/done action.
+
+        Returns the action_id of the cancel action, or None if not found.
+        """
+        # Priority 1: Actions that START with cancel/done keywords (most explicit)
+        priority_1_keywords = ['cancel', 'done', 'pass', 'decline', 'no response', 'no further']
+
+        for i, action_text in enumerate(context.action_texts):
+            text_lower = action_text.lower().strip()
+            for keyword in priority_1_keywords:
+                if text_lower.startswith(keyword):
+                    if i < len(context.action_ids):
+                        return context.action_ids[i]
+
+        # Priority 2: Actions that contain "- cancel" or "- done" patterns (suffix style)
+        for i, action_text in enumerate(context.action_texts):
+            text_lower = action_text.lower()
+            if ' - cancel' in text_lower or ' - done' in text_lower or ' - no ' in text_lower:
+                if i < len(context.action_ids):
+                    return context.action_ids[i]
+
+        # Priority 3: Actions that are ONLY the keyword (exact match or near-exact)
+        for i, action_text in enumerate(context.action_texts):
+            text_lower = action_text.lower().strip()
+            # Check for near-exact matches like "Cancel" or "Done" or "Cancel retrieval"
+            for keyword in priority_1_keywords:
+                # Match "Cancel X" but not "X Cancel Y" or "X or cancel Y"
+                if text_lower.startswith(keyword) and ' or ' not in text_lower:
+                    if i < len(context.action_ids):
+                        return context.action_ids[i]
+
+        return None
+
     def evaluate(self, context: DecisionContext) -> List[EvaluatedAction]:
         """Create a PASS action with low default score"""
+
+        # For ACTION_CHOICE, we may need to use a "Cancel" action instead of empty string
+        # Empty string doesn't work for all decision types
+        pass_action_id = ""
+        pass_display = "Pass / Do nothing"
+
+        # Check if this is an ACTION_CHOICE decision with available actions
+        # These often require selecting a "Cancel" action rather than empty string
+        if context.decision_type == "ACTION_CHOICE" and context.action_texts:
+            cancel_id = self._find_cancel_action(context)
+            if cancel_id is not None:
+                pass_action_id = cancel_id
+                # Find the display text for this action
+                for i, aid in enumerate(context.action_ids):
+                    if aid == cancel_id and i < len(context.action_texts):
+                        pass_display = f"Cancel: {context.action_texts[i]}"
+                        break
+                self.logger.debug(f"ACTION_CHOICE: Using cancel action '{cancel_id}' instead of empty string")
+
         action = EvaluatedAction(
-            action_id="",  # Empty string = pass
+            action_id=pass_action_id,
             action_type=ActionType.PASS,
             score=5.0,  # Low default score
-            display_text="Pass / Do nothing"
+            display_text=pass_display
         )
 
         action.add_reasoning("Default pass option")

@@ -138,7 +138,45 @@ class DecisionSafety:
         Returns (corrected_response, reason_if_corrected)
         """
         params = DecisionSafety.parse_decision_params(decision_element)
+        decision_type = params['decision_type']
         must_choose = DecisionSafety.must_choose(params)
+        action_ids = params.get('action_ids', [])
+
+        # SPECIAL CASE: ACTION_CHOICE with empty response
+        # Even when noPass=false, ACTION_CHOICE often doesn't accept empty string!
+        # The server expects one of the action_ids, not empty.
+        # If we have actions available and response is empty, force a selection.
+        if response == "" and decision_type == "ACTION_CHOICE" and action_ids:
+            # Try to find a "cancel" or "done" action
+            action_texts = []
+            for param in decision_element.findall('.//parameter'):
+                if param.get('name') == 'actionText':
+                    action_texts.append(param.get('value', ''))
+
+            cancel_keywords = ['cancel', 'done', 'pass', 'decline', 'no response', 'no further']
+
+            # Priority 1: Actions that START with cancel/done keywords (most explicit)
+            for i, text in enumerate(action_texts):
+                text_lower = text.lower().strip()
+                for keyword in cancel_keywords:
+                    if text_lower.startswith(keyword) and i < len(action_ids):
+                        reason = f"SAFETY FORCED: ACTION_CHOICE empty response -> using cancel action '{action_ids[i]}'"
+                        logger.warning(f"🚨 {reason}")
+                        return action_ids[i], reason
+
+            # Priority 2: Actions with "- cancel" or "- done" suffix patterns
+            for i, text in enumerate(action_texts):
+                text_lower = text.lower()
+                if (' - cancel' in text_lower or ' - done' in text_lower or ' - no ' in text_lower) and i < len(action_ids):
+                    reason = f"SAFETY FORCED: ACTION_CHOICE empty response -> using cancel action '{action_ids[i]}'"
+                    logger.warning(f"🚨 {reason}")
+                    return action_ids[i], reason
+
+            # No cancel action found - pick last action (often cancel/done)
+            forced = action_ids[-1]
+            reason = f"SAFETY FORCED: ACTION_CHOICE empty response -> using last action '{forced}' (no cancel found)"
+            logger.warning(f"🚨 {reason}")
+            return forced, reason
 
         # If response is empty but we MUST choose, force a selection
         if response == "" and must_choose:
