@@ -367,6 +367,11 @@ class ScenarioBuilder:
         self.board.turn_number = turn
         return self
 
+    def with_life_force(self, amount: int) -> 'ScenarioBuilder':
+        """Set reserve deck (life force) - affects dynamic contest advantage"""
+        self.board.reserve_deck = amount
+        return self
+
     def with_deploy_threshold(self, threshold: int) -> 'ScenarioBuilder':
         """Set the deploy power threshold"""
         self.deploy_threshold = threshold
@@ -7615,6 +7620,336 @@ def test_early_game_contested_uses_full_threshold():
     # So 3-power character should NOT establish at empty site
     assert len(empty_deploys) == 0, \
         f"With contested location, threshold=6. 3-power char shouldn't establish at empty site. Got: {empty_deploys}"
+
+
+def test_no_duplicate_card_in_plan_from_reinforce_and_establish():
+    """
+    Regression test: A character used for weak presence reinforcement should NOT
+    appear again when the establish plan is chosen.
+
+    Bug scenario (from logs):
+    1. Bot has FN-2199 in hand
+    2. STEP 4 adds FN-2199 to reinforce a weak location (power 4, need threshold 6)
+    3. STEP 5 generates ground plans including one with FN-2199
+    4. The FN-2199 ground plan is chosen (same location, highest score)
+    5. BUG: FN-2199 appears TWICE in final plan (once from STEP 4, once from STEP 5)
+
+    Fix: When adding STEP 5's chosen plan, filter out cards already in plan from STEP 4.
+    """
+    scenario = (
+        ScenarioBuilder("no_duplicate_card_reinforce_establish")
+        .as_side("dark")
+        .with_turn(4)  # Mid-game, threshold=6
+        .with_force(8)
+        # Our weak presence location (have 4 power, need 6)
+        .add_ground_location("Ewok Village", my_icons=1, their_icons=2,
+                             my_power=4, their_power=0, exterior=True, interior=True)
+        # Contested location with enemy (should not go here, enemy too strong)
+        .add_ground_location("Defensive Perimeter", my_icons=2, their_icons=1,
+                             my_power=0, their_power=8, exterior=True)
+        # Characters in hand - FN-2199 is the best efficiency (3 power for 2 cost)
+        .add_character("FN-2199", power=3, deploy_cost=2)
+        .add_character("Stormtrooper Patrol", power=3, deploy_cost=3)
+        .add_character("General Hux", power=3, deploy_cost=3)
+        .add_character("Sergeant Narthax", power=3, deploy_cost=2)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check that no blueprint_id appears more than once in the plan
+    blueprint_ids = [i.card_blueprint_id for i in result.plan.instructions]
+    duplicates = [bp for bp in blueprint_ids if blueprint_ids.count(bp) > 1]
+
+    assert len(duplicates) == 0, \
+        f"Duplicate cards in plan! Each card should appear at most once. Duplicates: {duplicates}"
+
+    # Also verify FN-2199 is in the plan exactly once (it's the efficient choice)
+    fn2199_deploys = [i for i in result.plan.instructions if "FN-2199" in i.card_name]
+    assert len(fn2199_deploys) == 1, \
+        f"FN-2199 should appear exactly once in plan. Got: {len(fn2199_deploys)}"
+
+
+def test_repilot_followed_by_additional_ship_deployment():
+    """
+    After re-piloting an unpiloted ship, remaining force should be used to deploy
+    additional piloted starships to other space locations.
+
+    Scenario from logs:
+    - 11 force available (10 after reserve)
+    - Unpiloted BB-8 in Black Squadron 1 in play at one space location
+    - Dash Rendar (pilot, 3 cost) can re-pilot it for 7 power
+    - Green Leader (5 power, 4 cost) piloted ship in hand
+    - Red 8 (3 power, 2 cost) piloted ship in hand
+    - Two space locations available
+
+    Expected: Re-pilot (3 force) + Green Leader (4 force) = 7 force used
+    Should have force left for more ships!
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Repilot Follow-up Deployment")
+            .as_side("light")
+            .with_turn(2)  # Early game, threshold=4 for space
+            .with_force(11)
+            # Space location 1 - where the unpiloted ship is
+            .add_space_location("Yavin 4", my_icons=2, their_icons=1)
+            # Space location 2 - another deployment target
+            .add_space_location("Endor", my_icons=2, their_icons=2)
+            # Unpiloted ship in play - has base power 4, but needs pilot to fly
+            # When piloted by Dash (3 power), combined = 7 power
+            .add_starship_in_play("BB-8 Ship", power=4, location_name="Yavin 4",
+                                  has_permanent_pilot=False, is_unique=True)
+            # Pilot in hand that can re-pilot the ship
+            .add_character("Dash Rendar", power=3, deploy_cost=3, is_pilot=True, is_warrior=True)
+            # Piloted ships in hand that should also deploy
+            .add_starship("Green Leader", power=5, deploy_cost=4, has_permanent_pilot=True)
+            .add_starship("Red 8", power=3, deploy_cost=2, has_permanent_pilot=True)
+            .build()
+        )
+        result = run_scenario(scenario)
+
+        # Get all deployments
+        all_deploys = result.plan.instructions
+        logger.info(f"   📊 Total deployments: {len(all_deploys)}")
+        for inst in all_deploys:
+            logger.info(f"      - {inst.card_name} -> {inst.target_location_name}: {inst.reason}")
+
+        # Should have at least 2 deployments:
+        # 1. Dash Rendar re-piloting the BB-8 Ship (3 force)
+        # 2. Green Leader to another space location (4 force) OR Red 8 (2 force)
+        assert len(all_deploys) >= 2, \
+            f"Should deploy at least 2 things (re-pilot + follow-up ship). Got {len(all_deploys)}: {[i.card_name for i in all_deploys]}"
+
+        # Verify re-pilot happened
+        repilot_deploys = [i for i in all_deploys if "RE-PILOT" in (i.reason or "") or "re-pilot" in (i.reason or "").lower()]
+        assert len(repilot_deploys) >= 1, \
+            f"Should have a re-pilot action. Reasons: {[i.reason for i in all_deploys]}"
+
+        # Verify additional ship deployment happened
+        ship_deploys = [i for i in all_deploys if "Green Leader" in i.card_name or "Red 8" in i.card_name]
+        assert len(ship_deploys) >= 1, \
+            f"Should deploy additional ships after re-pilot. Got: {[i.card_name for i in all_deploys]}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_deploy_characters_to_newly_deployed_location():
+    """
+    When deploying a location from hand, characters should be planned to deploy
+    to that new location in the same phase.
+
+    Scenario from logs:
+    - Existing ground locations are all contested with high enemy power (unbeatable)
+    - Location in hand: Endor: Anakin's Funeral Pyre (2 enemy icons)
+    - Characters in hand: Sabine (4/4), Rey (4/4), Leia (4/4)
+    - Should deploy location + establish characters there
+
+    Without fix: Only location deployed, characters unused
+    With fix: Location + characters deployed together
+    """
+    patch_card_loader()
+    try:
+        # Register the location card in hand
+        register_mock_card("loc_in_hand_bp",
+            title="•Endor: Anakin's Funeral Pyre",
+            card_type="Location",
+            sub_type="Site",
+            is_location=True,
+            dark_side_icons=2,  # Enemy icons (Light side perspective)
+            light_side_icons=2,  # Our icons
+            is_interior=False,
+            is_exterior=True,
+        )
+
+        scenario = (
+            ScenarioBuilder("Deploy to newly placed location")
+            .as_side("light")
+            .with_turn(5)
+            .with_force(12)
+            # Existing contested location with very high enemy power (unbeatable)
+            .add_ground_location("Contested Base", my_icons=1, their_icons=1,
+                                 my_power=0, their_power=10, exterior=True)
+            # Add a 6-power character (meets threshold alone)
+            .add_character("Strong Hero", power=6, deploy_cost=4)
+            .build()
+        )
+
+        # Add the location card to hand manually (ScenarioBuilder doesn't have add_location_to_hand)
+        from engine.deploy_planner import DeployPhasePlanner
+        from engine.card_loader import get_card
+
+        loc_card = MockCard(
+            card_id="loc_hand_1",
+            blueprint_id="loc_in_hand_bp",
+            card_title="•Endor: Anakin's Funeral Pyre",
+            card_type="Location",
+            deploy=0,
+        )
+        scenario.board.cards_in_hand.append(loc_card)
+
+        result = run_scenario(scenario)
+
+        # Get all deployments
+        all_deploys = result.plan.instructions
+        logger.info(f"   📊 Total deployments: {len(all_deploys)}")
+        for inst in all_deploys:
+            logger.info(f"      - {inst.card_name} -> {inst.target_location_name or 'table'}: {inst.reason}")
+
+        # Should deploy at least 2 things:
+        # 1. The location (to table)
+        # 2. Character to the new location
+        assert len(all_deploys) >= 2, \
+            f"Should deploy location + character. Got {len(all_deploys)}: {[i.card_name for i in all_deploys]}"
+
+        # Verify location was deployed
+        loc_deploys = [i for i in all_deploys if "Anakin's Funeral Pyre" in i.card_name]
+        assert len(loc_deploys) >= 1, \
+            f"Should deploy the location card. Deploys: {[i.card_name for i in all_deploys]}"
+
+        # Verify character was deployed to the new location
+        char_deploys = [i for i in all_deploys if "Strong Hero" in i.card_name]
+        assert len(char_deploys) >= 1, \
+            f"Should deploy character to new location. Deploys: {[i.card_name for i in all_deploys]}"
+
+        # The character should target the newly deployed location
+        char_target = char_deploys[0].target_location_name
+        assert "Funeral Pyre" in (char_target or ""), \
+            f"Character should target the new location. Got target: {char_target}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_low_life_accepts_tie_at_contested():
+    """
+    Dynamic contest advantage: At life < 20, bot accepts ties (0 advantage)
+    instead of requiring +2 power advantage.
+
+    Scenario from bug report (adapted):
+    - Enemy has 14 power at Sith Temple
+    - We can deploy characters totaling 14 power (exactly matching)
+    - At life=24: require +1 (need 15), would hold back
+    - At life=15: accept ties (need 14), should deploy
+
+    This test verifies that low life force makes bot more aggressive.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Low life accepts ties")
+            .as_side("dark")
+            .with_force(15)
+            .with_life_force(15)  # Low life - should accept ties
+            # Contested location - enemy has 14 power
+            .add_ground_location("Mustafar: Sith Temple", my_icons=2, their_icons=2,
+                                 my_power=0, their_power=14)
+            # Characters that exactly match enemy power (14 total)
+            .add_character("Grand Inquisitor", power=5, deploy_cost=5)
+            .add_character("Ninth Sister", power=5, deploy_cost=4)
+            .add_character("Fifth Brother", power=4, deploy_cost=4)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        all_deploys = result.plan.instructions
+        # Filter to non-location cards (they have a target location)
+        char_deploys = [i for i in all_deploys if i.target_location_name is not None]
+        logger.info(f"   📋 Low life deploy plan: {[i.card_name for i in char_deploys]}")
+
+        # At life=15, should accept ties and deploy to contest
+        # At life=30 (default), would hold back because 14 < 14+2 = 16
+        assert len(char_deploys) >= 2, \
+            f"Low life should make bot deploy to contest. Deploys: {[i.card_name for i in char_deploys]}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_medium_life_requires_narrow_advantage():
+    """
+    Dynamic contest advantage: At life 20-29, bot requires +1 advantage.
+
+    Scenario:
+    - Enemy has 14 power
+    - We can deploy 15 power (5+5+5)
+    - At life=25: require +1 (need 15), should deploy
+    - At life=30: require +2 (need 16), would hold back
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Medium life requires +1")
+            .as_side("dark")
+            .with_force(15)
+            .with_life_force(25)  # Medium life - requires +1 advantage
+            # Contested location - enemy has 14 power
+            .add_ground_location("Mustafar: Sith Temple", my_icons=2, their_icons=2,
+                                 my_power=0, their_power=14)
+            # Characters that exceed enemy power by 1 (15 total)
+            .add_character("Grand Inquisitor", power=5, deploy_cost=5)
+            .add_character("Ninth Sister", power=5, deploy_cost=4)
+            .add_character("Fifth Brother", power=5, deploy_cost=4)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        all_deploys = result.plan.instructions
+        # Filter to non-location cards (they have a target location)
+        char_deploys = [i for i in all_deploys if i.target_location_name is not None]
+        logger.info(f"   📋 Medium life deploy plan: {[i.card_name for i in char_deploys]}")
+
+        # At life=25, require +1 advantage (need 15 vs 14), should deploy
+        assert len(char_deploys) >= 2, \
+            f"Medium life should deploy when power >= enemy+1. Deploys: {[i.card_name for i in char_deploys]}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_high_life_requires_full_advantage():
+    """
+    Dynamic contest advantage: At life >= 30, bot requires +2 advantage.
+
+    Scenario:
+    - Enemy has 14 power
+    - We can only deploy 14 power (5+5+4)
+    - At life=35: require +2 (need 16), should hold back
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("High life requires +2")
+            .as_side("dark")
+            .with_force(15)
+            .with_life_force(35)  # High life - requires +2 advantage
+            # Contested location - enemy has 14 power
+            .add_ground_location("Mustafar: Sith Temple", my_icons=2, their_icons=2,
+                                 my_power=0, their_power=14)
+            # Characters that exactly match enemy power (14 total)
+            .add_character("Grand Inquisitor", power=5, deploy_cost=5)
+            .add_character("Ninth Sister", power=5, deploy_cost=4)
+            .add_character("Fifth Brother", power=4, deploy_cost=4)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        all_deploys = result.plan.instructions
+        # Filter to non-location cards (they have a target location)
+        char_deploys = [i for i in all_deploys if i.target_location_name is not None]
+        logger.info(f"   📋 High life deploy plan: {[i.card_name for i in char_deploys]}")
+
+        # At life=35, require +2 advantage (need 16 vs 14)
+        # With only 14 power available, should NOT deploy
+        assert len(char_deploys) == 0, \
+            f"High life should NOT deploy when power < enemy+2. Deploys: {[i.card_name for i in char_deploys]}"
+
+    finally:
+        unpatch_card_loader()
 
 
 # MAIN (for standalone execution)

@@ -32,7 +32,28 @@ BATTLE_FAVORABLE_THRESHOLD = 4
 # Minimum power advantage required to contest a location
 # This prevents risky marginal fights like 5 vs 4 or 4 vs 2
 # We also require meeting DEPLOY_THRESHOLD, so contesting 4 enemy needs 6 power (not 6)
+# NOTE: This is the DEFAULT value - actual value may be reduced when life is low
 MIN_CONTEST_ADVANTAGE = 2
+
+
+def get_contest_advantage(life_force: int) -> int:
+    """
+    Calculate the required power advantage for contesting based on life force.
+
+    When life is high, we're conservative and require +2 advantage.
+    As life decreases, we accept riskier battles:
+    - life >= 30: +2 (comfortable, play safe)
+    - life 20-29: +1 (need to be more aggressive)
+    - life < 20: +0 (accept ties, desperate for presence)
+
+    Returns the required advantage (0-2).
+    """
+    if life_force >= 30:
+        return 2  # Full advantage required
+    elif life_force >= 20:
+        return 1  # Accept narrow wins
+    else:
+        return 0  # Accept ties (desperate)
 
 # Thresholds for battle/flee decisions (from battle_evaluator.py)
 RETREAT_THRESHOLD = -6  # Power diff <= this = should flee, don't reinforce
@@ -293,15 +314,19 @@ class DeployPhasePlanner:
                 continue
 
             # This ship/vehicle is unpiloted!
-            # Get location info from card's location
-            location_id = card.location_index
+            # Get location info from card's location_index
+            location_idx = card.location_index
             location_name = None
+            location_card_id = None
 
             # Try to find the location name from board state locations
+            # location_index is the position in the locations list (0, 1, 2, etc.)
             locations = getattr(board_state, 'locations', [])
             for loc in locations:
-                if hasattr(loc, 'card_id') and str(loc.card_id) == str(location_id):
-                    location_name = getattr(loc, 'name', None)
+                # Match by location_index (the common field)
+                if hasattr(loc, 'location_index') and loc.location_index == location_idx:
+                    location_name = getattr(loc, 'name', None) or getattr(loc, 'site_name', None) or getattr(loc, 'system_name', None)
+                    location_card_id = getattr(loc, 'card_id', None)
                     break
 
             # Get base power from metadata
@@ -311,13 +336,14 @@ class DeployPhasePlanner:
                 'card_id': card_id,
                 'name': metadata.title,
                 'blueprint_id': card.blueprint_id,
-                'location_id': location_id,
+                'location_index': location_idx,
+                'location_card_id': location_card_id,
                 'location_name': location_name,
                 'base_power': base_power,
                 'is_starship': metadata.is_starship,
                 'is_vehicle': metadata.is_vehicle,
             })
-            logger.warning(f"🚀 Found UNPILOTED ship in play: {metadata.title} (#{card_id}) at {location_name or 'unknown'}")
+            logger.warning(f"🚀 Found UNPILOTED ship in play: {metadata.title} (#{card_id}) at {location_name or 'unknown (idx=' + str(location_idx) + ')'}")
 
         return unpiloted
 
@@ -954,7 +980,8 @@ class DeployPhasePlanner:
                                     force_budget: int,
                                     locations: List[LocationAnalysis],
                                     pilots: List[Dict] = None,
-                                    ground_threshold: int = None) -> List[Tuple[List[DeploymentInstruction], int, float]]:
+                                    ground_threshold: int = None,
+                                    contest_advantage: int = None) -> List[Tuple[List[DeploymentInstruction], int, float]]:
         """
         Generate multiple ground plans - one for EACH target location.
 
@@ -968,6 +995,9 @@ class DeployPhasePlanner:
         Args:
             ground_threshold: Dynamic threshold for establishing ground presence.
                               Uses self.deploy_threshold if not specified.
+            contest_advantage: Power advantage required over enemy to contest.
+                              Defaults to MIN_CONTEST_ADVANTAGE (2) if not specified.
+                              When life is low, this may be reduced to accept ties.
 
         Returns list of (instructions, force_remaining, score) tuples.
         """
@@ -998,6 +1028,9 @@ class DeployPhasePlanner:
 
         # Use dynamic threshold if provided, otherwise fall back to default
         MIN_ESTABLISH_POWER = ground_threshold if ground_threshold is not None else self.deploy_threshold
+
+        # Use dynamic contest advantage if provided, otherwise fall back to default
+        required_advantage = contest_advantage if contest_advantage is not None else MIN_CONTEST_ADVANTAGE
 
         # === GENERATE PLANS FOR EACH CARD × LOCATION COMBINATION ===
         # For multi-location establishment to work, we need separate plans
@@ -1064,11 +1097,11 @@ class DeployPhasePlanner:
             # CRITICAL: Include our EXISTING power at the location for crushable scenarios
             existing_power = target_loc.my_power if target_loc.my_power > 0 else 0
 
-            # For contested locations: need BOTH deploy threshold AND +2 advantage
-            # This prevents risky marginal fights like 5 vs 4 or 4 vs 2
+            # For contested locations: need BOTH deploy threshold AND required advantage
+            # required_advantage is dynamic based on life force (lower when desperate)
             if target_loc.their_power > 0:
                 # Total needed = max(threshold, enemy + advantage)
-                total_power_goal = max(MIN_ESTABLISH_POWER, target_loc.their_power + MIN_CONTEST_ADVANTAGE)
+                total_power_goal = max(MIN_ESTABLISH_POWER, target_loc.their_power + required_advantage)
                 # We only need to DEPLOY enough to reach goal (subtract existing)
                 power_goal = max(1, total_power_goal - existing_power)
             else:
@@ -1084,7 +1117,7 @@ class DeployPhasePlanner:
 
                 # Check if this single card meets threshold
                 if target_loc.their_power > 0:
-                    if card_power < target_loc.their_power + MIN_CONTEST_ADVANTAGE:
+                    if card_power < target_loc.their_power + required_advantage:
                         continue
                     if card_power < MIN_ESTABLISH_POWER:
                         continue
@@ -1130,7 +1163,7 @@ class DeployPhasePlanner:
 
             # Must meet BOTH thresholds for contested locations
             if target_loc.their_power > 0:
-                if total_power < target_loc.their_power + MIN_CONTEST_ADVANTAGE:
+                if total_power < target_loc.their_power + required_advantage:
                     continue
                 if total_power < MIN_ESTABLISH_POWER:
                     continue
@@ -1233,7 +1266,7 @@ class DeployPhasePlanner:
 
                     # Check if this meets thresholds
                     if target_loc.their_power > 0:
-                        if total_power < target_loc.their_power + MIN_CONTEST_ADVANTAGE:
+                        if total_power < target_loc.their_power + required_advantage:
                             continue
                         if total_power < MIN_ESTABLISH_POWER:
                             continue
@@ -1680,7 +1713,8 @@ class DeployPhasePlanner:
                                    force_budget: int,
                                    all_pilots: List[Dict],
                                    locations: List[LocationAnalysis],
-                                   space_threshold: int = None) -> List[Tuple[List[DeploymentInstruction], int, float]]:
+                                   space_threshold: int = None,
+                                   contest_advantage: int = None) -> List[Tuple[List[DeploymentInstruction], int, float]]:
         """
         Generate multiple space plans - one for EACH target location.
 
@@ -1695,6 +1729,8 @@ class DeployPhasePlanner:
             locations: All analyzed locations for scoring
             space_threshold: Dynamic threshold for establishing space presence.
                              Uses self.deploy_threshold if not specified.
+            contest_advantage: Power advantage required over enemy to contest.
+                              Defaults to MIN_CONTEST_ADVANTAGE (2) if not specified.
 
         Returns list of (instructions, force_remaining, score) tuples.
         """
@@ -1774,6 +1810,9 @@ class DeployPhasePlanner:
         # Use dynamic threshold if provided, otherwise fall back to default
         MIN_ESTABLISH_POWER = space_threshold if space_threshold is not None else self.deploy_threshold
 
+        # Use dynamic contest advantage if provided, otherwise fall back to default
+        required_advantage = contest_advantage if contest_advantage is not None else MIN_CONTEST_ADVANTAGE
+
         # === GENERATE A PLAN FOR EACH TARGET LOCATION ===
         # This is the key change: try each location independently
         for target_loc in space_targets:
@@ -1818,11 +1857,11 @@ class DeployPhasePlanner:
             # CRITICAL: Include our EXISTING power at the location for crushable scenarios
             existing_power = target_loc.my_power if target_loc.my_power > 0 else 0
 
-            # For contested locations: need BOTH deploy threshold AND +2 advantage
-            # This prevents risky marginal fights like 5 vs 4 or 4 vs 2
+            # For contested locations: need BOTH deploy threshold AND required advantage
+            # required_advantage is dynamic based on life force (lower when desperate)
             if target_loc.their_power > 0:
                 # Total needed = max(threshold, enemy + advantage)
-                total_power_goal = max(MIN_ESTABLISH_POWER, target_loc.their_power + MIN_CONTEST_ADVANTAGE)
+                total_power_goal = max(MIN_ESTABLISH_POWER, target_loc.their_power + required_advantage)
                 # We only need to DEPLOY enough to reach goal (subtract existing)
                 power_goal = max(1, total_power_goal - existing_power)
             else:
@@ -1841,8 +1880,8 @@ class DeployPhasePlanner:
 
             # Must meet BOTH thresholds for contested locations
             if target_loc.their_power > 0:
-                # Need to beat enemy by at least MIN_CONTEST_ADVANTAGE
-                if total_power < target_loc.their_power + MIN_CONTEST_ADVANTAGE:
+                # Need to beat enemy by at least required_advantage
+                if total_power < target_loc.their_power + required_advantage:
                     continue  # Not enough advantage, skip
                 # Also need to meet deploy threshold (so we're not left weak after battle)
                 if total_power < MIN_ESTABLISH_POWER:
@@ -2099,13 +2138,25 @@ class DeployPhasePlanner:
         life_force = board_state.total_reserve_force() if hasattr(board_state, 'total_reserve_force') else 60
         ground_threshold = self._get_dynamic_threshold(locations, is_space=False, turn_number=current_turn, life_force=life_force)
         space_threshold = self._get_dynamic_threshold(locations, is_space=True, turn_number=current_turn, life_force=life_force)
-        logger.info(f"   📊 Dynamic thresholds: ground={ground_threshold}, space={space_threshold} (turn {current_turn}, life={life_force})")
+
+        # Calculate dynamic contest advantage based on life force
+        # When life is low, accept riskier battles (ties instead of requiring +2 advantage)
+        contest_advantage = get_contest_advantage(life_force)
+        if contest_advantage < MIN_CONTEST_ADVANTAGE:
+            logger.info(f"   📊 Dynamic thresholds: ground={ground_threshold}, space={space_threshold} (turn {current_turn}, life={life_force})")
+            logger.info(f"   ⚔️ Low life ({life_force}): accepting {'+' + str(contest_advantage) if contest_advantage > 0 else 'ties'} instead of +2 advantage")
+        else:
+            logger.info(f"   📊 Dynamic thresholds: ground={ground_threshold}, space={space_threshold} (turn {current_turn}, life={life_force})")
 
         # =================================================================
         # STEP 1: DEPLOY LOCATIONS FIRST
         # This is CRITICAL - locations open new tactical options
+        # Also create virtual LocationAnalysis for each deployed location so
+        # characters can be planned to deploy there in the same phase.
         # =================================================================
         force_remaining = force_to_spend
+        newly_deployed_locations: List[LocationAnalysis] = []
+
         for loc_card in locations_in_hand:
             if loc_card['cost'] <= force_remaining:
                 plan.instructions.append(DeploymentInstruction(
@@ -2119,6 +2170,41 @@ class DeployPhasePlanner:
                 ))
                 force_remaining -= loc_card['cost']
                 logger.info(f"   📍 Plan: Deploy location {loc_card['name']} (cost {loc_card['cost']})")
+
+                # Create virtual LocationAnalysis for the newly deployed location
+                # so we can plan character deployments there in the same phase
+                loc_meta = get_card(loc_card['blueprint_id'])
+                if loc_meta:
+                    # Determine icons based on our side
+                    if my_side == 'dark':
+                        my_icons = loc_meta.dark_side_icons or 0
+                        their_icons = loc_meta.light_side_icons or 0
+                    else:
+                        my_icons = loc_meta.light_side_icons or 0
+                        their_icons = loc_meta.dark_side_icons or 0
+
+                    is_ground = getattr(loc_meta, 'is_site', False) or 'Site' in (loc_meta.sub_type or '')
+                    is_space = getattr(loc_meta, 'is_system', False) or 'System' in (loc_meta.sub_type or '')
+                    is_interior = getattr(loc_meta, 'is_interior', False)
+                    is_exterior = getattr(loc_meta, 'is_exterior', True)  # Default exterior
+
+                    # Only add as target if opponent has icons there (for force drain value)
+                    if their_icons > 0:
+                        virtual_loc = LocationAnalysis(
+                            card_id=f"planned_{loc_card['blueprint_id']}",
+                            name=loc_card['name'],
+                            is_ground=is_ground,
+                            is_space=is_space,
+                            my_power=0,
+                            their_power=0,
+                            my_icons=my_icons,
+                            their_icons=their_icons,
+                            is_interior=is_interior,
+                            is_exterior=is_exterior,
+                            location_index=-1,  # No index yet
+                        )
+                        newly_deployed_locations.append(virtual_loc)
+                        logger.info(f"   📍 New location available for chars: {loc_card['name']} (our={my_icons}, their={their_icons} icons)")
 
         # =================================================================
         # STEP 2: IDENTIFY CONTESTED LOCATIONS (reduce harm)
@@ -2448,6 +2534,12 @@ class DeployPhasePlanner:
         # Take up to 2 contested (high priority) and at least 1 uncontested (fallback)
         char_ground_targets = contested_targets[:2] + uncontested_targets[:2]
 
+        # Add newly deployed ground locations as targets (uncontested, enemy icons)
+        for new_loc in newly_deployed_locations:
+            if new_loc.is_ground and new_loc.their_icons > 0:
+                char_ground_targets.append(new_loc)
+                logger.info(f"   📍 Added newly deployed location as target: {new_loc.name}")
+
         # Log why locations were excluded
         excluded_space = [loc.name for loc in locations if loc.is_space and not loc.is_ground]
         if excluded_space:
@@ -2521,6 +2613,12 @@ class DeployPhasePlanner:
             if loc not in space_targets:
                 space_targets.insert(0, loc)  # Contested locations also high priority
                 logger.info(f"   ⚔️ Crushable space: {loc.name} ({loc.my_power} vs {loc.their_power})")
+
+        # Add newly deployed space locations as targets (uncontested, enemy icons)
+        for new_loc in newly_deployed_locations:
+            if new_loc.is_space and new_loc.their_icons > 0:
+                space_targets.append(new_loc)
+                logger.info(f"   📍 Added newly deployed space location as target: {new_loc.name}")
 
         if space_targets:
             logger.info(f"   🚀 Space targets: {[(loc.name, loc.their_icons, loc.their_power) for loc in space_targets]}")
@@ -2618,7 +2716,7 @@ class DeployPhasePlanner:
         logger.info(f"   🎯 Final ground targets for planning: {[loc.name for loc in char_ground_targets]}")
         all_ground_plans = self._generate_all_ground_plans(
             characters.copy(), vehicles.copy(), char_ground_targets, force_remaining, locations, all_pilots,
-            ground_threshold=ground_threshold
+            ground_threshold=ground_threshold, contest_advantage=contest_advantage
         )
 
         # Generate all space plans (one per affordable starship)
@@ -2626,7 +2724,7 @@ class DeployPhasePlanner:
         # CRITICAL: Pass ALL pilots (not just pure pilots) - any pilot can fly ships!
         all_space_plans = self._generate_all_space_plans(
             starships.copy(), space_targets, force_remaining, all_pilots, locations,
-            space_threshold=space_threshold
+            space_threshold=space_threshold, contest_advantage=contest_advantage
         )
 
         # Log all plans for debugging
@@ -2890,7 +2988,18 @@ class DeployPhasePlanner:
                 for inst in best_instructions:
                     logger.info(f"      - {inst.card_name} -> {inst.target_location_name} ({inst.power_contribution} power)")
 
-                plan.instructions.extend(best_instructions)
+                # CRITICAL: Filter out cards already in the plan from earlier steps
+                # (e.g., STEP 4 may have added cards for weak location reinforcement)
+                already_planned_blueprints = {inst.card_blueprint_id for inst in plan.instructions}
+                new_instructions = [
+                    inst for inst in best_instructions
+                    if inst.card_blueprint_id not in already_planned_blueprints
+                ]
+                if len(new_instructions) < len(best_instructions):
+                    skipped = len(best_instructions) - len(new_instructions)
+                    logger.info(f"   ⏭️ Skipped {skipped} cards already in plan from earlier steps")
+
+                plan.instructions.extend(new_instructions)
                 plan.force_reserved_for_battle = best_reserve  # Update with actual reserve
                 force_remaining = best_force_left
 
@@ -2904,7 +3013,61 @@ class DeployPhasePlanner:
                 # try to deploy to the other domain with remaining force.
                 # =================================================================
                 if force_remaining > 0 and best_type != 'combined':
-                    if best_type == 'ground' and starships:
+                    if best_type == 'repilot' and starships:
+                        # Re-pilot plan chosen - deploy remaining piloted starships to other space locations
+                        remaining_ships = [s for s in starships if s['blueprint_id'] not in used_blueprints]
+                        piloted_ships = [s for s in remaining_ships if not s.get('needs_pilot') and s['power'] > 0]
+
+                        if piloted_ships and space_targets:
+                            logger.info(f"   🔄 AFTER RE-PILOT: {force_remaining} force left, deploying to space")
+                            deployed_any = False
+                            for loc in space_targets:
+                                if force_remaining <= 0:
+                                    break
+                                # Find affordable ships that meet threshold
+                                affordable = [s for s in piloted_ships
+                                             if s['cost'] <= force_remaining and s['power'] >= space_threshold]
+                                if not affordable:
+                                    continue
+                                # Pick best ship (highest power)
+                                best_ship = max(affordable, key=lambda s: s['power'])
+                                plan.instructions.append(DeploymentInstruction(
+                                    card_blueprint_id=best_ship['blueprint_id'],
+                                    card_name=best_ship['name'],
+                                    target_location_id=loc.card_id,
+                                    target_location_name=loc.name,
+                                    priority=2,
+                                    reason=f"Space: Deploy after re-pilot ({best_ship['power']} power)",
+                                    power_contribution=best_ship['power'],
+                                    deploy_cost=best_ship['cost'],
+                                ))
+                                logger.info(f"   🚀 AFTER RE-PILOT: Deploy {best_ship['name']} to {loc.name}")
+                                force_remaining -= best_ship['cost']
+                                piloted_ships.remove(best_ship)
+                                deployed_any = True
+                                # Continue to next location - deploy to multiple if affordable!
+
+                            # Also try to deploy remaining ships to same location if we have force left
+                            if not deployed_any and piloted_ships and force_remaining > 0:
+                                # Couldn't deploy to new locations, try any affordable ship
+                                affordable = [s for s in piloted_ships if s['cost'] <= force_remaining]
+                                if affordable and space_targets:
+                                    best_ship = max(affordable, key=lambda s: s['power'])
+                                    loc = space_targets[0]
+                                    plan.instructions.append(DeploymentInstruction(
+                                        card_blueprint_id=best_ship['blueprint_id'],
+                                        card_name=best_ship['name'],
+                                        target_location_id=loc.card_id,
+                                        target_location_name=loc.name,
+                                        priority=2,
+                                        reason=f"Space: Deploy after re-pilot (below threshold but using force)",
+                                        power_contribution=best_ship['power'],
+                                        deploy_cost=best_ship['cost'],
+                                    ))
+                                    logger.info(f"   🚀 AFTER RE-PILOT: Deploy {best_ship['name']} to {loc.name} (using remaining force)")
+                                    force_remaining -= best_ship['cost']
+
+                    elif best_type == 'ground' and starships:
                         # Ground plan chosen - deploy remaining piloted starships to space
                         remaining_ships = [s for s in starships if s['blueprint_id'] not in used_blueprints]
                         piloted_ships = [s for s in remaining_ships if not s.get('needs_pilot') and s['power'] > 0]
@@ -3676,6 +3839,10 @@ class DeployPhasePlanner:
 
         # Track unique card titles we've already added from hand
         unique_titles_in_plan: Set[str] = set()
+
+        # Log unique cards already on board (helps explain why cards from hand can't deploy)
+        if unique_titles_on_board:
+            logger.info(f"   📋 Unique cards already on board: {sorted(unique_titles_on_board)}")
 
         # DEBUG: Log how many cards we're iterating over
         hand_list = list(board_state.cards_in_hand)  # Materialize to get count
