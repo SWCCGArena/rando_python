@@ -328,7 +328,8 @@ class DeployPhasePlanner:
         Calculate dynamic deploy threshold based on game state.
 
         Threshold adjustments (applied in order):
-        1. Early game (turn < 4) with no contested locations: -2 (relaxed)
+        1. Early game (turn < 4) with no contested locations: -3 (relaxed)
+           This allows 3-power characters to deploy and enable force drains.
         2. Late game with low life force: additional decay
            - life_force < 10: -3 (desperate - deploy anything)
            - life_force < 20: -2 (critical - very aggressive)
@@ -374,7 +375,14 @@ class DeployPhasePlanner:
                     break
 
             if not has_contested:
-                threshold = max(3, threshold - 2)
+                # Ground: Lower threshold by 3 to allow 3-power characters to establish
+                # presence at locations with opponent icons (enables force drains early).
+                # Space: Keep the standard -2 reduction (starships usually have higher power).
+                # With threshold=6: ground -> max(2, 6-3) = 3, space -> max(3, 6-2) = 4
+                if is_space:
+                    threshold = max(3, threshold - 2)
+                else:
+                    threshold = max(2, threshold - 3)
                 early_game_relaxed = True
 
         # LATE GAME LIFE FORCE DECAY: Lower threshold when losing badly

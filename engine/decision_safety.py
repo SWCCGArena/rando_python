@@ -458,6 +458,11 @@ class DecisionTracker:
         # Track game state for distinguishing state-changing actions from loops
         self.last_state_hash: str = ""
 
+        # Track the last CARD_ACTION_CHOICE decision so we can block it
+        # when a subsequent target selection is cancelled
+        self.last_action_choice_key: str = ""
+        self.last_action_choice_response: str = ""
+
     def _decision_key(self, decision_type: str, decision_text: str) -> str:
         """Create a unique key for a decision"""
         # Use first 60 chars of text to identify the decision
@@ -511,6 +516,12 @@ class DecisionTracker:
         # Trim history
         if len(self.history) > self.max_history:
             self.history = self.history[-self.max_history:]
+
+        # Track the last CARD_ACTION_CHOICE so we can block it if
+        # the subsequent target selection is cancelled
+        if decision_type == 'CARD_ACTION_CHOICE' and response != "":
+            self.last_action_choice_key = key
+            self.last_action_choice_response = response
 
         # CRITICAL: Only track NON-PASS responses for loop detection.
         # Passing (empty response) can't cause an infinite loop because:
@@ -709,6 +720,42 @@ class DecisionTracker:
         """Get the most recent decisions"""
         return self.history[-count:]
 
+    def block_last_action_on_cancel(self, decision_type: str, decision_text: str) -> bool:
+        """
+        Block the previous CARD_ACTION_CHOICE when we cancel a target selection.
+
+        This breaks the loop pattern:
+        1. Select action (Force Lightning) → recorded as last_action_choice
+        2. Cancel target selection (no valid targets)
+        3. Back to action choice → action now blocked!
+
+        Returns True if we blocked an action, False otherwise.
+        """
+        # Only act when cancelling target selections (CARD_SELECTION/ARBITRARY_CARDS)
+        if decision_type not in ('CARD_SELECTION', 'ARBITRARY_CARDS'):
+            return False
+
+        # Check if decision text indicates a cancel option
+        text_lower = decision_text.lower()
+        if "cancel" not in text_lower and "done" not in text_lower:
+            return False
+
+        # Block the last action choice if we have one
+        if self.last_action_choice_key and self.last_action_choice_response:
+            if self.last_action_choice_key not in self.blocked_responses:
+                self.blocked_responses[self.last_action_choice_key] = set()
+            self.blocked_responses[self.last_action_choice_key].add(self.last_action_choice_response)
+            logger.warning(
+                f"🚫 Blocking action '{self.last_action_choice_response}' for "
+                f"'{self.last_action_choice_key[:50]}' - target selection was cancelled"
+            )
+            # Clear so we don't block it again
+            self.last_action_choice_key = ""
+            self.last_action_choice_response = ""
+            return True
+
+        return False
+
     def clear(self) -> None:
         """Clear all tracking data (e.g., at game start)"""
         self.history.clear()
@@ -717,3 +764,5 @@ class DecisionTracker:
         self.detected_loop_length = 0
         self.blocked_responses.clear()
         self.last_phase = ""
+        self.last_action_choice_key = ""
+        self.last_action_choice_response = ""

@@ -206,19 +206,71 @@ class AstrogatorBrain(StaticBrain):
         ],
     }
 
-    # Game end messages (player won, by score tier)
+    # Game end messages (player won, by score tier) - lists for variety
     END_GAME_NEW_RECORD = {
-        'excellent': "New record! {score} points! We're rich! Well, I'm rich. You get satisfaction.",
-        'good': "Score of {score}! New deck record. Not perfect, but I can sell it.",
-        'okay': "{score} is the new record. It's like being the tallest Jawa.",
-        'poor': "{score}. That's the best anyone's done? The bar is underground.",
+        'excellent': [
+            "New record! {score} points! We're rich! Well, I'm rich. You get satisfaction.",
+            "{score}! A new record! I'll add this to my collection of impressive statistics.",
+            "Record broken! {score} points! The Force is strong with this one.",
+            "{score} points! New record! I calculated you had a 12.3% chance of this. Impressive.",
+            "New high score: {score}! I'd applaud but I don't have hands. Consider yourself applauded.",
+        ],
+        'good': [
+            "Score of {score}! New deck record. Not perfect, but I can sell it.",
+            "{score}! New record! Not bad for an organic life form.",
+            "New record: {score}! You're getting better. Don't let it go to your head.",
+            "{score} points sets the new mark! I'm almost impressed. Almost.",
+            "Record! {score} points! The previous holder sends their congratulations. Probably.",
+        ],
+        'okay': [
+            "{score} is the new record. It's like being the tallest Jawa.",
+            "{score}! A new record! Low bar, but you cleared it. Barely.",
+            "New record: {score}. Not exactly impressive, but it's yours now.",
+            "{score} sets the record! The previous holder wasn't trying very hard, clearly.",
+            "Record! {score} points. I've seen better. I've also seen worse. This is... adequate.",
+            "{score}! New record! Somewhere, a Jawa is impressed. Just one though.",
+        ],
+        'poor': [
+            "{score}. That's the best anyone's done? The bar is underground.",
+            "{score}. New record. I hesitate to call it an achievement.",
+            "Record set at {score}. Future players will find this... beatable.",
+            "{score} is technically a new record. Technically.",
+            "New record: {score}. The bar was low. You barely cleared it.",
+            "{score}! A record! ...I'm going to keep my commentary to myself.",
+        ],
     }
 
     END_GAME_NO_RECORD = {
-        'excellent': "{score}! Excellent, but {holder} still beat you with {high_score}.",
-        'good': "{score}. Solid, but {holder} has {high_score}. So close, yet so far.",
-        'okay': "{score}. {holder} scored {high_score}. You have much to learn, young Padawan.",
-        'poor': "{score}? Really? {holder} got {high_score}. I weep for the future.",
+        'excellent': [
+            "{score}! Excellent, but {holder} still beat you with {high_score}.",
+            "{score} points! Great score, but {holder}'s {high_score} remains untouched.",
+            "Impressive {score}! But {holder} holds the record at {high_score}. Next time!",
+            "{score}! So close to {holder}'s record of {high_score}. The Force was almost with you.",
+            "A mighty {score}! Yet {holder}'s {high_score} stands firm. A worthy challenge awaits.",
+        ],
+        'good': [
+            "{score}. Solid, but {holder} has {high_score}. So close, yet so far.",
+            "{score} points. Good effort! {holder}'s {high_score} lives another day.",
+            "Nice! {score} points. {holder} still leads with {high_score} though.",
+            "{score}. Respectable! But {holder}'s {high_score} remains the target.",
+            "You scored {score}. {holder} scored {high_score}. Math is cruel.",
+        ],
+        'okay': [
+            "{score}. {holder} scored {high_score}. You have much to learn, young Padawan.",
+            "{score} points. {holder}'s {high_score} is still safe. Very safe.",
+            "You got {score}. {holder} got {high_score}. I'll let you do the math.",
+            "{score}. Not bad! But {holder}'s {high_score}? That's the target.",
+            "{score} points. The record of {high_score} by {holder} remains unchallenged.",
+            "{score}. {holder} laughs at your {high_score} record. Metaphorically.",
+        ],
+        'poor': [
+            "{score}? Really? {holder} got {high_score}. I weep for the future.",
+            "{score}. {holder} has {high_score}. The gap is... significant.",
+            "You scored {score}. {holder} scored {high_score}. No comment.",
+            "{score} points. {holder}'s {high_score} is in no danger whatsoever.",
+            "{score}. The record is {high_score} by {holder}. You have work to do.",
+            "{score}? {holder}'s {high_score} seems very far away right now.",
+        ],
     }
 
     # Multiple bot won messages for variety
@@ -676,12 +728,14 @@ class AstrogatorBrain(StaticBrain):
         else:
             tier = 'poor'
 
-        # Build message
+        # Build message - pick randomly from list of templates
         if is_new_deck_record:
-            template = self.END_GAME_NEW_RECORD[tier]
+            templates = self.END_GAME_NEW_RECORD[tier]
+            template = self._pick_message(templates)
             message = template.format(score=route_score)
         else:
-            template = self.END_GAME_NO_RECORD[tier]
+            templates = self.END_GAME_NO_RECORD[tier]
+            template = self._pick_message(templates)
             message = template.format(
                 score=route_score,
                 holder=previous_holder or "someone",

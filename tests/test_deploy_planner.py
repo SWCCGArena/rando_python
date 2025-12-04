@@ -1211,7 +1211,7 @@ def test_below_deploy_threshold_hold_back():
     """Test that bot holds back when combined power is below threshold (5 < 6)
 
     Turn 4+ uses full threshold (6), so 5 power should hold back.
-    Early game (turn < 4) uses relaxed threshold (4), which 5 power would meet.
+    Early game (turn < 4) uses relaxed threshold (3), which 5 power would meet.
     """
     scenario = (
         ScenarioBuilder("Below Deploy Threshold - Hold Back")
@@ -1752,7 +1752,7 @@ def test_just_below_threshold():
     """Test that deployment doesn't happen when just below threshold.
 
     Edge case: combined power is 5, full threshold is 6.
-    Turn 4+ uses full threshold; early game uses relaxed threshold (4).
+    Turn 4+ uses full threshold; early game uses relaxed threshold (3).
     """
     scenario = (
         ScenarioBuilder("Just Below Threshold")
@@ -3747,6 +3747,7 @@ def test_reinforce_below_threshold_before_establish():
         ScenarioBuilder("Reinforce Below Threshold Before Establish")
         .as_side("light")
         .with_force(11)
+        .with_turn(4)  # Turn 4+ uses full threshold (6)
         .with_deploy_threshold(6)
         # Location where we have presence but below threshold (3 < 6)
         .add_ground_location("North Corridor", my_icons=2, their_icons=1,
@@ -7496,6 +7497,126 @@ def test_permanently_piloted_ship_vs_unpiloted_with_pilot():
 
 
 # =============================================================================
+# =============================================================================
+# EARLY GAME THRESHOLD TESTS
+# =============================================================================
+
+def test_early_game_threshold_allows_three_power_ground():
+    """
+    Test that early game (turn < 4) with no contested locations uses reduced threshold (3)
+    for ground locations, allowing 3-power characters to deploy.
+
+    This was a bug fix: bot was holding back with 3-power characters because
+    threshold was 4, but deploying enables force drains which is valuable.
+    """
+    scenario = (
+        ScenarioBuilder("Early Game Ground Threshold = 3")
+        .as_side("dark")
+        .with_force(5)
+        .with_turn(1)  # Early game
+        .with_deploy_threshold(6)
+        # Uncontested location with opponent icons - should deploy for drains
+        .add_ground_location("Ewok Village", my_icons=1, their_icons=2)
+        # 3-power character - should meet early game threshold of 3
+        .add_character("General Hux", power=3, deploy_cost=3)
+        .expect_target("Ewok Village")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy != DeployStrategy.HOLD_BACK, \
+        f"Early game should deploy 3-power character! Got: {result.plan.strategy}"
+    assert len(result.plan.instructions) >= 1, \
+        f"Should deploy General Hux (3 power meets early game threshold)"
+
+
+def test_mid_game_threshold_requires_six_power_ground():
+    """
+    Test that mid-game (turn 4+) uses full threshold (6) for ground locations.
+    A single 3-power character should NOT deploy alone.
+    """
+    scenario = (
+        ScenarioBuilder("Mid Game Ground Threshold = 6")
+        .as_side("dark")
+        .with_force(5)
+        .with_turn(4)  # Mid-game, full threshold
+        .with_deploy_threshold(6)
+        # Same location but now threshold is 6
+        .add_ground_location("Ewok Village", my_icons=1, their_icons=2)
+        # 3-power character - below mid-game threshold of 6
+        .add_character("General Hux", power=3, deploy_cost=3)
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy == DeployStrategy.HOLD_BACK, \
+        f"Mid-game should hold back with only 3 power! Got: {result.plan.strategy}"
+    assert len(result.plan.instructions) == 0, \
+        f"Should NOT deploy (3 < 6 threshold)"
+
+
+def test_early_game_space_threshold_is_four():
+    """
+    Test that early game space threshold is 4 (not 3 like ground).
+    Starships typically have higher power so they keep the standard -2 reduction.
+    """
+    scenario = (
+        ScenarioBuilder("Early Game Space Threshold = 4")
+        .as_side("dark")
+        .with_force(10)
+        .with_turn(1)  # Early game
+        .with_deploy_threshold(6)
+        # Uncontested space location
+        .add_space_location("Death Star System", my_icons=2, their_icons=1)
+        # 3-power ship - below early game space threshold of 4
+        .add_starship("TIE Fighter", power=3, deploy_cost=2, has_permanent_pilot=True)
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy == DeployStrategy.HOLD_BACK, \
+        f"Early game space should need 4 power! 3-power ship should hold back. Got: {result.plan.strategy}"
+
+
+def test_early_game_contested_uses_full_threshold():
+    """
+    Test that if there IS a contested location, early game doesn't reduce threshold
+    for ESTABLISHING at new empty locations.
+
+    Note: The bot may still reinforce the contested location if that's advantageous.
+    This test uses only empty locations to verify the threshold applies correctly.
+    """
+    scenario = (
+        ScenarioBuilder("Early Game Contested = Full Threshold")
+        .as_side("dark")
+        .with_force(10)
+        .with_turn(1)  # Early game BUT contested
+        .with_deploy_threshold(6)
+        # Contested location - this prevents early game reduction
+        # But we don't put any cards here to deploy to
+        .add_ground_location("Contested Site", my_icons=2, their_icons=1,
+                             my_power=4, their_power=3, interior=True, exterior=False)
+        # Empty location - but threshold should still be 6 (not reduced)
+        .add_ground_location("Empty Site", my_icons=1, their_icons=2)
+        # 3-power character - below threshold of 6
+        # Also can't deploy to Contested Site (interior) if it's a trooper
+        .add_character("Stormtrooper", power=3, deploy_cost=3)
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    # Check if deployed to empty site
+    empty_deploys = [i for i in result.plan.instructions
+                     if i.target_location_name == "Empty Site"]
+
+    # With contested location present, threshold should be 6 (not reduced to 3)
+    # So 3-power character should NOT establish at empty site
+    assert len(empty_deploys) == 0, \
+        f"With contested location, threshold=6. 3-power char shouldn't establish at empty site. Got: {empty_deploys}"
+
+
 # MAIN (for standalone execution)
 # =============================================================================
 

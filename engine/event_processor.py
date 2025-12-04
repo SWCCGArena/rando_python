@@ -532,13 +532,14 @@ class EventProcessor:
         light_attrition = event.get('lightBattleAttritionRemaining', '0')
         light_damage = event.get('lightBattleDamageRemaining', '0')
 
-        self.board_state.dark_attrition_remaining = int(dark_attrition)
-        self.board_state.dark_damage_remaining = int(dark_damage)
-        self.board_state.light_attrition_remaining = int(light_attrition)
-        self.board_state.light_damage_remaining = int(light_damage)
+        # Use int(float()) to handle decimal attrition values like "11.3"
+        self.board_state.dark_attrition_remaining = int(float(dark_attrition))
+        self.board_state.dark_damage_remaining = int(float(dark_damage))
+        self.board_state.light_attrition_remaining = int(float(light_attrition))
+        self.board_state.light_damage_remaining = int(float(light_damage))
 
         # Log if we're in damage segment with pending attrition/damage
-        total_pending = int(dark_attrition) + int(dark_damage) + int(light_attrition) + int(light_damage)
+        total_pending = int(float(dark_attrition)) + int(float(dark_damage)) + int(float(light_attrition)) + int(float(light_damage))
         if total_pending > 0:
             logger.info(f"⚔️ Battle damage: Dark attrition={dark_attrition}, damage={dark_damage} | "
                        f"Light attrition={light_attrition}, damage={light_damage}")

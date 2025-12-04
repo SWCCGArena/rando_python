@@ -306,6 +306,11 @@ class DecisionHandler:
         if not is_valid:
             logger.warning(f"⚠️  Response validation warning: {warning}")
 
+        # CRITICAL: If we're cancelling a target selection (empty response),
+        # block the previous action that led us here to prevent loops
+        if result[1] == "" and decision_type in ('CARD_SELECTION', 'ARBITRARY_CARDS'):
+            _decision_tracker.block_last_action_on_cancel(decision_type, decision_text)
+
         # Track this decision
         _decision_tracker.record_decision(decision_type, decision_text, decision_id, result[1])
 
