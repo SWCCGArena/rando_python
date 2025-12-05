@@ -1575,6 +1575,14 @@ def handle_stop_bot():
     elif bot_state.client:
         bot_state.client.logout()
 
+    # CRITICAL: Clear all components so they get re-created with new client on restart
+    # Without this, the old coordinator/managers keep references to the old (logged out) client
+    bot_state.coordinator = None
+    bot_state.table_manager = None
+    bot_state.chat_manager = None
+    bot_state.command_handler = None
+    bot_state.client = None
+
     emit('state_update', bot_state.to_dict())
     emit('log_message', {'message': '🛑 Bot stopped', 'level': 'info'})
 
@@ -1637,6 +1645,12 @@ def handle_change_server(data):
 
     # Save to persistent settings
     settings.set_setting('gemp_server_url', server_url)
+
+    # Clear all components that reference the old client
+    bot_state.coordinator = None
+    bot_state.table_manager = None
+    bot_state.chat_manager = None
+    bot_state.command_handler = None
 
     # Recreate client with new URL
     from engine.client import GEMPClient
