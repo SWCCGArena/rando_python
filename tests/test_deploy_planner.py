@@ -6162,7 +6162,7 @@ def test_excess_force_not_wasted_on_marginal_gains():
 def test_character_with_tatooine_restriction_only_deploys_to_tatooine():
     """
     A character restricted to Tatooine (like Jawas) should only deploy to
-    Tatooine locations, not to other systems like Dagobah.
+    Tatooine locations, not to other systems like Hoth.
     """
     patch_card_loader()
     try:
@@ -6175,14 +6175,14 @@ def test_character_with_tatooine_restriction_only_deploys_to_tatooine():
                           deploy_restriction_systems=["Tatooine"])
             # Normal character: can deploy anywhere (power 6 to meet threshold)
             .add_character("Stormtrooper", power=6, deploy_cost=2, is_warrior=True)
-            # Dagobah location (NOT Tatooine)
-            .add_ground_location("Dagobah: Yoda's Hut", their_power=0, their_icons=1)
+            # Hoth location (NOT Tatooine, and not restricted like Dagobah)
+            .add_ground_location("Hoth: Echo Base", their_power=0, their_icons=1)
             .build()
         )
 
         result = run_scenario(scenario)
 
-        # Should NOT deploy Jawa (restricted to Tatooine, but only Dagobah available)
+        # Should NOT deploy Jawa (restricted to Tatooine, but only Hoth available)
         # Should deploy Stormtrooper (no restrictions)
         jawa_deploys = [i for i in result.plan.instructions if "Jawa" in i.card_name]
         trooper_deploys = [i for i in result.plan.instructions if "Stormtrooper" in i.card_name]
@@ -6190,9 +6190,9 @@ def test_character_with_tatooine_restriction_only_deploys_to_tatooine():
         logger.info(f"   📊 Jawa deploys: {len(jawa_deploys)}, Trooper deploys: {len(trooper_deploys)}")
 
         assert len(jawa_deploys) == 0, \
-            f"Jawa should NOT deploy to Dagobah (restricted to Tatooine)! Got {jawa_deploys}"
+            f"Jawa should NOT deploy to Hoth (restricted to Tatooine)! Got {jawa_deploys}"
         assert len(trooper_deploys) > 0, \
-            f"Stormtrooper should deploy to Dagobah (no restrictions)"
+            f"Stormtrooper should deploy to Hoth (no restrictions)"
 
     finally:
         unpatch_card_loader()
@@ -6320,8 +6320,8 @@ def test_restricted_and_unrestricted_characters_together():
                           deploy_restriction_systems=["Endor"])
             # Stormtrooper: no restrictions
             .add_character("Stormtrooper", power=6, deploy_cost=2, is_warrior=True)
-            # Dagobah location (neither Tatooine nor Endor)
-            .add_ground_location("Dagobah: Yoda's Hut", their_power=0, their_icons=2)
+            # Hoth location (neither Tatooine nor Endor, and not Dagobah/Ahch-To restricted)
+            .add_ground_location("Hoth: Ice Plains", their_power=0, their_icons=2)
             .build()
         )
 
@@ -6334,9 +6334,9 @@ def test_restricted_and_unrestricted_characters_together():
 
         logger.info(f"   📊 Jawa: {len(jawa_deploys)}, Ewok: {len(ewok_deploys)}, Trooper: {len(trooper_deploys)}")
 
-        assert len(jawa_deploys) == 0, "Jawa should NOT deploy to Dagobah"
-        assert len(ewok_deploys) == 0, "Ewok should NOT deploy to Dagobah"
-        assert len(trooper_deploys) > 0, "Stormtrooper SHOULD deploy to Dagobah"
+        assert len(jawa_deploys) == 0, "Jawa should NOT deploy to Hoth"
+        assert len(ewok_deploys) == 0, "Ewok should NOT deploy to Hoth"
+        assert len(trooper_deploys) > 0, "Stormtrooper SHOULD deploy to Hoth"
 
     finally:
         unpatch_card_loader()

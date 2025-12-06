@@ -94,6 +94,29 @@ def _pilot_score_for_ship(pilot_dict: Dict, ship_dict: Dict) -> int:
     return base_score
 
 
+def is_restricted_deployment_location(location_name: str) -> bool:
+    """
+    Check if a location has special deployment restrictions (Dagobah/Ahch-To).
+
+    Dagobah and Ahch-To have special rules:
+    - Characters, vehicles, starships may NOT deploy there unless specifically
+      allowed by their gametext (e.g., "May deploy to Dagobah")
+    - Most cards cannot deploy to these locations
+
+    Since checking every card's gametext for deployment permissions is complex,
+    we simply exclude these locations from deployment planning. The rare cards
+    that CAN deploy there (like Yoda) would need special handling.
+
+    Args:
+        location_name: The location's name/title
+
+    Returns:
+        True if this is a restricted deployment location
+    """
+    name_lower = location_name.lower()
+    return 'dagobah' in name_lower or 'ahch-to' in name_lower
+
+
 class DeployStrategy(Enum):
     """High-level deployment strategy for this phase"""
     HOLD_BACK = "hold_back"           # Don't deploy - save for later
@@ -2294,6 +2317,7 @@ class DeployPhasePlanner:
             and loc.their_power == 0  # Enemy has no presence (truly uncontested)
             and loc.is_ground  # Characters can only go to ground locations
             and loc.my_icons > 0  # MUST have force icons to deploy (or presence, but my_power==0)
+            and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         # Space locations for ships
         # CRITICAL: Can only deploy to locations where we have force icons
@@ -2306,6 +2330,7 @@ class DeployPhasePlanner:
             and loc.their_power == 0  # Enemy has no ships (truly uncontested)
             and loc.is_space  # It's a space location
             and loc.my_icons > 0  # MUST have our force icons to deploy
+            and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
 
         # =================================================================
@@ -2319,6 +2344,7 @@ class DeployPhasePlanner:
             and loc.my_power == 0  # We're not there yet
             and loc.their_power > 0  # Enemy HAS ships there
             and loc.my_icons > 0  # We have icons - can deploy!
+            and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         if attackable_space:
             logger.info(f"   ⚔️ Attackable space: {[(loc.name, loc.their_power, loc.my_icons) for loc in attackable_space]}")
@@ -2508,12 +2534,14 @@ class DeployPhasePlanner:
 
         # Ground targets for characters
         # CRITICAL: Must have our icons to deploy (or presence, but we filter my_power==0)
+        # EXCLUDE: Dagobah and Ahch-To (special deployment restrictions - most cards can't deploy)
         char_ground_targets = [
             loc for loc in locations
             if loc.is_ground
             and (loc.their_power > 0 or loc.their_icons > 0)  # Opponent has presence/icons
             and loc.my_power == 0  # We don't have presence yet
             and loc.my_icons > 0  # MUST have our force icons to deploy there
+            and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         # CRITICAL: Sort contested locations FIRST (their_power > 0), then by icons
         # Beating opponents is MORE valuable than establishing at empty locations!
@@ -2559,6 +2587,7 @@ class DeployPhasePlanner:
             and loc.is_ground  # Ground location
             and not loc.should_flee  # Don't reinforce if fleeing
             and (loc.my_power - loc.their_power) < DEPLOY_OVERKILL_THRESHOLD  # Not overkill
+            and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         for loc in crushable_ground:
             if loc not in char_ground_targets:
@@ -2581,6 +2610,7 @@ class DeployPhasePlanner:
             and loc.their_icons > 0  # Has enemy icons (strategically valuable)
             and loc.my_icons > 0  # Has our icons (it's "our" location, not just presence)
             and loc.my_power < UNCONTESTED_FORTIFIED_THRESHOLD  # Not already fortified
+            and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         for loc in reinforceable_ground:
             if loc not in char_ground_targets:
@@ -2598,6 +2628,7 @@ class DeployPhasePlanner:
             and loc.is_space  # Space location
             and not loc.should_flee  # Don't reinforce if fleeing
             and (loc.my_power - loc.their_power) < DEPLOY_OVERKILL_THRESHOLD  # Not overkill
+            and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         space_targets = uncontested_space.copy()
 
