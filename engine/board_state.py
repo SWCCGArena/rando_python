@@ -81,6 +81,10 @@ class CardInPlay:
     deploy: int = 0
     forfeit: int = 0
 
+    # Objective flip state (for two-sided cards like Objectives)
+    # collapsed=False means front side showing, collapsed=True means back side showing
+    collapsed: bool = False
+
     def __repr__(self):
         return f"CardInPlay({self.blueprint_id}@{self.zone}, owner={self.owner}, loc={self.location_index})"
 
@@ -238,7 +242,7 @@ class BoardState:
 
     def update_cards_in_play(self, card_id: str, target_card_id: Optional[str],
                              blueprint_id: Optional[str], zone: str, owner: str,
-                             location_index: int):
+                             location_index: int, collapsed: bool = False):
         """
         Update card tracking - the main entry point for all card state changes.
 
@@ -249,11 +253,14 @@ class BoardState:
         - Moving existing cards between zones/locations
         - Attaching/detaching cards
         - Proper cleanup of old positions
+
+        Args:
+            collapsed: For objectives/two-sided cards, True means back side showing
         """
         if zone == "AT_LOCATION":
-            self._handle_card_at_location(card_id, blueprint_id, zone, owner, location_index)
+            self._handle_card_at_location(card_id, blueprint_id, zone, owner, location_index, collapsed)
         elif zone == "ATTACHED":
-            self._handle_card_attached(card_id, target_card_id, blueprint_id, zone, owner)
+            self._handle_card_attached(card_id, target_card_id, blueprint_id, zone, owner, collapsed)
         elif zone == "LOCATIONS":
             # Locations are handled separately via add_location()
             pass
@@ -261,10 +268,11 @@ class BoardState:
             self._handle_card_in_hand(card_id, blueprint_id, zone, owner)
         else:
             # Other zones (SIDE_OF_TABLE, FORCE_PILE, etc.)
-            self._handle_card_other_zone(card_id, blueprint_id, zone, owner)
+            self._handle_card_other_zone(card_id, blueprint_id, zone, owner, collapsed)
 
     def _handle_card_at_location(self, card_id: str, blueprint_id: Optional[str],
-                                  zone: str, owner: str, location_index: int):
+                                  zone: str, owner: str, location_index: int,
+                                  collapsed: bool = False):
         """Handle cards deployed at board locations (AT_LOCATION zone)"""
         self._ensure_location_exists(location_index)
         location = self.locations[location_index]
@@ -278,7 +286,8 @@ class BoardState:
                 blueprint_id=blueprint_id or "",
                 zone=zone,
                 owner=owner,
-                location_index=location_index
+                location_index=location_index,
+                collapsed=collapsed
             )
             self.cards_in_play[card_id] = card
         else:
@@ -292,6 +301,7 @@ class BoardState:
         card.zone = zone
         card.owner = owner
         card.target_card_id = None  # Clear attachment
+        card.collapsed = collapsed  # Track flip state
         if blueprint_id:
             card.blueprint_id = blueprint_id
 
@@ -310,7 +320,8 @@ class BoardState:
         logger.debug(f"➕ Card {card_id} ({card.card_title or blueprint_id}) at location {location_index}")
 
     def _handle_card_attached(self, card_id: str, target_card_id: str,
-                               blueprint_id: Optional[str], zone: str, owner: str):
+                               blueprint_id: Optional[str], zone: str, owner: str,
+                               collapsed: bool = False):
         """Handle cards attached to other cards (ATTACHED zone)"""
         # Get or create the card
         card = self.cards_in_play.get(card_id)
@@ -321,7 +332,8 @@ class BoardState:
                 blueprint_id=blueprint_id or "",
                 zone=zone,
                 owner=owner,
-                location_index=-1
+                location_index=-1,
+                collapsed=collapsed
             )
             self.cards_in_play[card_id] = card
         else:
@@ -340,6 +352,7 @@ class BoardState:
         card.zone = zone
         card.owner = owner
         card.target_card_id = target_card_id
+        card.collapsed = collapsed
         if blueprint_id:
             card.blueprint_id = blueprint_id
 
@@ -396,7 +409,7 @@ class BoardState:
         logger.debug(f"➕ Card {card_id} ({card.card_title or blueprint_id}) in hand")
 
     def _handle_card_other_zone(self, card_id: str, blueprint_id: Optional[str],
-                                 zone: str, owner: str):
+                                 zone: str, owner: str, collapsed: bool = False):
         """Handle cards in other zones (SIDE_OF_TABLE, FORCE_PILE, etc.)"""
         # Get or create the card
         card = self.cards_in_play.get(card_id)
@@ -407,7 +420,8 @@ class BoardState:
                 blueprint_id=blueprint_id or "",
                 zone=zone,
                 owner=owner,
-                location_index=-999  # Special marker for "not at a location"
+                location_index=-999,  # Special marker for "not at a location"
+                collapsed=collapsed
             )
             self.cards_in_play[card_id] = card
 
@@ -419,12 +433,18 @@ class BoardState:
         card.owner = owner
         card.location_index = -999
         card.target_card_id = None
+        card.collapsed = collapsed  # Track flip state for objectives
 
         # Load metadata for new cards
         if is_new_card or (blueprint_id and not card.card_title):
             card.load_metadata()
 
-        logger.debug(f"➕ Card {card_id} ({card.card_title or blueprint_id}) in zone {zone}")
+        # Log objectives with their flip state
+        if zone == "SIDE_OF_TABLE" and card.card_type == "Objective":
+            side = "back" if collapsed else "front"
+            logger.info(f"📋 Objective {card.card_title} on {side} side (collapsed={collapsed})")
+        else:
+            logger.debug(f"➕ Card {card_id} ({card.card_title or blueprint_id}) in zone {zone}")
 
     def _detach_card_from_parent(self, card: CardInPlay):
         """Remove card from its parent's attached_cards list (bidirectional cleanup)"""

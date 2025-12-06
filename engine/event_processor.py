@@ -207,6 +207,9 @@ class EventProcessor:
         target_card_id = event.get('targetCardId', '')
         location_index_str = event.get('locationIndex', '-1')
         system_name = event.get('systemName', '')
+        # Track flip state for objectives (collapsed=true means back side showing)
+        collapsed_str = event.get('collapsed', 'false')
+        collapsed = collapsed_str.lower() == 'true'
 
         try:
             location_index = int(location_index_str)
@@ -226,7 +229,8 @@ class EventProcessor:
                 blueprint_id=blueprint_id,
                 zone=zone,
                 owner=owner,
-                location_index=location_index
+                location_index=location_index,
+                collapsed=collapsed
             )
         except Exception as e:
             logger.error(f"❌ Error in update_cards_in_play: {e}")

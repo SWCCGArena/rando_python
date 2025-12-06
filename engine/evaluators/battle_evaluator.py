@@ -115,19 +115,43 @@ class BattleEvaluator(ActionEvaluator):
                     card = bs.cards_in_play.get(card_id)
                     if card and card.location_index >= 0:
                         loc_idx = card.location_index
+                        logger.debug(f"⚔️ Battle location found via card {card_id}: index {loc_idx}")
                         self._rank_battle_at_location(action, bs, loc_idx, game_strategy)
                     elif bs.locations:
-                        # Use first valid location as fallback
+                        # Fallback: Find a CONTESTED location (where we both have cards)
+                        # Don't just pick the first location!
+                        contested_idx = None
                         for idx, loc in enumerate(bs.locations):
-                            if loc:
-                                self._rank_battle_at_location(action, bs, idx, game_strategy)
+                            if loc and loc.my_cards and loc.their_cards:
+                                contested_idx = idx
+                                logger.debug(f"⚔️ Battle location found via contested search: {loc.site_name} (idx {idx})")
                                 break
+
+                        if contested_idx is not None:
+                            self._rank_battle_at_location(action, bs, contested_idx, game_strategy)
                         else:
-                            action.add_reasoning("No valid location for battle", 0.0)
+                            # No contested location - this shouldn't happen during battle
+                            logger.warning(f"⚔️ No contested location found for battle!")
+                            action.add_reasoning("No contested location for battle", 0.0)
                     else:
                         action.add_reasoning("No location info", 0.0)
                 else:
-                    action.add_reasoning("No card ID for battle location", 0.0)
+                    # No card ID - search for contested location
+                    if bs.locations:
+                        contested_idx = None
+                        for idx, loc in enumerate(bs.locations):
+                            if loc and loc.my_cards and loc.their_cards:
+                                contested_idx = idx
+                                logger.debug(f"⚔️ Battle location (no card_id): {loc.site_name} (idx {idx})")
+                                break
+
+                        if contested_idx is not None:
+                            self._rank_battle_at_location(action, bs, contested_idx, game_strategy)
+                        else:
+                            logger.warning(f"⚔️ No card_id and no contested location!")
+                            action.add_reasoning("No card ID or contested location", 0.0)
+                    else:
+                        action.add_reasoning("No card ID for battle location", 0.0)
             else:
                 # No board state - be cautious
                 action.add_reasoning("No board state - cautious", BAD_DELTA)
@@ -152,6 +176,33 @@ class BattleEvaluator(ActionEvaluator):
 
         power_diff = my_power - their_power
         ability_test = (my_ability >= ABILITY_TEST_HIGH or my_card_count >= ABILITY_TEST_LOW)
+
+        # Get location name for logging
+        loc = board_state.locations[loc_idx] if loc_idx < len(board_state.locations) else None
+        loc_name = loc.site_name if loc else f"location #{loc_idx}"
+        is_space = loc.is_space if loc else False
+
+        # Log the battle analysis for debugging
+        logger.info(f"⚔️ BATTLE ANALYSIS at {loc_name}:")
+        logger.info(f"   Power: {my_power} (me) vs {their_power} (them) = diff {power_diff}")
+        logger.info(f"   Cards: {my_card_count} (me) vs {their_card_count} (them)")
+        logger.info(f"   Ability: {my_ability}, ability test: {ability_test}")
+
+        # Check if we have a flee plan for this location
+        if hasattr(board_state, 'current_deploy_plan') and board_state.current_deploy_plan:
+            plan = board_state.current_deploy_plan
+            for inst in plan.instructions:
+                if inst.flee_from_location_id:
+                    # We have a flee instruction - check if it's for this location
+                    flee_loc_idx = None
+                    for idx, check_loc in enumerate(board_state.locations):
+                        if check_loc and str(check_loc.card_id) == str(inst.flee_from_location_id):
+                            flee_loc_idx = idx
+                            break
+                    if flee_loc_idx == loc_idx:
+                        logger.warning(f"   ⚠️ FLEE PLAN EXISTS for this location! Should flee, not battle!")
+                        action.add_reasoning(f"FLEE PLAN EXISTS - should flee, not battle!", VERY_BAD_DELTA)
+                        return
 
         # =================================================================
         # OPPONENT DAMAGE CANCEL AWARENESS (Houjix/Ghhhk - 24-28% of decks)
@@ -183,10 +234,7 @@ class BattleEvaluator(ActionEvaluator):
         # Should flee instead if possible
         # =================================================================
         if my_card_count == 1 and their_card_count == 1 and power_diff < 0:
-            loc = board_state.locations[loc_idx] if loc_idx < len(board_state.locations) else None
-            is_space = loc.is_space if loc else False
-
-            # Check if we can flee
+            # Check if we can flee (loc and is_space already defined above)
             flee_analysis = board_state.analyze_flee_options(loc_idx, is_space)
 
             if flee_analysis['can_flee'] and flee_analysis['can_afford']:
@@ -272,10 +320,7 @@ class BattleEvaluator(ActionEvaluator):
         else:
             # Severe disadvantage (-6 or worse)
             # BUT: Check if we can actually flee! If not, battling now is better
-            # than letting opponent build up even more power
-            loc = board_state.locations[loc_idx] if loc_idx < len(board_state.locations) else None
-            is_space = loc.is_space if loc else False
-
+            # than letting opponent build up even more power (loc and is_space defined above)
             flee_analysis = board_state.analyze_flee_options(loc_idx, is_space)
 
             if flee_analysis['can_flee'] and flee_analysis['can_afford']:

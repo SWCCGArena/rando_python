@@ -117,6 +117,67 @@ def is_restricted_deployment_location(location_name: str) -> bool:
     return 'dagobah' in name_lower or 'ahch-to' in name_lower
 
 
+def is_interior_naboo_site(location_name: str, is_interior: bool) -> bool:
+    """
+    Check if a location is an interior Naboo site.
+
+    Used for "We Have A Plan" objective restriction:
+    "While this side up, you may not deploy characters to interior Naboo sites."
+
+    Args:
+        location_name: The location's name/title
+        is_interior: Whether the location is marked as interior
+
+    Returns:
+        True if this is an interior Naboo site
+    """
+    if not is_interior:
+        return False
+    name_lower = location_name.lower()
+    # Theed Palace sites are interior Naboo sites
+    # Naboo: Theed Palace Throne Room, Theed Palace Hallway, etc.
+    return 'naboo' in name_lower or 'theed' in name_lower
+
+
+def has_we_have_a_plan_restriction(board_state) -> bool:
+    """
+    Check if "We Have A Plan" objective is active (front side) on our side of table.
+
+    The objective "We Have A Plan / They Will Be Lost And Confused" (14_52)
+    has a restriction while on the front (0) side:
+    "While this side up, you may not deploy characters to interior Naboo sites."
+
+    When flipped to "They Will Be Lost And Confused" (collapsed=True),
+    the restriction is lifted.
+
+    Args:
+        board_state: Current board state
+
+    Returns:
+        True if the restriction is active (objective on front side)
+    """
+    if not hasattr(board_state, 'cards_in_play') or not board_state.cards_in_play:
+        return False
+
+    my_player_name = getattr(board_state, 'my_player_name', '')
+
+    for card_id, card in board_state.cards_in_play.items():
+        # Check for We Have A Plan objective (14_52)
+        if card.blueprint_id == '14_52':
+            # Must be our card and on SIDE_OF_TABLE
+            if card.owner == my_player_name and card.zone == 'SIDE_OF_TABLE':
+                # collapsed=False means front side ("We Have A Plan") is showing
+                # This is when the restriction is active
+                if not card.collapsed:
+                    logger.debug(f"📋 We Have A Plan restriction ACTIVE (not flipped)")
+                    return True
+                else:
+                    logger.debug(f"📋 We Have A Plan flipped to 'They Will Be Lost And Confused' - no restriction")
+                    return False
+
+    return False
+
+
 class DeployStrategy(Enum):
     """High-level deployment strategy for this phase"""
     HOLD_BACK = "hold_back"           # Don't deploy - save for later
@@ -2385,6 +2446,14 @@ class DeployPhasePlanner:
             logger.info(f"   📊 Dynamic thresholds: ground={ground_threshold}, space={space_threshold} (turn {current_turn}, life={life_force})")
 
         # =================================================================
+        # CHECK OBJECTIVE-BASED DEPLOYMENT RESTRICTIONS
+        # "We Have A Plan" (14_52) prevents deploying chars to interior Naboo sites
+        # =================================================================
+        whap_restriction = has_we_have_a_plan_restriction(board_state)
+        if whap_restriction:
+            logger.info("   📋 ACTIVE: 'We Have A Plan' - cannot deploy chars to interior Naboo sites")
+
+        # =================================================================
         # STEP 1: DEPLOY LOCATIONS FIRST
         # This is CRITICAL - locations open new tactical options
         # Also create virtual LocationAnalysis for each deployed location so
@@ -2453,6 +2522,7 @@ class DeployPhasePlanner:
             if loc.my_power > 0 and loc.their_power > 0 and loc.power_differential < 0
             and not loc.should_flee  # DON'T REINFORCE IF WE'RE FLEEING
             and loc.is_ground  # Characters for ground
+            and not (whap_restriction and is_interior_naboo_site(loc.name, loc.is_interior))  # Skip interior Naboo if WHAP active
         ]
         contested_space = [
             loc for loc in locations
@@ -2484,6 +2554,7 @@ class DeployPhasePlanner:
             and loc.is_ground  # Ground location
             and loc.my_icons > 0  # Skip 0-icon locations (low value to reinforce)
             and loc.their_icons > 0  # Skip if opponent can't deploy here (safe location!)
+            and not (whap_restriction and is_interior_naboo_site(loc.name, loc.is_interior))  # Skip interior Naboo if WHAP active
         ]
         weak_presence_space = [
             loc for loc in locations
@@ -2775,6 +2846,7 @@ class DeployPhasePlanner:
         # Ground targets for characters
         # CRITICAL: Must have our icons to deploy (or presence, but we filter my_power==0)
         # EXCLUDE: Dagobah and Ahch-To (special deployment restrictions - most cards can't deploy)
+        # EXCLUDE: Interior Naboo sites if "We Have A Plan" objective is active (front side)
         char_ground_targets = [
             loc for loc in locations
             if loc.is_ground
@@ -2782,6 +2854,7 @@ class DeployPhasePlanner:
             and loc.my_power == 0  # We don't have presence yet
             and loc.my_icons > 0  # MUST have our force icons to deploy there
             and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
+            and not (whap_restriction and is_interior_naboo_site(loc.name, loc.is_interior))  # Skip interior Naboo if WHAP active
         ]
         # CRITICAL: Sort contested locations FIRST (their_power > 0), then by icons
         # Beating opponents is MORE valuable than establishing at empty locations!
@@ -4000,12 +4073,12 @@ class DeployPhasePlanner:
         plan.target_locations = locations
 
         # Assign backup targets for each instruction
-        self._assign_backup_targets(plan, locations)
+        self._assign_backup_targets(plan, locations, board_state)
 
         self.current_plan = plan
         return plan
 
-    def _assign_backup_targets(self, plan: DeploymentPlan, locations: List[LocationAnalysis]):
+    def _assign_backup_targets(self, plan: DeploymentPlan, locations: List[LocationAnalysis], board_state=None):
         """
         For each instruction, find a backup location in case the primary is unavailable.
 
@@ -4015,9 +4088,21 @@ class DeployPhasePlanner:
         if not locations or not plan.instructions:
             return
 
+        # Check for objective-based deployment restrictions
+        whap_restriction = has_we_have_a_plan_restriction(board_state) if board_state else False
+        if whap_restriction:
+            logger.debug("   📋 Backup selection: WHAP restriction active, excluding interior Naboo sites")
+
         # Separate ground and space locations
-        ground_locs = [loc for loc in locations if loc.is_ground and loc.my_icons > 0]
+        # Apply WHAP restriction to ground locations for character deployments
+        ground_locs = [
+            loc for loc in locations
+            if loc.is_ground and loc.my_icons > 0
+            and not (whap_restriction and is_interior_naboo_site(loc.name, loc.is_interior))
+        ]
         space_locs = [loc for loc in locations if loc.is_space and loc.my_icons > 0]
+
+        logger.debug(f"   📋 Backup candidates: {len(ground_locs)} ground, {len(space_locs)} space locations")
 
         # Sort by strategic value (uncontested opponent locations first, then reinforcement opportunities)
         def location_value(loc: LocationAnalysis) -> tuple:
@@ -4056,15 +4141,23 @@ class DeployPhasePlanner:
                     continue
 
                 # === POWER DEFICIT CHECK ===
-                # If opponent has presence and we'd be massively outpowered, skip this backup
+                # Backup locations should be SAFE to deploy to, not suicide missions!
+                # Use the SAME standards we'd use for primary location selection.
+
                 if loc.their_power > 0 and loc.my_power == 0:
-                    # We'd be establishing alone against opponent
-                    # Skip if opponent has 3x+ our power OR deficit would be > 8
+                    # We'd be establishing ALONE against opponent
+                    # This is very risky - opponent will likely battle and kill us
                     power_after = card_power
                     deficit = loc.their_power - power_after
 
-                    if deficit > 8 or (card_power > 0 and loc.their_power >= card_power * 3):
-                        logger.debug(f"   Skipping backup {loc.name}: {card_power} power vs {loc.their_power} opponent = MASSACRE")
+                    # STRICT: Don't establish alone if we'd be at ANY significant deficit
+                    # Allow at most -2 deficit (reasonable destiny swing)
+                    # Also skip if opponent has 2x our power (they could reinforce easily)
+                    if deficit > 2:
+                        logger.debug(f"   Skipping backup {loc.name}: {card_power} vs {loc.their_power} = deficit {deficit} (too risky alone)")
+                        continue
+                    if card_power > 0 and loc.their_power >= card_power * 2:
+                        logger.debug(f"   Skipping backup {loc.name}: {card_power} vs {loc.their_power} = opponent 2x+ our power")
                         continue
 
                 elif loc.their_power > 0 and loc.my_power > 0:
@@ -4072,9 +4165,10 @@ class DeployPhasePlanner:
                     power_after = loc.my_power + card_power
                     deficit = loc.their_power - power_after
 
-                    # Skip if we'd STILL be at a huge deficit after deploying
-                    if deficit > 8:
-                        logger.debug(f"   Skipping backup {loc.name}: {power_after} vs {loc.their_power} = still losing badly")
+                    # Skip if we'd STILL be at a deficit > 4 after deploying
+                    # (We need to be competitive, not just slightly less losing)
+                    if deficit > 4:
+                        logger.debug(f"   Skipping backup {loc.name}: {power_after} vs {loc.their_power} = still losing by {deficit}")
                         continue
 
                 # This location is viable as backup
@@ -4087,7 +4181,11 @@ class DeployPhasePlanner:
                     inst.backup_reason = f"reinforce ({loc.my_power} vs {loc.their_power})"
                 else:
                     inst.backup_reason = f"establish presence ({loc.my_icons} icons)"
+                logger.debug(f"   📋 Backup for {inst.card_name}: {loc.name} ({inst.backup_reason})")
                 break
+            else:
+                # No viable backup found after checking all candidates
+                logger.debug(f"   ⚠️ No viable backup for {inst.card_name} - all locations too dangerous or restricted")
 
     def _get_all_deployable_cards(self, board_state) -> List[Dict]:
         """Get all cards we can deploy with their metadata.
@@ -4396,38 +4494,43 @@ class DeployPhasePlanner:
             # =============================================================
             power_diff = analysis.power_differential
 
-            # RETREAT situation: We're at severe disadvantage
-            # Don't reinforce - we'll flee in move phase
-            if analysis.contested and power_diff <= RETREAT_THRESHOLD:
-                analysis.should_flee = True
-                # Check if we can actually flee
-                if hasattr(board_state, 'analyze_flee_options'):
-                    flee_info = board_state.analyze_flee_options(idx, analysis.is_space)
-                    if flee_info.get('can_flee') and flee_info.get('can_afford'):
-                        logger.info(f"   🏃 {analysis.name}: should flee ({power_diff} diff), skip reinforce")
-                    else:
-                        # Can't flee - might need to reinforce anyway
-                        analysis.should_flee = False
-                        logger.info(f"   ⚠️ {analysis.name}: severe deficit ({power_diff}) but CAN'T FLEE")
-
-            # BATTLE OPPORTUNITY: We can flip to favorable with our deploy
-            # If we deploy our available power, can we reach FAVORABLE?
+            # BATTLE OPPORTUNITY CHECK FIRST: Can we win by reinforcing?
+            # This must happen BEFORE flee decision so we don't flee winnable battles
+            can_win_with_reinforcements = False
+            potential_diff = 0
             if analysis.contested and deployable_power > 0:
                 potential_power = analysis.my_power + deployable_power
                 potential_diff = potential_power - analysis.their_power
+
+                # If we can WIN (even by 1), don't flee - reinforce instead!
+                if potential_diff >= 0:
+                    can_win_with_reinforcements = True
+                    logger.info(f"   💪 {analysis.name}: CAN WIN with reinforcements ({analysis.my_power}+{deployable_power}={potential_power} vs {analysis.their_power}, diff=+{potential_diff})")
 
                 if potential_diff >= BATTLE_FAVORABLE_THRESHOLD:
                     analysis.can_flip_to_favorable = True
                     # This is a battle opportunity if we can also afford to battle
                     if board_state.force_pile >= 3:  # Need force for deploy + battle
                         analysis.is_battle_opportunity = True
-                        # CRITICAL: If we can WIN by reinforcing, DON'T flee!
-                        # Override the earlier should_flee decision
-                        if analysis.should_flee:
-                            analysis.should_flee = False
-                            logger.info(f"   ⚔️ {analysis.name}: BATTLE OPPORTUNITY (+{potential_diff} after deploy) - OVERRIDE FLEE, REINFORCE TO WIN!")
-                        else:
-                            logger.info(f"   ⚔️ {analysis.name}: BATTLE OPPORTUNITY (+{potential_diff} after deploy)")
+                        logger.info(f"   ⚔️ {analysis.name}: BATTLE OPPORTUNITY (+{potential_diff} after deploy)")
+
+            # RETREAT situation: We're at severe disadvantage AND can't win with reinforcements
+            # Don't reinforce - we'll flee in move phase
+            if analysis.contested and power_diff <= RETREAT_THRESHOLD and not can_win_with_reinforcements:
+                analysis.should_flee = True
+                # Check if we can actually flee
+                if hasattr(board_state, 'analyze_flee_options'):
+                    flee_info = board_state.analyze_flee_options(idx, analysis.is_space)
+                    if flee_info.get('can_flee') and flee_info.get('can_afford'):
+                        logger.info(f"   🏃 {analysis.name}: should flee ({power_diff} diff, can't win even with +{deployable_power}), skip reinforce")
+                    else:
+                        # Can't flee - might need to reinforce anyway
+                        analysis.should_flee = False
+                        logger.info(f"   ⚠️ {analysis.name}: severe deficit ({power_diff}) but CAN'T FLEE")
+            elif analysis.contested and power_diff <= RETREAT_THRESHOLD and can_win_with_reinforcements:
+                # We're behind but CAN win - DON'T flee, reinforce!
+                analysis.should_flee = False
+                logger.info(f"   🔄 {analysis.name}: behind ({power_diff}) but WILL REINFORCE TO WIN (+{potential_diff} after deploy)")
 
             locations.append(analysis)
 
