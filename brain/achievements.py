@@ -1,7 +1,7 @@
 """
 Achievements System
 
-Tracks 139 achievements:
+Tracks 144 achievements:
 - Single card appearances (53)
 - Ships/locations (18)
 - Card combinations (42)
@@ -11,6 +11,7 @@ Tracks 139 achievements:
 - Gameplay achievements (5)
 - Meta achievements (5)
 - Seasonal/random (2)
+- Holiday achievements (5) - Life Day only
 
 Achievement triggers:
 - card_in_play: Single card appears on board
@@ -23,11 +24,14 @@ Achievement triggers:
 - route_score: Route score threshold
 - games_played: Number of games
 - achievements: Number of achievements unlocked
+- holiday_*: Holiday-specific triggers (only available during active holidays)
 """
 
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Callable, TYPE_CHECKING
+
+from .holiday_overlay import get_holiday_overlay
 
 if TYPE_CHECKING:
     from engine.board_state import BoardState
@@ -408,6 +412,52 @@ ACHIEVEMENTS["achievement_unlucky"] = AchievementDef(
     trigger='unlucky_loss',  # Lose while ahead all game
 )
 
+# -----------------------------------------------------------------------------
+# Holiday Achievements - Life Day (Dec 1-31)
+# These reference the infamous 1978 Star Wars Holiday Special
+# Only available during Life Day season
+# -----------------------------------------------------------------------------
+
+# Complete a game during Life Day
+ACHIEVEMENTS["achievement_life_day_celebrant"] = AchievementDef(
+    key="achievement_life_day_celebrant",
+    quote="Happy Life Day! You've celebrated the Wookiee way.",
+    trigger='holiday_game_complete',
+)
+
+# Have Chewbacca at a Kashyyyk location (the plot of the Holiday Special)
+ACHIEVEMENTS["achievement_wookiee_homecoming"] = AchievementDef(
+    key="achievement_wookiee_homecoming",
+    quote="Chewie made it home for Life Day! Malla, Itchy, and Lumpy are overjoyed!",
+    trigger='cards_at_site',
+    cards=["chew"],
+    site_filter="kashyyyk"
+)
+
+# Have Boba Fett in play (his animated debut was in the Holiday Special)
+ACHIEVEMENTS["achievement_first_boba"] = AchievementDef(
+    key="achievement_first_boba",
+    quote="Boba Fett! His first appearance was in the Holiday Special. Yes, really.",
+    trigger='holiday_card_in_play',
+    card_match="boba"
+)
+
+# Win with a Life Day orb (score 30+) during the holiday
+ACHIEVEMENTS["achievement_life_day_orb"] = AchievementDef(
+    key="achievement_life_day_orb",
+    quote="You hold the Life Day orb aloft! The Tree of Life glows with approval.",
+    trigger='holiday_sellable_route',
+    threshold=30
+)
+
+# Complete 3 games during the holiday season
+ACHIEVEMENTS["achievement_holiday_special"] = AchievementDef(
+    key="achievement_holiday_special",
+    quote="You've watched... I mean PLAYED through the Holiday Special! All of it!",
+    trigger='holiday_games_played',
+    threshold=3
+)
+
 
 # =============================================================================
 # Achievement Tracker Class
@@ -419,9 +469,19 @@ class AchievementTracker:
 
     Checks board state each turn for card-based achievements.
     Checks game end for score/meta achievements.
+    Supports holiday-specific achievements when holidays are active.
     """
 
-    TOTAL_ACHIEVEMENTS = len(ACHIEVEMENTS)  # 139
+    TOTAL_ACHIEVEMENTS = len(ACHIEVEMENTS)  # 144 (includes 5 holiday achievements)
+
+    # Holiday achievement keys - only available during their respective holidays
+    HOLIDAY_ACHIEVEMENT_KEYS = {
+        'achievement_life_day_celebrant',
+        'achievement_wookiee_homecoming',
+        'achievement_first_boba',
+        'achievement_life_day_orb',
+        'achievement_holiday_special',
+    }
 
     def __init__(self, stats_repo: 'StatsRepository' = None):
         """
@@ -431,6 +491,7 @@ class AchievementTracker:
             stats_repo: Stats repository for persistence
         """
         self.stats_repo = stats_repo
+        self.holiday_overlay = get_holiday_overlay()
 
         # Per-game state tracking
         self._cards_seen_this_game: Set[str] = set()
@@ -440,6 +501,7 @@ class AchievementTracker:
         self._highest_score_this_game: int = None
         self._battles_initiated: int = 0
         self._battles_won: int = 0
+        self._holiday_games_this_season: int = 0  # Games played during current holiday
 
     def reset_for_game(self):
         """Reset tracking for new game"""
@@ -478,6 +540,9 @@ class AchievementTracker:
         # Check for killed cards (was on board, now isn't)
         current_titles = set(cards_on_board.keys())
         messages.extend(self._check_killed_cards(current_titles, board_state, opponent_name))
+
+        # Check holiday-specific achievements (if a holiday is active)
+        messages.extend(self._check_holiday_board_achievements(board_state, opponent_name))
 
         # Update tracking (just the titles for killed card detection)
         self._cards_on_board_previously = current_titles.copy()
@@ -684,6 +749,77 @@ class AchievementTracker:
                     return True
         return False
 
+    def _check_holiday_board_achievements(self, board_state: 'BoardState',
+                                          opponent_name: str) -> List[str]:
+        """
+        Check for holiday-specific achievements that trigger on board state.
+
+        Only awards achievements for the currently active holiday.
+        """
+        messages = []
+
+        # No holiday active - skip all holiday achievements
+        if not self.holiday_overlay.is_holiday_active:
+            return messages
+
+        # Check holiday card achievements (e.g., Boba Fett during Life Day)
+        for key, ach in ACHIEVEMENTS.items():
+            if ach.trigger != 'holiday_card_in_play':
+                continue
+            if key not in self.holiday_overlay.get_holiday_achievement_keys():
+                continue
+            if key in self._achievements_triggered_this_game:
+                continue
+            if not ach.card_match:
+                continue
+
+            # Check if the card is on the board
+            for loc in board_state.locations:
+                if loc is None:
+                    continue
+                for card in loc.my_cards + loc.their_cards:
+                    if card.card_title and ach.card_match.lower() in card.card_title.lower():
+                        msg = self._award_achievement(key, ach, opponent_name)
+                        if msg:
+                            messages.append(msg)
+                        break
+                else:
+                    continue
+                break
+
+        # Check Wookiee homecoming (Chewie at Kashyyyk) - uses cards_at_site trigger
+        # This is already handled by _check_card_combos but only during holiday
+        wookiee_key = 'achievement_wookiee_homecoming'
+        if (wookiee_key in self.holiday_overlay.get_holiday_achievement_keys() and
+            wookiee_key not in self._achievements_triggered_this_game):
+
+            ach = ACHIEVEMENTS.get(wookiee_key)
+            if ach and ach.cards:
+                for loc in board_state.locations:
+                    if loc is None:
+                        continue
+
+                    # Check if it's a Kashyyyk location
+                    site_name = (loc.site_name or "").lower()
+                    if "kashyyyk" not in site_name:
+                        continue
+
+                    # Get cards at this location
+                    cards_here = []
+                    for card in loc.my_cards + loc.their_cards:
+                        if card.card_title:
+                            cards_here.append(card.card_title.lower())
+
+                    # Check if Chewbacca is here
+                    chewie_here = any("chew" in c for c in cards_here)
+                    if chewie_here:
+                        msg = self._award_achievement(wookiee_key, ach, opponent_name)
+                        if msg:
+                            messages.append(msg)
+                        break
+
+        return messages
+
     def _award_achievement(self, key: str, ach: AchievementDef,
                           opponent_name: str) -> Optional[str]:
         """
@@ -809,6 +945,59 @@ class AchievementTracker:
                                          opponent_name)
             if msg:
                 messages.append(msg)
+
+        # Holiday achievements (only during active holiday)
+        messages.extend(self._check_holiday_game_end_achievements(
+            opponent_name, won, route_score, player_stats))
+
+        return messages
+
+    def _check_holiday_game_end_achievements(self, opponent_name: str, won: bool,
+                                             route_score: int, player_stats) -> List[str]:
+        """
+        Check holiday-specific achievements at game end.
+
+        Only awards achievements for the currently active holiday.
+        """
+        messages = []
+
+        # No holiday active - skip all holiday achievements
+        if not self.holiday_overlay.is_holiday_active:
+            return messages
+
+        holiday_keys = self.holiday_overlay.get_holiday_achievement_keys()
+
+        # Life Day Celebrant - complete a game during the holiday
+        celebrant_key = 'achievement_life_day_celebrant'
+        if celebrant_key in holiday_keys:
+            ach = ACHIEVEMENTS.get(celebrant_key)
+            if ach:
+                msg = self._award_achievement(celebrant_key, ach, opponent_name)
+                if msg:
+                    messages.append(msg)
+
+        # Life Day Orb - win with score 30+ during holiday
+        orb_key = 'achievement_life_day_orb'
+        if orb_key in holiday_keys and won and route_score >= 30:
+            ach = ACHIEVEMENTS.get(orb_key)
+            if ach:
+                msg = self._award_achievement(orb_key, ach, opponent_name)
+                if msg:
+                    messages.append(msg)
+
+        # Holiday Special - complete 3 games during the holiday
+        special_key = 'achievement_holiday_special'
+        if special_key in holiday_keys and player_stats:
+            # Track holiday games in player stats if available
+            # For now, use games_played as a proxy (achievement unlocks once per holiday)
+            # The achievement system will prevent re-unlocking
+            self._holiday_games_this_season += 1
+            if self._holiday_games_this_season >= 3:
+                ach = ACHIEVEMENTS.get(special_key)
+                if ach:
+                    msg = self._award_achievement(special_key, ach, opponent_name)
+                    if msg:
+                        messages.append(msg)
 
         return messages
 

@@ -22,6 +22,7 @@ import random
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from .static_brain import StaticBrain
+from .holiday_overlay import get_holiday_overlay, HolidayOverlay
 
 if TYPE_CHECKING:
     from engine.board_state import BoardState
@@ -378,6 +379,7 @@ class AstrogatorBrain(StaticBrain):
         self.stats_repo = stats_repo
         self.last_route_score = None
         self.last_messages = []  # Track recent messages to avoid repetition
+        self.holiday_overlay = get_holiday_overlay()  # Holiday message overlay
 
     def get_personality_name(self) -> str:
         return "Astrogator"
@@ -440,8 +442,8 @@ class AstrogatorBrain(StaticBrain):
         return message
 
     def _get_deck_origin(self) -> str:
-        """Get a random deck origin story"""
-        return random.choice(self.DECK_ORIGINS)
+        """Get a random deck origin story, with holiday variants."""
+        return self.holiday_overlay.get_deck_origin(self.DECK_ORIGINS)
 
     def _get_score_tier(self, score: int) -> str:
         """Get the score tier name"""
@@ -468,9 +470,15 @@ class AstrogatorBrain(StaticBrain):
         Generate welcome message with personality and context.
 
         Explains the astrogation meta-game while making clear it's optional.
+        Uses holiday greetings if a holiday is active.
         """
+        # Check for holiday greeting first
+        holiday_greeting = self.holiday_overlay.get_holiday_greeting()
+        if holiday_greeting:
+            # Use holiday greeting with opponent name
+            greeting = f"{opponent_name}! {holiday_greeting}"
         # Personalized side-based greeting
-        if opponent_side and opponent_side.lower() == 'light':
+        elif opponent_side and opponent_side.lower() == 'light':
             greeting = random.choice([
                 f"Ah, {opponent_name}. Rebel scum, I see.",
                 f"{opponent_name}. A rebel. How original.",
@@ -603,7 +611,13 @@ class AstrogatorBrain(StaticBrain):
         return f"{prefix}. {suffix}"
 
     def _get_score_tier_message(self, tier: str, improving: bool, declining: bool) -> str:
-        """Get the appropriate message for a score tier"""
+        """Get the appropriate message for a score tier, with holiday variants."""
+        # Check if we should use a holiday message
+        if self.holiday_overlay.should_use_holiday_message():
+            holiday_msg = self.holiday_overlay.get_score_message(tier, {})
+            if holiday_msg:
+                return holiday_msg
+
         # Start with base pool
         base_pool = self.SCORE_MESSAGES.get(tier, self.SCORE_MESSAGES['even'])
 
@@ -659,6 +673,12 @@ class AstrogatorBrain(StaticBrain):
             tier = 'low'
             prefix = f"Battle damage: {damage}..."
 
+        # Try holiday message first
+        if self.holiday_overlay.should_use_holiday_message():
+            holiday_msg = self.holiday_overlay.get_damage_message(tier, {})
+            if holiday_msg:
+                return f"{prefix} {holiday_msg}"
+
         message = self._pick_message(self.DAMAGE_MESSAGES[tier])
         return f"{prefix} {message}"
 
@@ -677,6 +697,7 @@ class AstrogatorBrain(StaticBrain):
         - Close fights (power diff within 3) - but only 30% of the time
 
         Returns None for "normal" battles to avoid chat spam.
+        Uses holiday variants when a holiday is active.
         """
         power_diff = their_power - my_power  # Positive = player advantage
 
@@ -685,17 +706,29 @@ class AstrogatorBrain(StaticBrain):
 
         # Player crushing us (+8 or more)
         if power_diff >= 8:
-            message = self._pick_message(self.BATTLE_PLAYER_CRUSHING)
+            if self.holiday_overlay.should_use_holiday_message():
+                message = self.holiday_overlay.get_battle_message(
+                    'player_crushing', self.BATTLE_PLAYER_CRUSHING)
+            else:
+                message = self._pick_message(self.BATTLE_PLAYER_CRUSHING)
             return f"{context} {message}"
 
         # We're crushing player (-8 or worse for them)
         if power_diff <= -8:
-            message = self._pick_message(self.BATTLE_BOT_CRUSHING)
+            if self.holiday_overlay.should_use_holiday_message():
+                message = self.holiday_overlay.get_battle_message(
+                    'bot_crushing', self.BATTLE_BOT_CRUSHING)
+            else:
+                message = self._pick_message(self.BATTLE_BOT_CRUSHING)
             return f"{context} {message}"
 
         # Close battle (within 3 either way) - only comment sometimes
         if abs(power_diff) <= 3 and random.random() < 0.30:
-            message = self._pick_message(self.BATTLE_CLOSE)
+            if self.holiday_overlay.should_use_holiday_message():
+                message = self.holiday_overlay.get_battle_message(
+                    'close', self.BATTLE_CLOSE)
+            else:
+                message = self._pick_message(self.BATTLE_CLOSE)
             return f"{context} {message}"
 
         # Normal battle - no comment to avoid spam
@@ -713,8 +746,17 @@ class AstrogatorBrain(StaticBrain):
                             new_total_score: int = None,
                             is_new_top_astrogator: bool = False) -> str:
         """
-        Generate end-of-game message.
+        Generate end-of-game message with holiday variants.
         """
+        # Check for holiday message
+        if self.holiday_overlay.should_use_holiday_message():
+            holiday_msg = self.holiday_overlay.get_game_end_message(won, [])
+            if holiday_msg:
+                # For holiday wins, still add the score context
+                if won:
+                    holiday_msg = f"Score: {route_score}. {holiday_msg}"
+                return holiday_msg
+
         if not won:
             return self._pick_message(self.BOT_WON_MESSAGES)
 
@@ -763,6 +805,12 @@ class AstrogatorBrain(StaticBrain):
         Returns:
             A sassy concede message string.
         """
+        # Check for holiday concede message
+        if self.holiday_overlay.should_use_holiday_message():
+            holiday_msg = self.holiday_overlay.get_concede_message(self.CONCEDE_GENERAL)
+            if holiday_msg and holiday_msg not in self.CONCEDE_GENERAL:
+                return holiday_msg
+
         reason_lower = reason.lower() if reason else ""
 
         # Choose message pool based on reason
