@@ -7952,6 +7952,379 @@ def test_high_life_requires_full_advantage():
         unpatch_card_loader()
 
 
+# =============================================================================
+# DEPLOYMENT ORDER TESTS
+# =============================================================================
+
+def test_deployment_order_locations_first():
+    """
+    Deployment order: Locations should deploy before characters.
+
+    When plan has both location and character, location gets higher score.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Location before character")
+            .as_side("light")
+            .with_force(10)
+            .with_life_force(30)
+            .add_ground_location("Tatooine: Cantina", my_icons=1, their_icons=2,
+                                 my_power=0, their_power=0)
+            # Both a location card and character in hand
+            .add_location_card("Tatooine: Docking Bay 94", deploy_cost=2)
+            .add_character("Luke Skywalker", power=6, deploy_cost=4)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+
+        # Check that location is in plan with priority 0 (highest)
+        location_inst = None
+        character_inst = None
+        for inst in result.plan.instructions:
+            if "Docking Bay" in inst.card_name:
+                location_inst = inst
+            elif "Luke" in inst.card_name:
+                character_inst = inst
+
+        assert location_inst is not None, "Location should be in plan"
+        assert location_inst.priority == 0, f"Location priority should be 0, got {location_inst.priority}"
+
+        # Test the deployment order method directly
+        plan = result.plan
+
+        # Location should deploy now
+        should_deploy, reason = plan.should_deploy_card_now(location_inst.card_blueprint_id)
+        assert should_deploy, f"Location should deploy now: {reason}"
+
+        # Character should wait (location pending)
+        if character_inst:
+            should_deploy, reason = plan.should_deploy_card_now(character_inst.card_blueprint_id)
+            assert not should_deploy, f"Character should wait for location: {reason}"
+            assert "locations" in reason.lower(), f"Reason should mention locations: {reason}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_deployment_order_ships_before_characters():
+    """
+    Deployment order: Ships should deploy before characters.
+
+    When plan has both ship and character (but no locations), ship goes first.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Ship before character")
+            .as_side("light")
+            .with_force(15)
+            .with_life_force(30)
+            # Space target for ship
+            .add_space_location("Tatooine", my_icons=1, their_icons=2, my_power=0, their_power=0)
+            # Ground target for character
+            .add_ground_location("Tatooine: Cantina", my_icons=1, their_icons=2,
+                                 my_power=0, their_power=0)
+            # Piloted ship (has_permanent_pilot=True) and character
+            .add_starship("Millennium Falcon", power=8, deploy_cost=6, has_permanent_pilot=True)
+            .add_character("Han Solo", power=5, deploy_cost=5)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+        plan = result.plan
+
+        # Find the ship and character instructions
+        ship_inst = None
+        character_inst = None
+        for inst in plan.instructions:
+            if "Falcon" in inst.card_name:
+                ship_inst = inst
+            elif "Han" in inst.card_name:
+                character_inst = inst
+
+        if ship_inst and character_inst:
+            # With both in plan, ship should deploy now
+            should_deploy, reason = plan.should_deploy_card_now(ship_inst.card_blueprint_id)
+            assert should_deploy, f"Ship should deploy now: {reason}"
+
+            # Character should wait for ship
+            should_deploy, reason = plan.should_deploy_card_now(character_inst.card_blueprint_id)
+            assert not should_deploy, f"Character should wait for ship: {reason}"
+            assert "ship" in reason.lower() or "vehicle" in reason.lower(), \
+                f"Reason should mention ships/vehicles: {reason}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_deployment_order_fallback_when_higher_priority_unavailable():
+    """
+    Deployment order fallback: If higher-priority cards are pending but NOT available
+    to deploy (not in GEMP offer), lower-priority cards can deploy.
+
+    This prevents the bot from hanging when planned cards aren't offered.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Fallback when location unavailable")
+            .as_side("light")
+            .with_force(10)
+            .with_life_force(30)
+            .add_ground_location("Tatooine: Cantina", my_icons=1, their_icons=2,
+                                 my_power=0, their_power=0)
+            # Both location card and character in plan
+            .add_location_card("Tatooine: Docking Bay 94", deploy_cost=2)
+            .add_character("Luke Skywalker", power=6, deploy_cost=4)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+        plan = result.plan
+
+        # Find the character instruction
+        character_inst = None
+        location_inst = None
+        for inst in plan.instructions:
+            if "Luke" in inst.card_name:
+                character_inst = inst
+            if "Docking Bay" in inst.card_name:
+                location_inst = inst
+
+        assert character_inst is not None, "Character should be in plan"
+        assert location_inst is not None, "Location should be in plan"
+
+        # Simulate GEMP only offering the character (location NOT available)
+        available_ids = [character_inst.card_blueprint_id]  # Only character available
+
+        # Character should now be allowed to deploy (fallback)
+        should_deploy, reason = plan.should_deploy_card_now(
+            character_inst.card_blueprint_id, available_ids
+        )
+        assert should_deploy, f"Character should deploy when location unavailable: {reason}"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_pilot_instruction_includes_ship_info():
+    """
+    Pilot instructions should include ship info for boarding.
+
+    When a pilot is planned to board a ship, the instruction should include:
+    - aboard_ship_name: Name of ship
+    - aboard_ship_blueprint_id: Blueprint ID of ship
+    - aboard_ship_card_id: None initially (set after ship deploys)
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Pilot boarding ship")
+            .as_side("dark")
+            .with_force(10)
+            .with_life_force(30)
+            # Space target for ship
+            .add_space_location("Tatooine", my_icons=1, their_icons=2, my_power=0, their_power=3)
+            # Unpiloted ship + pilot
+            .add_starship("Blockade Support Ship", power=5, deploy_cost=5, has_permanent_pilot=False)
+            .add_character("Tey How", power=1, deploy_cost=2, is_pilot=True)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+        plan = result.plan
+
+        # Find pilot instruction
+        pilot_inst = None
+        ship_inst = None
+        for inst in plan.instructions:
+            if "Tey How" in inst.card_name:
+                pilot_inst = inst
+            if "Blockade" in inst.card_name:
+                ship_inst = inst
+
+        # Verify ship is in plan
+        assert ship_inst is not None, "Ship should be in plan"
+
+        # Verify pilot instruction has ship info
+        if pilot_inst:
+            assert pilot_inst.aboard_ship_name is not None, \
+                f"Pilot instruction should have aboard_ship_name"
+            assert "Blockade" in pilot_inst.aboard_ship_name, \
+                f"Pilot should be boarding Blockade Support Ship, got {pilot_inst.aboard_ship_name}"
+            assert pilot_inst.aboard_ship_blueprint_id is not None, \
+                f"Pilot instruction should have aboard_ship_blueprint_id"
+            assert pilot_inst.aboard_ship_card_id is None, \
+                f"aboard_ship_card_id should be None until ship deploys"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_plan_update_deployed_card_id():
+    """
+    Test that update_deployed_card_id updates pilot instructions.
+
+    When a ship deploys and gets assigned a card_id, the pilot instruction
+    waiting to board that ship should be updated with the card_id.
+    """
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("Update card_id after deploy")
+            .as_side("dark")
+            .with_force(10)
+            .with_life_force(30)
+            # Space target
+            .add_space_location("Tatooine", my_icons=1, their_icons=2, my_power=0, their_power=3)
+            # Ship + pilot
+            .add_starship("Blockade Support Ship", power=5, deploy_cost=5, has_permanent_pilot=False)
+            .add_character("Tey How", power=1, deploy_cost=2, is_pilot=True)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+        plan = result.plan
+
+        # Find ship instruction to get its blueprint_id
+        ship_blueprint_id = None
+        for inst in plan.instructions:
+            if "Blockade" in inst.card_name:
+                ship_blueprint_id = inst.card_blueprint_id
+                break
+
+        assert ship_blueprint_id is not None, "Ship should be in plan"
+
+        # Simulate ship deploying and getting card_id "331"
+        updated = plan.update_deployed_card_id(ship_blueprint_id, "331", "Blockade Support Ship")
+
+        # Check that pilot instruction was updated
+        pilot_inst = None
+        for inst in plan.instructions:
+            if "Tey How" in inst.card_name:
+                pilot_inst = inst
+                break
+
+        if pilot_inst and pilot_inst.aboard_ship_blueprint_id:
+            assert pilot_inst.aboard_ship_card_id == "331", \
+                f"Pilot aboard_ship_card_id should be '331', got {pilot_inst.aboard_ship_card_id}"
+            assert updated, "update_deployed_card_id should return True"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_pending_location_gets_card_id_update():
+    """Instructions targeting locations from hand should get card_id when location deploys."""
+    patch_card_loader()
+    try:
+        # Register the location card in hand with icons
+        register_mock_card("naboo_in_hand_bp",
+            title="•Naboo",
+            card_type="Location",
+            sub_type="System",
+            is_location=True,
+            dark_side_icons=2,  # Enemy icons (Light side perspective)
+            light_side_icons=2,  # Our icons
+            is_interior=False,
+            is_exterior=True,
+        )
+
+        scenario = (
+            ScenarioBuilder("pending_location")
+            .as_side("light")
+            .with_force(10)
+            # Character to deploy to the new location
+            .add_character("Thedit", power=3, deploy_cost=2)
+            .build()
+        )
+
+        # Add the location card to hand manually
+        loc_card = MockCard(
+            card_id="loc_hand_1",
+            blueprint_id="naboo_in_hand_bp",
+            card_title="•Naboo",
+            card_type="Location",
+            deploy=0,
+        )
+        scenario.board.cards_in_hand.append(loc_card)
+
+        result = run_scenario(scenario)
+        plan = result.plan
+
+        # Find the character instruction targeting the pending location
+        char_inst = None
+        for inst in plan.instructions:
+            if "Thedit" in inst.card_name:
+                char_inst = inst
+                break
+
+        # If character was planned to the new location, it should be pending
+        if char_inst and "Naboo" in (char_inst.target_location_name or ""):
+            assert char_inst.target_location_pending, \
+                "Instruction targeting location from hand should have target_location_pending=True"
+            assert char_inst.target_location_blueprint_id is not None, \
+                "Should have blueprint_id for matching PCIP"
+            assert char_inst.target_location_id is None, \
+                "target_location_id should be None until location deploys"
+
+            # Simulate location deploying and getting card_id "999"
+            updated = plan.update_deployed_card_id(
+                char_inst.target_location_blueprint_id, "999", "•Naboo"
+            )
+
+            # Verify the instruction was updated
+            assert updated, "update_deployed_card_id should return True"
+            assert char_inst.target_location_id == "999", \
+                f"target_location_id should be '999', got {char_inst.target_location_id}"
+            assert not char_inst.target_location_pending, \
+                "target_location_pending should be False after update"
+
+    finally:
+        unpatch_card_loader()
+
+
+def test_jawa_only_deploys_to_tatooine():
+    """Characters with 'Deploys only on Tatooine' should not be planned for other systems."""
+    patch_card_loader()
+    try:
+        scenario = (
+            ScenarioBuilder("jawa_restriction")
+            .with_force(10)
+            # Tatooine location
+            .add_ground_location("Tatooine: Jawa Camp", my_icons=1, their_icons=1, my_power=0, their_power=0)
+            # Coruscant location (contested, would be a reinforcement target)
+            .add_ground_location("Coruscant: Xizor's Palace", my_icons=1, their_icons=2, my_power=4, their_power=8)
+            # Kalit - a Jawa with Tatooine restriction
+            .add_character("Kalit", power=2, deploy_cost=3, deploy_restriction_systems=["Tatooine"])
+            # Regular Jawa also restricted
+            .add_character("Jawa", power=1, deploy_cost=0, deploy_restriction_systems=["Tatooine"])
+            # Non-restricted character
+            .add_character("Thedit", power=1, deploy_cost=2)
+            .build()
+        )
+
+        result = run_scenario(scenario)
+        plan = result.plan
+
+        # Kalit and Jawa should NOT be in the plan for Coruscant: Xizor's Palace
+        for inst in plan.instructions:
+            if "Kalit" in inst.card_name or inst.card_name == "Jawa":
+                # If they're in the plan, they should only target Tatooine
+                assert "Tatooine" in inst.target_location_name, \
+                    f"{inst.card_name} should only deploy to Tatooine, not {inst.target_location_name}"
+
+        # Thedit (non-restricted) can deploy to Coruscant for reinforcement
+        thedit_targets = [inst.target_location_name for inst in plan.instructions if "Thedit" in inst.card_name]
+        # Thedit could go to either location (depending on plan logic)
+        # Just verify he's not blocked by restrictions
+
+    finally:
+        unpatch_card_loader()
+
+
 # MAIN (for standalone execution)
 # =============================================================================
 

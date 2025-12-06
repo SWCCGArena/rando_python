@@ -343,27 +343,32 @@ class DeployEvaluator(ActionEvaluator):
                 logger.warning(f"⚠️  Plan has {len(deploy_plan.instructions)} deployments but NO deploy actions in decision!")
                 logger.warning(f"   Available actions: {context.action_texts}")
 
+        # Collect all available blueprint IDs from deploy actions
+        # Used for deployment order checking (locations -> ships -> characters)
+        available_blueprint_ids = []
+        for i, action_id in enumerate(context.action_ids):
+            action_text = context.action_texts[i] if i < len(context.action_texts) else ""
+            if "Deploy" not in action_text:
+                continue
+            bp = self._extract_blueprint_from_action(action_text)
+            if not bp:
+                card_id = context.card_ids[i] if i < len(context.card_ids) else None
+                if card_id and bs:
+                    tracked = bs.cards_in_play.get(card_id)
+                    if tracked and tracked.blueprint_id:
+                        bp = tracked.blueprint_id
+            if bp and bp not in available_blueprint_ids:
+                available_blueprint_ids.append(bp)
+
         # Check if any of the available deploy actions match the plan
         # If NONE match, the plan is stale and we should allow extra actions
         plan_cards_available = False
         if deploy_plan and deploy_plan.instructions:
-            for i, action_id in enumerate(context.action_ids):
-                action_text = context.action_texts[i] if i < len(context.action_texts) else ""
-                if "Deploy" not in action_text:
-                    continue
-                # Try to get blueprint for this action
-                bp = self._extract_blueprint_from_action(action_text)
-                if not bp:
-                    card_id = context.card_ids[i] if i < len(context.card_ids) else None
-                    if card_id and bs:
-                        tracked = bs.cards_in_play.get(card_id)
-                        if tracked and tracked.blueprint_id:
-                            bp = tracked.blueprint_id
-                if bp:
-                    instruction = deploy_plan.get_instruction_for_card(bp)
-                    if instruction:
-                        plan_cards_available = True
-                        break
+            for bp in available_blueprint_ids:
+                instruction = deploy_plan.get_instruction_for_card(bp)
+                if instruction:
+                    plan_cards_available = True
+                    break
 
             if not plan_cards_available and deploy_action_count > 0 and not deploy_plan.is_plan_complete():
                 # Check if ALL remaining instructions are weapons
@@ -460,7 +465,9 @@ class DeployEvaluator(ActionEvaluator):
                     # =======================================================
                     if deploy_plan and blueprint_id:
                         current_force = bs.force_pile if bs else 0
-                        plan_score, plan_reason = self.planner.get_card_score(blueprint_id, current_force)
+                        plan_score, plan_reason = self.planner.get_card_score(
+                            blueprint_id, current_force, available_blueprint_ids
+                        )
 
                         # If this would be an "extra action" (score ~25), check for favorable battle
                         # If we're set up for a good battle, skip extras and commit to fighting!
@@ -528,13 +535,21 @@ class DeployEvaluator(ActionEvaluator):
         # =====================================================
         planned_target_id = None
         planned_target_name = None
+        planned_ship_card_id = None  # For pilots boarding ships
+        planned_ship_name = None
         instruction = None  # The deployment instruction for this card (if any)
         if bs and hasattr(bs, 'current_deploy_plan') and bs.current_deploy_plan and deploying_card_blueprint:
             instruction = bs.current_deploy_plan.get_instruction_for_card(deploying_card_blueprint)
             if instruction and instruction.target_location_id:
                 planned_target_id = instruction.target_location_id
                 planned_target_name = instruction.target_location_name
-                logger.info(f"📋 Deploy plan says: {deploying_card.title if deploying_card else deploying_card_blueprint} -> {planned_target_name}")
+                # Check if this pilot is boarding a specific ship
+                if instruction.aboard_ship_card_id:
+                    planned_ship_card_id = instruction.aboard_ship_card_id
+                    planned_ship_name = instruction.aboard_ship_name
+                    logger.info(f"📋 Deploy plan says: {deploying_card.title if deploying_card else deploying_card_blueprint} -> aboard {planned_ship_name} (card_id={planned_ship_card_id})")
+                else:
+                    logger.info(f"📋 Deploy plan says: {deploying_card.title if deploying_card else deploying_card_blueprint} -> {planned_target_name}")
                 if instruction.backup_location_id:
                     logger.info(f"   Backup: {instruction.backup_location_name}")
 
@@ -568,12 +583,38 @@ class DeployEvaluator(ActionEvaluator):
             # If primary unavailable but backup is, use backup
             # If neither available, hold back (don't deploy randomly)
             #
-            # SPECIAL CASE: Weapons!
-            # - Plan stores LOCATION as target (where the vehicle/character is)
-            # - GEMP offers CARD as target (the actual vehicle/character)
-            # - We must check if the offered card is AT the planned location
+            # SPECIAL CASES:
+            # 1. PILOTS boarding ships:
+            #    - Plan stores SHIP card_id (set after ship deploys)
+            #    - GEMP offers ship card_id directly
+            #    - Match card_id against planned_ship_card_id
+            #
+            # 2. WEAPONS:
+            #    - Plan stores LOCATION as target (where the vehicle/character is)
+            #    - GEMP offers CARD as target (the actual vehicle/character)
+            #    - We must check if the offered card is AT the planned location
             # =====================================================
-            if planned_target_id:
+            if planned_ship_card_id and is_pilot:
+                # PILOT boarding specific ship - match against ship card_id
+                if card_id == planned_ship_card_id:
+                    action.add_reasoning(f"BOARD SHIP: {planned_ship_name}", +200.0)
+                    logger.info(f"✅ Card {card_id} is the PLANNED SHIP {planned_ship_name} (+200)")
+                elif planned_ship_card_id in context.card_ids:
+                    # Planned ship IS available, so penalize this non-planned option
+                    action.add_reasoning(f"Not planned ship (want {planned_ship_name})", -100.0)
+                else:
+                    # Planned ship card_id not available - maybe ship hasn't deployed yet?
+                    if card_id == context.card_ids[0]:  # Only log once
+                        logger.warning(f"⚠️ Planned ship {planned_ship_name} (card_id={planned_ship_card_id}) not in offered options")
+                        logger.warning(f"   GEMP offered: {context.card_ids}")
+                    # Allow deploying to the system location as fallback
+                    if card_id == planned_target_id:
+                        action.add_reasoning(f"SYSTEM FALLBACK: {planned_target_name}", +100.0)
+                        logger.info(f"📋 Ship not offered, deploying pilot to system {planned_target_name}")
+                    else:
+                        action.add_reasoning(f"Neither ship nor system available", -50.0)
+
+            elif planned_target_id:
                 # For weapons, check if this card is AT the planned location
                 target_matches_plan = False
                 if is_weapon and bs:

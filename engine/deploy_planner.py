@@ -182,6 +182,25 @@ class DeploymentInstruction:
     backup_location_name: Optional[str] = None
     backup_reason: Optional[str] = None
 
+    # For pilots deploying aboard ships: track the ship they should board
+    # The ship_card_id is None until the ship deploys and gets assigned an ID
+    aboard_ship_name: Optional[str] = None
+    aboard_ship_blueprint_id: Optional[str] = None
+    aboard_ship_card_id: Optional[str] = None  # Set when ship gets PCIP event
+
+    # For cards deploying to locations in hand: track by name until location deploys
+    # The target_location_id may be None initially if location is in hand
+    target_location_pending: bool = False  # True if waiting for location to deploy
+    target_location_blueprint_id: Optional[str] = None  # For matching PCIP events
+
+    def __post_init__(self):
+        """Auto-detect pending locations from 'planned_' prefix in card_id."""
+        if self.target_location_id and self.target_location_id.startswith("planned_"):
+            # Extract blueprint_id from "planned_<blueprint_id>" format
+            self.target_location_blueprint_id = self.target_location_id[8:]  # Skip "planned_"
+            self.target_location_pending = True
+            self.target_location_id = None  # Clear the placeholder ID
+
 
 @dataclass
 class DeploymentPlan:
@@ -258,6 +277,168 @@ class DeploymentPlan:
         """Check if we should allow non-planned extra actions"""
         return self.get_extra_force_budget(current_force) > 0
 
+    def get_pending_card_types(self) -> Dict[str, bool]:
+        """
+        Check what card types are still pending in the plan.
+
+        Deployment order is:
+        1. Locations (priority 0)
+        2. Ships/Vehicles (priority 1)
+        3. Characters (priority 2)
+
+        Returns dict with keys: 'locations', 'ships_vehicles', 'characters'
+        """
+        pending = {
+            'locations': False,
+            'ships_vehicles': False,
+            'characters': False,
+        }
+
+        for inst in self.instructions:
+            card_meta = get_card(inst.card_blueprint_id)
+            if not card_meta:
+                continue
+
+            if card_meta.is_location:
+                pending['locations'] = True
+            elif card_meta.is_starship or card_meta.is_vehicle:
+                pending['ships_vehicles'] = True
+            elif card_meta.is_character:
+                pending['characters'] = True
+
+        return pending
+
+    def should_deploy_card_now(self, blueprint_id: str, available_blueprint_ids: Optional[List[str]] = None) -> Tuple[bool, str]:
+        """
+        Check if a card should deploy NOW based on type ordering.
+
+        Deployment order:
+        1. Locations FIRST
+        2. Ships/Vehicles SECOND
+        3. Characters LAST
+
+        If higher-priority types are still pending AND available to deploy,
+        this card should wait. But if higher-priority types are pending but
+        NOT available (GEMP not offering them), we allow this card to deploy
+        to prevent the bot from hanging.
+
+        Args:
+            blueprint_id: Card to check
+            available_blueprint_ids: List of blueprint IDs that GEMP is offering
+                                     If provided, only block if higher-priority
+                                     cards are actually available
+
+        Returns:
+            (should_deploy, reason)
+            - should_deploy: True if this card type should deploy now
+            - reason: Explanation of why or why not
+        """
+        card_meta = get_card(blueprint_id)
+        if not card_meta:
+            return (True, "Unknown card type - allow deploy")
+
+        pending = self.get_pending_card_types()
+
+        # Helper to check if any pending cards of a type are available
+        def _pending_type_available(card_type: str) -> bool:
+            """Check if any pending cards of given type are in available_blueprint_ids"""
+            if not available_blueprint_ids:
+                return True  # If no list provided, assume all pending cards are available
+
+            for inst in self.instructions:
+                inst_meta = get_card(inst.card_blueprint_id)
+                if not inst_meta:
+                    continue
+
+                is_match = False
+                if card_type == 'locations' and inst_meta.is_location:
+                    is_match = True
+                elif card_type == 'ships_vehicles' and (inst_meta.is_starship or inst_meta.is_vehicle):
+                    is_match = True
+
+                if is_match and inst.card_blueprint_id in available_blueprint_ids:
+                    return True
+
+            return False
+
+        # Locations always deploy first
+        if card_meta.is_location:
+            return (True, "Locations deploy first")
+
+        # Ships/Vehicles deploy after locations
+        if card_meta.is_starship or card_meta.is_vehicle:
+            if pending['locations']:
+                if _pending_type_available('locations'):
+                    return (False, "Wait: locations must deploy first")
+                else:
+                    logger.info("📋 Locations pending but not available - allowing ship/vehicle deploy")
+            return (True, "Ships/vehicles deploy (no available locations pending)")
+
+        # Characters deploy last
+        if card_meta.is_character:
+            if pending['locations']:
+                if _pending_type_available('locations'):
+                    return (False, "Wait: locations must deploy first")
+                else:
+                    logger.info("📋 Locations pending but not available - checking ships/vehicles")
+
+            if pending['ships_vehicles']:
+                if _pending_type_available('ships_vehicles'):
+                    return (False, "Wait: ships/vehicles must deploy first")
+                else:
+                    logger.info("📋 Ships/vehicles pending but not available - allowing character deploy")
+
+            return (True, "Characters deploy (no available higher-priority pending)")
+
+        # Other card types (effects, interrupts, etc.) - no ordering restriction
+        return (True, "No ordering restriction for this card type")
+
+    def update_deployed_card_id(self, blueprint_id: str, card_id: str, card_name: str) -> bool:
+        """
+        Update the plan when a card deploys and gets assigned a card_id.
+
+        This is called when we receive a PCIP (Put Card In Play) event for a card
+        that's in our plan. It updates:
+        1. Any pilots waiting to board this ship (sets aboard_ship_card_id)
+        2. Any cards waiting to deploy to this location (sets target_location_id)
+
+        Args:
+            blueprint_id: The blueprint ID of the card that just deployed
+            card_id: The card_id assigned by GEMP
+            card_name: The name of the card (for logging)
+
+        Returns:
+            True if any instructions were updated
+        """
+        updated = False
+
+        for inst in self.instructions:
+            # Check if any pilot is waiting to board this ship
+            if inst.aboard_ship_blueprint_id == blueprint_id and inst.aboard_ship_card_id is None:
+                inst.aboard_ship_card_id = card_id
+                logger.info(f"📋 Plan updated: {inst.card_name} will board {card_name} (card_id={card_id})")
+                updated = True
+
+            # Check if any card is waiting to deploy to this location
+            if inst.target_location_pending:
+                # Match by blueprint_id if available (most reliable)
+                if inst.target_location_blueprint_id and inst.target_location_blueprint_id == blueprint_id:
+                    inst.target_location_id = card_id
+                    inst.target_location_pending = False
+                    logger.info(f"📋 Plan updated: {inst.card_name} will deploy to {card_name} (card_id={card_id})")
+                    updated = True
+                # Fallback to name matching if no blueprint_id
+                elif inst.target_location_name and not inst.target_location_blueprint_id:
+                    card_meta = get_card(blueprint_id)
+                    if card_meta and card_meta.is_location:
+                        if card_name and inst.target_location_name.lower() in card_name.lower():
+                            inst.target_location_id = card_id
+                            inst.target_location_pending = False
+                            logger.info(f"📋 Plan updated: {inst.card_name} will deploy to {card_name} (card_id={card_id})")
+                            updated = True
+
+        return updated
+
 
 class DeployPhasePlanner:
     """
@@ -307,6 +488,11 @@ class DeployPhasePlanner:
         for card_id, card in cards_in_play.items():
             # Skip if not ours
             if card.owner != my_player:
+                continue
+
+            # CRITICAL: Only consider cards actually AT a location (not in hand, lost pile, etc.)
+            # Cards in hand have zone="HAND", cards on board have zone="AT_LOCATION"
+            if card.zone != "AT_LOCATION":
                 continue
 
             # Skip placeholder blueprints (hidden cards)
@@ -1326,6 +1512,10 @@ class DeployPhasePlanner:
                             reason=f"Pilot aboard {vehicle['name']}",
                             power_contribution=best_pilot.get('power', 2),
                             deploy_cost=best_pilot['cost'],
+                            # Track which vehicle pilot is boarding
+                            aboard_ship_name=vehicle['name'],
+                            aboard_ship_blueprint_id=vehicle['blueprint_id'],
+                            aboard_ship_card_id=None,  # Will be set when vehicle deploys
                         )
                     ]
 
@@ -1483,12 +1673,16 @@ class DeployPhasePlanner:
                         instructions.append(DeploymentInstruction(
                             card_blueprint_id=best_pilot['blueprint_id'],
                             card_name=best_pilot['name'],
-                            target_location_id=loc.card_id,  # Same location as ship
+                            target_location_id=loc.card_id,  # System where ship is going
                             target_location_name=loc.name,
                             priority=3,  # After the ship
                             reason=f"Pilot aboard {ship['name']}",
                             power_contribution=best_pilot['power'],
                             deploy_cost=best_pilot['cost'],
+                            # Track which ship pilot is boarding (card_id assigned after ship deploys)
+                            aboard_ship_name=ship['name'],
+                            aboard_ship_blueprint_id=ship['blueprint_id'],
+                            aboard_ship_card_id=None,  # Will be set when ship deploys
                         ))
                         logger.info(f"   👨‍✈️ Plan: Deploy pilot {best_pilot['name']} aboard {ship['name']}")
                 elif ship.get('has_permanent_pilot') and available_pilots:
@@ -1509,6 +1703,10 @@ class DeployPhasePlanner:
                             reason=f"Extra pilot aboard {ship['name']}",
                             power_contribution=best_pilot['power'],
                             deploy_cost=best_pilot['cost'],
+                            # Track which ship pilot is boarding
+                            aboard_ship_name=ship['name'],
+                            aboard_ship_blueprint_id=ship['blueprint_id'],
+                            aboard_ship_card_id=None,  # Will be set when ship deploys
                         ))
                         logger.info(f"   👨‍✈️ Plan: Deploy extra pilot {best_pilot['name']} aboard {ship['name']}")
 
@@ -1712,11 +1910,14 @@ class DeployPhasePlanner:
                     deploy_cost=ship['cost'],
                 ))
 
-            # Add instructions for pilots
-            for pilot in pilots_to_add:
+            # Add instructions for pilots - pair with ships
+            for i, pilot in enumerate(pilots_to_add):
                 if pilot in available_pilots:
                     available_pilots.remove(pilot)
                 force_remaining -= pilot['cost']
+
+                # Pair pilot with a ship (cycle through if more pilots than ships)
+                target_ship = ships_for_location[i % len(ships_for_location)]
 
                 instructions.append(DeploymentInstruction(
                     card_blueprint_id=pilot['blueprint_id'],
@@ -1724,9 +1925,12 @@ class DeployPhasePlanner:
                     target_location_id=loc.card_id,
                     target_location_name=loc.name,
                     priority=3,  # After ships
-                    reason=f"Pilot aboard ships at {loc.name}",
+                    reason=f"Pilot aboard {target_ship['name']} at {loc.name}",
                     power_contribution=pilot['power'],
                     deploy_cost=pilot['cost'],
+                    aboard_ship_name=target_ship['name'],
+                    aboard_ship_blueprint_id=target_ship['blueprint_id'],
+                    aboard_ship_card_id=None,  # Will be set when ship deploys
                 ))
 
         return instructions, force_remaining
@@ -1957,6 +2161,10 @@ class DeployPhasePlanner:
                         reason=f"Pilot aboard {actual_ship['name']} at {target_loc.name}",
                         power_contribution=pilot['power'],
                         deploy_cost=pilot['cost'],
+                        # Track which ship pilot is boarding
+                        aboard_ship_name=actual_ship['name'],
+                        aboard_ship_blueprint_id=actual_ship['blueprint_id'],
+                        aboard_ship_card_id=None,  # Will be set when ship deploys
                     ))
                     pilots_already_added.add(pilot['blueprint_id'])
                 else:
@@ -1974,8 +2182,10 @@ class DeployPhasePlanner:
 
             # Add additional pilots ONLY for ships with permanent pilots (power boost)
             # Unpiloted ships already got their required pilot via combos - don't add more!
-            has_piloted_ships = any(not ship_entry.get('is_combo') for ship_entry in ships_for_loc)
-            if has_piloted_ships and all_pilots and force_remaining > 0:
+            piloted_ships = [s for s in ships_for_loc if not s.get('is_combo')]
+            if piloted_ships and all_pilots and force_remaining > 0:
+                # Find the first piloted ship to board
+                target_ship = piloted_ships[0]
                 for pilot in all_pilots:
                     if pilot['blueprint_id'] in pilots_already_added:
                         continue  # Already included via combo
@@ -1986,9 +2196,12 @@ class DeployPhasePlanner:
                             target_location_id=target_loc.card_id,
                             target_location_name=target_loc.name,
                             priority=3,
-                            reason=f"Pilot aboard at {target_loc.name}",
+                            reason=f"Pilot aboard {target_ship['name']} at {target_loc.name}",
                             power_contribution=pilot['power'],
                             deploy_cost=pilot['cost'],
+                            aboard_ship_name=target_ship['name'],
+                            aboard_ship_blueprint_id=target_ship['blueprint_id'],
+                            aboard_ship_card_id=None,  # Will be set when ship deploys
                         ))
                         force_remaining -= pilot['cost']
                         break  # One additional pilot is enough
@@ -2381,6 +2594,33 @@ class DeployPhasePlanner:
             if not available_chars or force_remaining <= 0:
                 break
 
+            # Filter characters by deploy restrictions for THIS location
+            location_chars = []
+            for char in available_chars:
+                restrictions = char.get('deploy_restriction_systems', [])
+                if restrictions:
+                    # Card has restrictions - check if location matches any allowed system
+                    loc_clean = loc.name.lstrip('•').strip()
+                    can_deploy = False
+                    for system in restrictions:
+                        system_lower = system.lower()
+                        loc_lower = loc_clean.lower()
+                        if loc_lower.startswith(system_lower):
+                            can_deploy = True
+                            break
+                        if ':' in loc_clean:
+                            loc_system = loc_clean.split(':')[0].strip().lower()
+                            if loc_system == system_lower:
+                                can_deploy = True
+                                break
+                    if not can_deploy:
+                        logger.debug(f"   ⛔ {char['name']} cannot deploy to {loc.name} (restricted to {restrictions})")
+                        continue  # Skip this character for this location
+                location_chars.append(char)
+
+            if not location_chars:
+                continue  # No eligible characters for this location
+
             # Calculate power needed based on location type
             is_weak_presence = loc.their_power == 0 and loc.my_power > 0
             if is_weak_presence:
@@ -2402,7 +2642,7 @@ class DeployPhasePlanner:
             # For weak presence: just reach threshold efficiently (prefer cheaper)
             # For contested: want to WIN decisively (prefer more power)
             cards_for_location, power_allocated, cost_used = self._find_optimal_combination(
-                available_chars,
+                location_chars,  # Use filtered chars that can deploy to this location
                 force_remaining,
                 power_needed,
                 must_exceed=not is_weak_presence  # Contested: want to beat enemy decisively
@@ -2644,6 +2884,24 @@ class DeployPhasePlanner:
             if loc not in space_targets:
                 space_targets.insert(0, loc)  # Contested locations also high priority
                 logger.info(f"   ⚔️ Crushable space: {loc.name} ({loc.my_power} vs {loc.their_power})")
+
+        # Add reinforceable space locations (we control, no enemy, could add more ships)
+        # This allows deploying piloted ships to locations we already control but aren't at overkill
+        # CRITICAL: Without this, piloted ships in hand won't deploy if all space is "controlled"
+        reinforceable_space = [
+            loc for loc in locations
+            if loc.my_power > 0  # We have presence
+            and loc.their_power == 0  # Enemy has NO presence (uncontested by us)
+            and loc.is_space  # Space location
+            and loc.their_icons > 0  # Has enemy icons (strategically valuable - they could deploy)
+            and loc.my_icons > 0  # Has our icons (it's "our" location)
+            and loc.my_power < UNCONTESTED_FORTIFIED_THRESHOLD  # Not already fortified (10+ power)
+            and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
+        ]
+        for loc in reinforceable_space:
+            if loc not in space_targets:
+                space_targets.append(loc)  # Lower priority - append to end
+                logger.info(f"   🏰 Reinforceable space: {loc.name} (my power: {loc.my_power}, enemy icons: {loc.their_icons})")
 
         # Add newly deployed space locations as targets (uncontested, enemy icons)
         for new_loc in newly_deployed_locations:
@@ -3723,13 +3981,13 @@ class DeployPhasePlanner:
             reasons = []
             if not locations:
                 reasons.append("no locations on board")
-            elif not char_ground_targets and not uncontested_space:
+            elif not char_ground_targets and not space_targets:
                 reasons.append("no valid targets (all ground locs either have our presence or no opponent threat)")
             if not characters and not starships and not vehicles:
                 reasons.append("no deployable units in hand")
             elif characters and not char_ground_targets:
                 reasons.append(f"have {len(characters)} chars but no ground targets")
-            if starships and not uncontested_space:
+            if starships and not space_targets:
                 reasons.append(f"have {len(starships)} starships but no space targets")
             if force_remaining <= 0:
                 reasons.append("no force remaining")
@@ -4225,13 +4483,16 @@ class DeployPhasePlanner:
                 card_list = ", ".join(f"{n}({p})" for n, p, _ in cards)
                 logger.info(f"      - {loc_name}: {loc_power} power [{card_list}]")
 
-    def get_card_score(self, blueprint_id: str, current_force: int = 0) -> Tuple[float, str]:
+    def get_card_score(self, blueprint_id: str, current_force: int = 0,
+                       available_blueprint_ids: Optional[List[str]] = None) -> Tuple[float, str]:
         """
         Get the score for a card based on whether it's in the plan.
 
         Args:
             blueprint_id: Card blueprint ID to score
             current_force: Current force pile (for extra actions check)
+            available_blueprint_ids: List of blueprint IDs that GEMP is offering
+                                     Used for deployment order fallback
 
         Returns (score, reason)
         """
@@ -4240,7 +4501,18 @@ class DeployPhasePlanner:
 
         instruction = self.current_plan.get_instruction_for_card(blueprint_id)
         if instruction:
-            # Card is in the plan - high score based on priority
+            # Card is in the plan - check deployment ORDER first
+            # Locations -> Ships/Vehicles -> Characters
+            should_deploy_now, order_reason = self.current_plan.should_deploy_card_now(
+                blueprint_id, available_blueprint_ids
+            )
+
+            if not should_deploy_now:
+                # Card is in plan but should wait for higher-priority types
+                logger.info(f"⏳ {instruction.card_name}: {order_reason}")
+                return (-50.0, f"IN PLAN but waiting: {order_reason}")
+
+            # Card is in the plan AND should deploy now - high score based on priority
             priority_bonus = (3 - instruction.priority) * 50  # Priority 0 = +150, 1 = +100, 2 = +50
             return (100.0 + priority_bonus, instruction.reason)
         else:

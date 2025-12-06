@@ -1503,7 +1503,7 @@ class CardSelectionEvaluator(ActionEvaluator):
                         action.add_reasoning("Location - may be needed", 20.0)
 
                         # Check for battleground icons
-                        is_battleground = "battleground" in (card_meta.card_sub_type or "").lower()
+                        is_battleground = "battleground" in (card_meta.sub_type or "").lower()
                         if is_battleground:
                             action.add_reasoning("Battleground location", 30.0)
                     elif card_meta.is_effect:

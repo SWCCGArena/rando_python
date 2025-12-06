@@ -250,6 +250,17 @@ class EventProcessor:
                 if loc:
                     self.board_state.strategy_controller.on_card_deployed(loc.card_id)
 
+        # === UPDATE DEPLOY PLAN ===
+        # When a card we're deploying gets a card_id, update any pilots waiting to board it
+        # or any cards waiting to deploy to this location
+        if zone == "AT_LOCATION" and owner == self.board_state.my_player_name:
+            if hasattr(self.board_state, 'current_deploy_plan') and self.board_state.current_deploy_plan:
+                updated = self.board_state.current_deploy_plan.update_deployed_card_id(
+                    blueprint_id, card_id, card_title
+                )
+                if updated:
+                    logger.info(f"📋 Deploy plan updated: {card_title} assigned card_id={card_id}")
+
         # === SIDE DETECTION ===
         # If we haven't detected our side yet, check from cards in our HAND
         # HAND cards are reliable - other zones can have cards swapped by game effects
