@@ -70,6 +70,9 @@ class CardSelectionEvaluator(ActionEvaluator):
         if context.decision_type == 'ARBITRARY_CARDS':
             if "starting location" in text_lower:
                 return self._evaluate_starting_location(context)
+            elif "card to deploy from reserve deck" in text_lower and context.phase == "Play starting cards":
+                # Objective starting cards - use objective handler
+                return self._evaluate_starting_deploy(context)
             elif "card to take into hand" in text_lower:
                 return self._evaluate_take_into_hand(context)
             elif "card to put on lost pile" in text_lower:
@@ -1450,6 +1453,69 @@ class CardSelectionEvaluator(ActionEvaluator):
     # =====================================================
     # ARBITRARY_CARDS handlers
     # =====================================================
+
+    def _evaluate_starting_deploy(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Choose card to deploy during starting cards phase.
+
+        This is called when the objective requires deploying specific cards
+        (e.g., "Hunt For The Droid General" requires Clone Command Center,
+        Cloning Cylinders, Grievous Will Run And Hide, etc.)
+
+        Uses the objective handler to identify which cards should be prioritized.
+        """
+        actions = []
+        from ..card_loader import get_card
+        from ..objective_handler import get_objective_handler
+
+        objective_handler = get_objective_handler()
+
+        logger.info(f"🎯 Starting card deploy selection, {len(context.card_ids)} options")
+
+        for i, card_id in enumerate(context.card_ids):
+            blueprint = context.blueprints[i] if i < len(context.blueprints) else ""
+
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=50.0,  # Base score
+                display_text=f"Deploy {card_id}"
+            )
+
+            if blueprint and not blueprint.startswith("-1_"):
+                card_meta = get_card(blueprint)
+                if card_meta:
+                    card_title = card_meta.title or ""
+                    action.display_text = f"Deploy {card_title}"
+
+                    # Check if this card is required by the objective
+                    obj_bonus = objective_handler.score_starting_card(blueprint, card_title)
+                    if obj_bonus > 0:
+                        action.add_reasoning(f"OBJECTIVE REQUIREMENT", obj_bonus)
+                        logger.info(f"🎯 {card_title} is required by objective! (+{obj_bonus})")
+                    else:
+                        # Not a required card - lower priority during starting phase
+                        action.add_reasoning("Not objective requirement", -20.0)
+
+                    # Additional scoring based on card type
+                    if card_meta.is_location:
+                        # Locations are often needed for objectives
+                        action.add_reasoning("Location - may be needed", 20.0)
+
+                        # Check for battleground icons
+                        is_battleground = "battleground" in (card_meta.card_sub_type or "").lower()
+                        if is_battleground:
+                            action.add_reasoning("Battleground location", 30.0)
+                    elif card_meta.is_effect:
+                        # Effects like Cloning Cylinders are often objective requirements
+                        action.add_reasoning("Effect - may be objective card", 15.0)
+            else:
+                # Unknown card - add randomization
+                action.add_reasoning("Unknown card", random.uniform(-5, 5))
+
+            actions.append(action)
+
+        return actions
 
     def _evaluate_starting_location(self, context: DecisionContext) -> List[EvaluatedAction]:
         """

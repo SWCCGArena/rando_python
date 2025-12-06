@@ -243,24 +243,26 @@ class DecisionHandler:
 
         try:
             # === LAYER 1: Brain (Smart AI) ===
-            # Pass blocked_responses so evaluators can penalize them
+            # ALWAYS pass blocked_responses so evaluators can penalize them
+            # This prevents loops by penalizing cancelled actions BEFORE loop detection triggers
             if brain and board_state and decision_type in ['CARD_ACTION_CHOICE', 'CARD_SELECTION', 'ARBITRARY_CARDS', 'ACTION_CHOICE', 'INTEGER']:
                 result = DecisionHandler._use_brain(
                     decision_element, board_state, phase_count, brain,
-                    blocked_responses=blocked_responses if use_random_to_break_loop else None
+                    blocked_responses=blocked_responses  # Always pass, not just when loop detected
                 )
                 if result:
-                    # Check if brain chose a blocked response - override it
-                    if use_random_to_break_loop and result[1] in blocked_responses and all_options:
+                    # ALWAYS check if brain chose a blocked response - override it immediately!
+                    # This prevents loops BEFORE they're detected (blocked = previously cancelled)
+                    if blocked_responses and result[1] in blocked_responses and all_options:
                         available = [opt for opt in all_options if opt not in blocked_responses]
                         if available:
                             # Prefer pass (empty string) as escape hatch
                             if '' in available:
                                 override = ''
-                                logger.warning(f"🔄 Brain chose blocked response '{result[1]}', passing to break loop")
+                                logger.warning(f"🚫 Brain chose blocked response '{result[1]}', passing (action was cancelled before)")
                             else:
                                 override = random.choice(available)
-                                logger.warning(f"🔄 Brain chose blocked response '{result[1]}', overriding to '{override}'")
+                                logger.warning(f"🚫 Brain chose blocked response '{result[1]}', overriding to '{override}' (action was cancelled before)")
                             result = (result[0], override)
                     logger.debug(f"Brain handled decision: {result[1]}")
 

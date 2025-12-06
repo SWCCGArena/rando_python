@@ -7,7 +7,7 @@ Ported from Unity C# BotAIHelper.cs ranking system.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 from enum import Enum
 import logging
 import random
@@ -85,6 +85,10 @@ class DecisionContext:
 
     # Additional context
     extra: Dict[str, Any] = field(default_factory=dict)
+
+    # Blocked responses (for loop prevention)
+    # Actions in this set should be heavily penalized to avoid re-selection
+    blocked_responses: Set[str] = field(default_factory=set)
 
 
 @dataclass

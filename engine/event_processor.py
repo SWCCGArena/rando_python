@@ -12,6 +12,7 @@ from typing import Optional
 import logging
 from .board_state import BoardState, LocationInPlay
 from .card_loader import get_card
+from .objective_handler import get_objective_handler
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,16 @@ class EventProcessor:
                             self.board_state.strategy_controller.game_strategy.my_side = self.board_state.my_side
                     # Notify callbacks (e.g., for delayed welcome message)
                     self._notify_side_detected(self.board_state.my_side)
+
+        # === OBJECTIVE DETECTION ===
+        # If this is our Objective card, set it in the objective handler
+        # Objectives are placed on SIDE_OF_TABLE zone
+        if zone == "SIDE_OF_TABLE" and owner == self.board_state.my_player_name:
+            card_metadata = get_card(blueprint_id) if blueprint_id and not blueprint_id.startswith('-1_') else None
+            if card_metadata and card_metadata.card_type == "Objective":
+                objective_handler = get_objective_handler()
+                objective_handler.set_objective(blueprint_id)
+                logger.info(f"🎯 Detected our objective: {card_title} ({blueprint_id})")
 
         # Notify callbacks (for achievements, etc.)
         self._notify_card_placed(card_title, blueprint_id, zone, owner)

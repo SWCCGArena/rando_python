@@ -201,6 +201,7 @@ class BotState:
         # Game session state
         self.game_id = None
         self.channel_number = 0
+        self.last_ended_game_id = None  # Track last game to prevent rejoining stale games
 
         # NetworkCoordinator for rate-limited requests
         self.coordinator = None  # Initialized after client is created
@@ -828,7 +829,20 @@ def bot_worker():
                             socketio.emit('state_update', bot_state.to_dict(), namespace='/')
 
                     # Check if game started (has gameId)
+                    # CRITICAL: Also check that this isn't a stale game_id from a recently-ended game
+                    # (GEMP can return old game_ids after server restart)
                     if my_table.game_id and bot_state.game_id != my_table.game_id:
+                        # Prevent rejoining a game we just finished
+                        if my_table.game_id == bot_state.last_ended_game_id:
+                            logger.warning(f"⚠️ Ignoring stale game_id {my_table.game_id} (same as last ended game)")
+                            # Clear the table and go back to lobby to create fresh table
+                            bot_state.current_table_id = None
+                            bot_state.opponent_name = None
+                            bot_state.state = GameState.IN_LOBBY
+                            socketio.emit('log_message', {'message': '⚠️ Detected stale game from server - creating fresh table', 'level': 'warning'}, namespace='/')
+                            socketio.emit('state_update', bot_state.to_dict(), namespace='/')
+                            continue
+
                         logger.info(f"🎲 Game started! Game ID: {my_table.game_id}")
                         socketio.emit('log_message', {'message': f'🎲 Game started vs {bot_state.opponent_name}!', 'level': 'success'}, namespace='/')
 
@@ -860,7 +874,12 @@ def bot_worker():
 
                             # Reset decision tracker (clears loop detection history)
                             DecisionHandler.reset_tracker()
-                            logger.info(f"🧠 Brain evaluators and decision tracker reset for new game")
+
+                            # Reset objective handler for new game
+                            from engine.objective_handler import reset_objective_handler
+                            reset_objective_handler()
+
+                            logger.info(f"🧠 Brain evaluators, decision tracker, and objective handler reset for new game")
 
                             # Set opponent_name EARLY so achievements work for initial cards
                             # The full reset_for_game will be called later with correct side info
@@ -959,6 +978,10 @@ def bot_worker():
                                 )
 
                                 # Clear game state and return to lobby
+                                # CRITICAL: Remember this game_id to prevent rejoining stale games
+                                if bot_state.game_id:
+                                    bot_state.last_ended_game_id = bot_state.game_id
+                                    logger.info(f"📝 Remembered ended game ID: {bot_state.game_id}")
                                 bot_state.current_table_id = None
                                 bot_state.opponent_name = None
                                 bot_state.game_id = None
@@ -1125,6 +1148,10 @@ def bot_worker():
 
                             # Clear game state and return to lobby
                             game_finished = True  # Skip normal game end processing below
+                            # CRITICAL: Remember this game_id to prevent rejoining stale games
+                            if bot_state.game_id:
+                                bot_state.last_ended_game_id = bot_state.game_id
+                                logger.info(f"📝 Remembered ended game ID: {bot_state.game_id}")
                             bot_state.current_table_id = None
                             bot_state.opponent_name = None
                             bot_state.game_id = None
@@ -1337,6 +1364,10 @@ def bot_worker():
                     )
 
                     # Clear old game state
+                    # CRITICAL: Remember this game_id to prevent rejoining stale games after server restart
+                    if bot_state.game_id:
+                        bot_state.last_ended_game_id = bot_state.game_id
+                        logger.info(f"📝 Remembered ended game ID: {bot_state.game_id}")
                     bot_state.current_table_id = None
                     bot_state.opponent_name = None
                     bot_state.game_id = None
@@ -1555,7 +1586,11 @@ def handle_stop_bot():
     bot_state.running = False
     bot_state.state = GameState.STOPPED
 
-    # Clear table and game state (important: clear game_id so we rejoin on restart!)
+    # Clear table and game state
+    # Remember game_id to prevent rejoining stale games after server restart
+    if bot_state.game_id:
+        bot_state.last_ended_game_id = bot_state.game_id
+        logger.info(f"📝 Remembered game ID before stop: {bot_state.game_id}")
     bot_state.current_table_id = None
     bot_state.opponent_name = None
     bot_state.current_tables = []
