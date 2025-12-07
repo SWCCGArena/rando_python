@@ -501,6 +501,65 @@ class DeploymentPlan:
         return updated
 
 
+@dataclass
+class NextTurnCrushPlan:
+    """
+    Tracks a planned CRUSH attack for next turn.
+
+    When the bot decides to hold back this turn to set up a crushing attack
+    next turn, this stores the details so other phases (draw, extra actions)
+    can respect the plan and not waste force.
+    """
+    # Target location info
+    target_location_id: str
+    target_location_name: str
+    target_enemy_power: int
+
+    # Cards we'll deploy for the crush
+    card_blueprint_ids: List[str]
+    card_names: List[str]
+
+    # Power and cost calculations
+    total_power: int
+    total_deploy_cost: int
+
+    # Force needed = deploy cost + battle reserve (usually +2)
+    force_needed: int
+
+    # Expected force next turn (current unused + generation)
+    expected_force_next_turn: int
+
+    # The power advantage we'll achieve
+    expected_advantage: int
+
+    def get_max_draw_force(self, current_force: int) -> int:
+        """
+        Calculate maximum force that can be spent on drawing cards.
+
+        We need to save enough force so that next turn we can afford the crush.
+        Drawing costs force now but we regenerate next turn.
+
+        Logic: We can spend on draws up to what we'd regenerate anyway,
+        minus a small buffer for safety.
+        """
+        # We'll regenerate force_generation next turn
+        # So any force we spend now on draws will be "refunded" via regeneration
+        # But we need to ensure we have force_needed available next turn
+        #
+        # next_turn_force = current_force - draws_spent + force_generation
+        # We need: next_turn_force >= force_needed
+        # So: current_force - draws_spent + force_generation >= force_needed
+        # draws_spent <= current_force + force_generation - force_needed
+        #
+        # But force_generation is already factored into expected_force_next_turn
+        # expected_force_next_turn = current_force + force_generation
+        # So: draws_spent <= expected_force_next_turn - force_needed
+
+        max_draw = self.expected_force_next_turn - self.force_needed
+        # Keep at least 1 force buffer for safety
+        return max(0, max_draw - 1)
+
+
 class DeployPhasePlanner:
     """
     Creates comprehensive deployment plans for the entire phase.
@@ -524,6 +583,354 @@ class DeployPhasePlanner:
         self.current_plan = None
         self._last_phase = ""
         self._last_turn = -1
+
+    def _estimate_force_generation(self, locations: List[LocationAnalysis]) -> int:
+        """
+        Estimate our force generation for next turn.
+
+        Force generation = sum of my_icons at locations we control (have presence).
+        For simplicity, we count all locations where my_power > 0 or my_icons > 0.
+        """
+        total_icons = 0
+        for loc in locations:
+            # Count icons at locations where we have presence or can activate
+            if loc.my_icons > 0:
+                total_icons += loc.my_icons
+        return total_icons
+
+    def _estimate_next_turn_force(self, current_force: int, locations: List[LocationAnalysis],
+                                   force_spent_this_turn: int = 0) -> int:
+        """
+        Estimate how much force we'll have available next turn.
+
+        Args:
+            current_force: Current force pile
+            locations: Analyzed locations for icon counting
+            force_spent_this_turn: Force we're planning to spend this turn
+
+        Returns:
+            Estimated force available next turn
+        """
+        force_remaining = current_force - force_spent_this_turn
+        force_generation = self._estimate_force_generation(locations)
+        return force_remaining + force_generation
+
+    def _find_next_turn_crush_opportunities(
+        self,
+        board_state,
+        locations: List[LocationAnalysis],
+        all_cards_in_hand: List[Dict],
+        current_force: int
+    ) -> Optional[NextTurnCrushPlan]:
+        """
+        Look for CRUSH opportunities that become possible by waiting one turn.
+
+        Only considers:
+        - Locations where enemy has presence (their_power > 0)
+        - Cards that are too expensive now but affordable next turn
+        - Vehicle+pilot combos that could crush
+
+        Does NOT consider:
+        - Establish opportunities (only CRUSH)
+        - Reinforcement (only CRUSH at locations we don't control)
+
+        Returns:
+            NextTurnCrushPlan if a good opportunity exists, None otherwise
+        """
+        if not board_state or not locations:
+            return None
+
+        # Calculate next turn's expected force (if we spend 0 this turn)
+        force_generation = self._estimate_force_generation(locations)
+        next_turn_force = current_force + force_generation
+
+        logger.debug(f"🔮 Next-turn analysis: current={current_force}, gen={force_generation}, next={next_turn_force}")
+
+        # Find enemy-held locations we could potentially crush
+        enemy_held = [
+            loc for loc in locations
+            if loc.their_power > 0  # Enemy has presence
+            and loc.my_power == 0   # We DON'T have presence (not reinforcement)
+            and loc.my_icons > 0    # We can deploy there (have icons)
+        ]
+
+        if not enemy_held:
+            logger.debug("🔮 No enemy-held locations to consider for next-turn crush")
+            return None
+
+        # Get all cards (including expensive ones we can't afford now)
+        all_characters = [c for c in all_cards_in_hand if c.get('is_character')]
+        all_vehicles = [c for c in all_cards_in_hand if c.get('is_vehicle')]
+        all_starships = [c for c in all_cards_in_hand if c.get('is_starship')]
+
+        # Get pilots for vehicle/ship combos
+        pilots = [c for c in all_characters if c.get('is_pilot')]
+
+        best_opportunity = None
+        best_score = 0
+
+        # Check each enemy-held location
+        for loc in enemy_held:
+            enemy_power = loc.their_power
+            # Need BATTLE_FAVORABLE_THRESHOLD advantage for CRUSH
+            power_needed_for_crush = enemy_power + BATTLE_FAVORABLE_THRESHOLD
+
+            logger.debug(f"🔮 Checking {loc.name}: enemy={enemy_power}, need {power_needed_for_crush} for crush")
+
+            # Option 1: Vehicle + pilot combo (ground locations only)
+            if loc.is_ground and not loc.is_interior:
+                for vehicle in all_vehicles:
+                    v_power = vehicle.get('power', 0) or vehicle.get('power_value', 0)
+                    v_cost = vehicle.get('cost', 0) or vehicle.get('deploy_value', 0)
+                    v_name = vehicle.get('name', 'Unknown')
+
+                    # Skip if we can afford it now (not a "next turn" opportunity)
+                    if v_cost <= current_force - self.battle_force_reserve:
+                        continue
+
+                    # Find best pilot for this vehicle
+                    for pilot in pilots:
+                        p_power = pilot.get('pilot_adds_power', 2) or 2  # Default pilot bonus
+                        p_cost = pilot.get('cost', 0) or pilot.get('deploy_value', 0)
+                        p_name = pilot.get('name', 'Unknown')
+
+                        total_power = v_power + p_power
+                        total_cost = v_cost + p_cost
+                        force_needed = total_cost + 2  # Deploy + battle reserve
+
+                        # Can we afford this next turn?
+                        if force_needed > next_turn_force:
+                            continue
+
+                        # Is this a crush?
+                        if total_power < power_needed_for_crush:
+                            continue
+
+                        advantage = total_power - enemy_power
+                        # Score: advantage * 10 + location value (their_icons)
+                        score = advantage * 10 + loc.their_icons * 15
+
+                        logger.debug(f"🔮   Vehicle combo: {v_name}+{p_name} = {total_power} power, "
+                                   f"cost {total_cost}, advantage +{advantage}, score {score}")
+
+                        if score > best_score:
+                            best_score = score
+                            best_opportunity = NextTurnCrushPlan(
+                                target_location_id=loc.card_id,
+                                target_location_name=loc.name,
+                                target_enemy_power=enemy_power,
+                                card_blueprint_ids=[vehicle['blueprint_id'], pilot['blueprint_id']],
+                                card_names=[v_name, p_name],
+                                total_power=total_power,
+                                total_deploy_cost=total_cost,
+                                force_needed=force_needed,
+                                expected_force_next_turn=next_turn_force,
+                                expected_advantage=advantage
+                            )
+
+            # Option 2: Multiple characters combined
+            # Sort by power/cost efficiency
+            affordable_next_turn = [
+                c for c in all_characters
+                if (c.get('cost', 0) or c.get('deploy_value', 0)) <= next_turn_force - 2
+            ]
+
+            if len(affordable_next_turn) >= 2:
+                # Try combinations of 2-3 characters
+                from itertools import combinations
+                for combo_size in [3, 2]:
+                    if len(affordable_next_turn) < combo_size:
+                        continue
+
+                    for combo in combinations(affordable_next_turn, combo_size):
+                        total_power = sum(c.get('power', 0) or c.get('power_value', 0) for c in combo)
+                        total_cost = sum(c.get('cost', 0) or c.get('deploy_value', 0) for c in combo)
+                        force_needed = total_cost + 2
+
+                        # Skip if we can afford it now
+                        if total_cost <= current_force - self.battle_force_reserve:
+                            continue
+
+                        # Can we afford next turn?
+                        if force_needed > next_turn_force:
+                            continue
+
+                        # Is this a crush at this location?
+                        if total_power < power_needed_for_crush:
+                            continue
+
+                        # For ground locations, check if characters can deploy there
+                        if loc.is_ground:
+                            advantage = total_power - enemy_power
+                            score = advantage * 10 + loc.their_icons * 15
+
+                            if score > best_score:
+                                best_score = score
+                                best_opportunity = NextTurnCrushPlan(
+                                    target_location_id=loc.card_id,
+                                    target_location_name=loc.name,
+                                    target_enemy_power=enemy_power,
+                                    card_blueprint_ids=[c['blueprint_id'] for c in combo],
+                                    card_names=[c.get('name', '?') for c in combo],
+                                    total_power=total_power,
+                                    total_deploy_cost=total_cost,
+                                    force_needed=force_needed,
+                                    expected_force_next_turn=next_turn_force,
+                                    expected_advantage=advantage
+                                )
+
+        if best_opportunity:
+            logger.info(f"🔮 NEXT-TURN CRUSH FOUND: {best_opportunity.card_names} -> "
+                       f"{best_opportunity.target_location_name} "
+                       f"({best_opportunity.total_power} vs {best_opportunity.target_enemy_power}, "
+                       f"+{best_opportunity.expected_advantage})")
+
+        return best_opportunity
+
+    def _find_next_turn_bleed_stop_opportunities(
+        self,
+        board_state,
+        locations: List[LocationAnalysis],
+        bleed_locations: List[LocationAnalysis],
+        all_cards_in_hand: List[Dict],
+        current_force: int
+    ) -> Optional[NextTurnCrushPlan]:
+        """
+        Look for opportunities to STOP BLEEDING that become possible by waiting one turn.
+
+        Similar to next-turn crush planning, but for stopping force drains:
+        - Finds bleed locations we can't contest THIS turn (not enough force/power)
+        - Checks if we could stop the bleed NEXT turn with saved force
+        - Only considers plans where we can BEAT the enemy power
+
+        Returns:
+            NextTurnCrushPlan if a good bleed-stop opportunity exists, None otherwise
+            (Reuses NextTurnCrushPlan structure - works for any "save for next turn" plan)
+        """
+        if not board_state or not bleed_locations:
+            return None
+
+        # Calculate next turn's expected force (if we spend 0 this turn)
+        force_generation = self._estimate_force_generation(locations)
+        next_turn_force = current_force + force_generation
+
+        logger.debug(f"🩸🔮 Next-turn bleed analysis: current={current_force}, gen={force_generation}, next={next_turn_force}")
+
+        # Get all cards (including expensive ones we can't afford now)
+        all_characters = [c for c in all_cards_in_hand if c.get('is_character')]
+        all_starships = [c for c in all_cards_in_hand if c.get('is_starship')]
+
+        best_opportunity = None
+        best_score = 0
+
+        # Sort bleed locations by drain severity (highest icons = most urgent)
+        bleed_sorted = sorted(bleed_locations, key=lambda x: x.my_icons, reverse=True)
+
+        for loc in bleed_sorted:
+            enemy_power = loc.their_power
+            icons_at_stake = loc.my_icons  # Icons we're being drained for
+
+            # Need at least +1 advantage to beat them (stop the bleed)
+            power_needed = enemy_power + 1
+
+            logger.debug(f"🩸🔮 Checking bleed at {loc.name}: enemy={enemy_power}, icons={icons_at_stake}, need {power_needed} to stop")
+
+            # For ground bleed locations - check characters
+            if loc.is_ground:
+                for char in all_characters:
+                    c_power = char.get('power', 0) or char.get('power_value', 0)
+                    c_cost = char.get('cost', 0) or char.get('deploy_value', 0)
+                    c_name = char.get('name', 'Unknown')
+
+                    # Skip if can't beat enemy even with this card
+                    if c_power <= enemy_power:
+                        continue
+
+                    # Skip if we can afford it now (not a "next turn" opportunity)
+                    if c_cost <= current_force - self.battle_force_reserve:
+                        continue
+
+                    force_needed = c_cost + self.battle_force_reserve
+
+                    # Can we afford this next turn?
+                    if force_needed > next_turn_force:
+                        continue
+
+                    advantage = c_power - enemy_power
+                    # Score: icons saved × 20 (matches STOP BLEEDING scoring) + advantage bonus
+                    score = icons_at_stake * 20 + advantage * 5
+
+                    logger.debug(f"🩸🔮   Character: {c_name} = {c_power} power, "
+                               f"cost {c_cost}, advantage +{advantage}, score {score}")
+
+                    if score > best_score:
+                        best_score = score
+                        best_opportunity = NextTurnCrushPlan(
+                            target_location_id=loc.card_id,
+                            target_location_name=loc.name,
+                            target_enemy_power=enemy_power,
+                            card_blueprint_ids=[char['blueprint_id']],
+                            card_names=[c_name],
+                            total_power=c_power,
+                            total_deploy_cost=c_cost,
+                            force_needed=force_needed,
+                            expected_force_next_turn=next_turn_force,
+                            expected_advantage=advantage
+                        )
+
+            # For space bleed locations - check starships
+            elif loc.is_space:
+                for ship in all_starships:
+                    s_power = ship.get('power', 0) or ship.get('power_value', 0)
+                    s_cost = ship.get('cost', 0) or ship.get('deploy_value', 0)
+                    s_name = ship.get('name', 'Unknown')
+
+                    # Skip unpiloted ships (power would be 0)
+                    if ship.get('needs_pilot', False):
+                        continue
+
+                    # Skip if can't beat enemy
+                    if s_power <= enemy_power:
+                        continue
+
+                    # Skip if we can afford it now
+                    if s_cost <= current_force - self.battle_force_reserve:
+                        continue
+
+                    force_needed = s_cost + self.battle_force_reserve
+
+                    # Can we afford this next turn?
+                    if force_needed > next_turn_force:
+                        continue
+
+                    advantage = s_power - enemy_power
+                    score = icons_at_stake * 20 + advantage * 5
+
+                    logger.debug(f"🩸🔮   Starship: {s_name} = {s_power} power, "
+                               f"cost {s_cost}, advantage +{advantage}, score {score}")
+
+                    if score > best_score:
+                        best_score = score
+                        best_opportunity = NextTurnCrushPlan(
+                            target_location_id=loc.card_id,
+                            target_location_name=loc.name,
+                            target_enemy_power=enemy_power,
+                            card_blueprint_ids=[ship['blueprint_id']],
+                            card_names=[s_name],
+                            total_power=s_power,
+                            total_deploy_cost=s_cost,
+                            force_needed=force_needed,
+                            expected_force_next_turn=next_turn_force,
+                            expected_advantage=advantage
+                        )
+
+        if best_opportunity:
+            logger.info(f"🩸🔮 NEXT-TURN BLEED STOP FOUND: {best_opportunity.card_names} -> "
+                       f"{best_opportunity.target_location_name} "
+                       f"(save {bleed_sorted[0].my_icons if bleed_sorted else '?'} drain/turn, "
+                       f"{best_opportunity.total_power} vs {best_opportunity.target_enemy_power})")
+
+        return best_opportunity
 
     def _find_unpiloted_ships_in_play(self, board_state) -> List[Dict]:
         """
@@ -706,6 +1113,244 @@ class DeployPhasePlanner:
             logger.debug(f"   📊 Dynamic threshold ({domain}): {threshold} (full threshold, turn {turn_number})")
 
         return threshold
+
+    def _calculate_force_drain_gap(self, locations: List['LocationAnalysis']) -> Tuple[int, int, int, List['LocationAnalysis']]:
+        """
+        Calculate the force drain economy - how much they drain us vs we drain them.
+
+        Force drains happen at locations where:
+        - One player has presence (power > 0) and the other doesn't
+        - The controlling player drains for their opponent's icons
+
+        IMPORTANT: "Bleed locations" for STOP BLEEDING plans must have:
+        - Enemy presence but no enemy CARDS there (their_icons > 0 means they CAN deploy)
+        - Actually NO: bleed means they ARE draining us, so their_power > 0
+        - But for STOP BLEEDING to work, we need to be able to contest without
+          requiring threshold power - so we want UNCONTESTED locations where
+          opponent can drain from a SAFE position (no enemy cards to fight)
+
+        The safest "stop bleeding" targets are locations where:
+        - We have icons (my_icons > 0) - they drain us for these
+        - They have NO cards there (their_power == 0) - so we can stop the drain
+          by just showing up, no battle required
+        - BUT there's a nuance: if their_power == 0, they're NOT draining us!
+          Force drains require presence.
+
+        REVISED: For counting drain economy, enemy drains us at locations where:
+        - their_power > 0 (they have presence)
+        - my_power == 0 (we have no presence)
+        - my_icons > 0 (they drain us for our icons)
+
+        For "STOP BLEEDING" targets (presence-only plans), we want locations where:
+        - We're being drained (above conditions)
+        - AND it's GROUND (so characters can deploy)
+        - AND the enemy force is small enough that presence could help
+
+        Returns:
+            Tuple of:
+            - their_drain: Total icons opponent drains from us per turn
+            - our_drain: Total icons we drain from them per turn
+            - drain_gap: our_drain - their_drain (negative = we're losing)
+            - bleed_locations: GROUND locations where opponent drains us WITH LOW enemy power
+        """
+        their_drain = 0
+        our_drain = 0
+        bleed_locations = []
+
+        # Threshold for "low enemy power" - below this, presence-only makes sense
+        # Above this, we should use normal threshold logic to contest
+        LOW_ENEMY_THRESHOLD = 4
+
+        for loc in locations:
+            # Opponent drains us: they have presence, we don't
+            # They drain for OUR icons (my_icons)
+            if loc.their_power > 0 and loc.my_power == 0 and loc.my_icons > 0:
+                their_drain += loc.my_icons
+                # Add to bleed_locations if enemy power is LOW enough for presence-only
+                # Works for both ground (characters) and space (starships)
+                if loc.their_power <= LOW_ENEMY_THRESHOLD:
+                    bleed_locations.append(loc)
+                    domain = "space" if loc.is_space else "ground"
+                    logger.debug(f"   🩸 BLEED ({domain}, contestable): {loc.name} - opponent drains {loc.my_icons} icons, enemy power {loc.their_power}")
+                else:
+                    domain = "space" if loc.is_space else "ground"
+                    logger.debug(f"   🩸 BLEED ({domain}, high threat): {loc.name} - opponent drains {loc.my_icons} icons, enemy power {loc.their_power}")
+
+            # We drain opponent: we have presence, they don't
+            # We drain for THEIR icons (their_icons)
+            if loc.my_power > 0 and loc.their_power == 0 and loc.their_icons > 0:
+                our_drain += loc.their_icons
+                logger.debug(f"   💧 DRAIN: {loc.name} - we drain {loc.their_icons} icons")
+
+        drain_gap = our_drain - their_drain
+
+        if their_drain > 0 or our_drain > 0:
+            emoji = "🩸" if drain_gap < 0 else ("💧" if drain_gap > 0 else "⚖️")
+            logger.info(f"   {emoji} FORCE DRAIN ECONOMY: We drain {our_drain}, they drain {their_drain} = gap {drain_gap:+d}")
+
+        return their_drain, our_drain, drain_gap, bleed_locations
+
+    def _generate_presence_only_plans(
+        self,
+        characters: List[Dict],
+        vehicles: List[Dict],
+        bleed_locations: List['LocationAnalysis'],
+        force_budget: int,
+        locations: List['LocationAnalysis'],
+        pilots: List[Dict] = None,
+        starships: List[Dict] = None
+    ) -> List[Tuple[List['DeploymentInstruction'], int, float]]:
+        """
+        Generate "STOP THE BLEEDING" plans that deploy ANY presence to high-drain locations.
+
+        These plans have REDUCED power threshold - card must beat enemy power.
+        The goal is to stop force drains, not win battles.
+
+        Handles both:
+        - Ground bleed: characters/vehicles to ground locations
+        - Space bleed: starships to space locations
+
+        Scoring: Based primarily on icons saved per turn, not raw power.
+        """
+        plans = []
+
+        if not bleed_locations:
+            return plans
+
+        # Separate ground and space bleed locations
+        ground_bleeds = [loc for loc in bleed_locations if loc.is_ground]
+        space_bleeds = [loc for loc in bleed_locations if loc.is_space]
+
+        # Combine characters and piloted vehicles for ground
+        affordable_chars = [c for c in characters if c['cost'] <= force_budget and c.get('power', 0) >= 1]
+        affordable_piloted_vehicles = [
+            v for v in vehicles
+            if v['cost'] <= force_budget and v.get('has_permanent_pilot', False) and v.get('power', 0) >= 1
+        ]
+        ground_deployable = affordable_chars + affordable_piloted_vehicles
+
+        # Get affordable starships for space (piloted or with permanent pilot)
+        affordable_ships = []
+        if starships:
+            for ship in starships:
+                if ship['cost'] > force_budget:
+                    continue
+                power = ship.get('power', 0)
+                # Unpiloted ships need a pilot to have meaningful power
+                if ship.get('needs_pilot', False):
+                    # For now, skip unpiloted ships in presence plans
+                    # (complex to handle pilot combos here)
+                    continue
+                if power >= 1:
+                    affordable_ships.append(ship)
+
+        has_ground = ground_deployable and ground_bleeds
+        has_space = affordable_ships and space_bleeds
+
+        if not has_ground and not has_space:
+            return plans
+
+        bleed_count = len(ground_bleeds) + len(space_bleeds)
+        logger.info(f"   🩸 STOP THE BLEEDING: Generating presence plans for {bleed_count} drain locations "
+                   f"({len(ground_bleeds)} ground, {len(space_bleeds)} space)")
+
+        # Sort bleed locations by drain severity (highest icons first)
+        all_bleeds_sorted = sorted(bleed_locations, key=lambda x: x.my_icons, reverse=True)
+
+        for target_loc in all_bleeds_sorted:
+            icons_at_stake = target_loc.my_icons  # Icons we'd stop being drained for
+
+            # Choose deployables based on location type
+            if target_loc.is_ground:
+                deployable_pool = ground_deployable
+            elif target_loc.is_space:
+                deployable_pool = affordable_ships
+            else:
+                continue
+
+            if not deployable_pool:
+                continue
+
+            # Filter deployables for this location (check restrictions)
+            location_deployables = []
+            for card in deployable_pool:
+                # Check deploy system restrictions
+                restrictions = card.get('deploy_restriction_systems', [])
+                if restrictions:
+                    loc_clean = target_loc.name.lstrip('•').strip()
+                    can_deploy = False
+                    for system in restrictions:
+                        system_lower = system.lower()
+                        loc_lower = loc_clean.lower()
+                        if loc_lower.startswith(system_lower):
+                            can_deploy = True
+                            break
+                        if ':' in loc_clean:
+                            loc_system = loc_clean.split(':')[0].strip().lower()
+                            if loc_system == system_lower:
+                                can_deploy = True
+                                break
+                    if not can_deploy:
+                        continue
+
+                # Vehicles need exterior locations
+                if card.get('is_vehicle') and not target_loc.is_exterior:
+                    continue
+
+                location_deployables.append(card)
+
+            if not location_deployables:
+                continue
+
+            # Generate a plan for EACH affordable card
+            # The key difference from normal plans: REDUCED threshold (but still need to beat enemy)
+            for card in location_deployables:
+                if card['cost'] > force_budget:
+                    continue
+
+                card_power = card['power']
+
+                # Still require BEATING the enemy (at least +1 advantage)
+                # Presence-only makes sense for stopping drains, but not suicide missions
+                if target_loc.their_power > 0 and card_power <= target_loc.their_power:
+                    logger.debug(f"      🩸 Skipping {card['name']} - {card_power}p doesn't beat enemy {target_loc.their_power}p")
+                    continue
+
+                # Create "STOP BLEEDING" instruction
+                domain = "space" if target_loc.is_space else "ground"
+                reason = f"STOP BLEEDING ({domain}): {target_loc.name} (save {icons_at_stake} drain/turn with {card_power}p)"
+
+                instructions = [DeploymentInstruction(
+                    card_blueprint_id=card['blueprint_id'],
+                    card_name=card['name'],
+                    target_location_id=target_loc.card_id,
+                    target_location_name=target_loc.name,
+                    priority=2,
+                    reason=reason,
+                    power_contribution=card['power'],
+                    deploy_cost=card['cost'],
+                )]
+
+                force_remaining = force_budget - card['cost']
+
+                # Score PRIMARILY on icons saved, with power as secondary factor
+                # Icons saved × 20 (each icon = 20 points, same as DENY DRAIN bonus)
+                # Plus small power bonus (power × 2)
+                # Plus opponent icons at location × 10 (we could drain THEM)
+                icons_saved_value = icons_at_stake * 20
+                drain_potential = target_loc.their_icons * 10  # We could drain them!
+                power_value = card_power * 2
+                score = icons_saved_value + drain_potential + power_value
+
+                plans.append((instructions, force_remaining, score))
+
+                logger.debug(f"      🩸 PRESENCE ({domain}) plan: {card['name']} → {target_loc.name} "
+                           f"(save {icons_at_stake}, power {card_power}, score={score:.0f})")
+
+        if plans:
+            logger.info(f"   🩸 Generated {len(plans)} STOP BLEEDING plans")
+
+        return plans
 
     def _calculate_plan_reserve(self, instructions: List['DeploymentInstruction'],
                                  locations: List['LocationAnalysis'],
@@ -1028,6 +1673,21 @@ class DeployPhasePlanner:
                     score += barrier_resilience
                     logger.debug(f"   🛡️ BARRIER RESILIENCE at {target_loc.name}: +{barrier_resilience} "
                                f"({cards_here} cards - Barrier can't stop all)")
+
+                    # =================================================================
+                    # FULL BATTLE COMMITMENT BONUS
+                    # When we're deploying 2+ cards to CRUSH an enemy, reward full commitment
+                    # This makes concentrated attacks more attractive than spreading thin
+                    # Scale with power advantage - stronger crushes get more bonus
+                    # =================================================================
+                    if power_advantage >= BATTLE_FAVORABLE_THRESHOLD:
+                        # Scale: +10 per extra card for each point of advantage beyond threshold
+                        # +4 advantage: 10 per card, +5: 20 per card, +6: 30 per card, etc.
+                        advantage_factor = power_advantage - BATTLE_FAVORABLE_THRESHOLD + 1
+                        commitment_bonus = advantage_factor * 10.0 * (cards_here - 1)
+                        score += commitment_bonus
+                        logger.debug(f"   ⚔️ BATTLE COMMITMENT at {target_loc.name}: +{commitment_bonus} "
+                                   f"({cards_here} cards, +{power_advantage} advantage)")
 
             else:
                 # === EMPTY LOCATION WITH OUR PRESENCE ===
@@ -2654,6 +3314,14 @@ class DeployPhasePlanner:
             logger.info(f"   🚀 Space targets (starships): {[loc.name for loc in uncontested_space]}")
 
         # =================================================================
+        # STEP 3B: CALCULATE FORCE DRAIN ECONOMY
+        # Track how much we're being drained vs how much we're draining them.
+        # If drain gap is significantly negative (they drain more), we need
+        # to prioritize establishing presence to "stop the bleeding"
+        # =================================================================
+        their_drain, our_drain, drain_gap, bleed_locations = self._calculate_force_drain_gap(locations)
+
+        # =================================================================
         # STEP 4: ALLOCATE CHARACTERS TO CONTESTED/WEAK LOCATIONS
         # Priority: Reinforce locations where we're losing OR below threshold
         # Goal: Reach power advantage (contested) or threshold (weak presence)
@@ -3089,10 +3757,40 @@ class DeployPhasePlanner:
             space_threshold=space_threshold, contest_advantage=contest_advantage
         )
 
+        # =================================================================
+        # STEP 5A: GENERATE "STOP THE BLEEDING" PRESENCE PLANS
+        # If drain gap is negative (we're losing the force drain war), generate
+        # special plans that establish ANY presence at bleed locations.
+        # These have NO threshold - any power >= 1 is enough to stop drains.
+        # =================================================================
+        all_presence_plans = []
+        if drain_gap < 0 and bleed_locations:
+            # Only generate presence plans if we're losing the drain economy
+            # AND we don't already have normal plans for these locations
+            bleed_names = {loc.name for loc in bleed_locations}
+            normal_plan_targets = set()
+            # Check both ground and space plans for coverage
+            for instructions, _, _ in all_ground_plans + all_space_plans:
+                for inst in instructions:
+                    if inst.target_location_name:
+                        normal_plan_targets.add(inst.target_location_name)
+
+            # Filter bleed locations to only those without normal plans
+            uncovered_bleed = [loc for loc in bleed_locations if loc.name not in normal_plan_targets]
+
+            if uncovered_bleed:
+                logger.info(f"   🩸 BLEED LOCATIONS without normal plans: {[loc.name for loc in uncovered_bleed]}")
+                all_presence_plans = self._generate_presence_only_plans(
+                    characters.copy(), vehicles.copy(), uncovered_bleed, force_remaining, locations,
+                    pilots=all_pilots, starships=starships.copy()
+                )
+
         # Log all plans for debugging
         repilot_count = len(all_repilot_plans)
-        if repilot_count > 0:
-            logger.info(f"   📊 Generated {len(all_ground_plans)} ground, {len(all_space_plans)} space, {repilot_count} RE-PILOT plans")
+        presence_count = len(all_presence_plans)
+        if repilot_count > 0 or presence_count > 0:
+            logger.info(f"   📊 Generated {len(all_ground_plans)} ground, {len(all_space_plans)} space, "
+                       f"{repilot_count} RE-PILOT, {presence_count} PRESENCE plans")
         else:
             logger.info(f"   📊 Generated {len(all_ground_plans)} ground plans, {len(all_space_plans)} space plans")
 
@@ -3131,6 +3829,12 @@ class DeployPhasePlanner:
                 target = parts[2] if len(parts) > 2 else target
             logger.info(f"      RE-PILOT {i+1}: {cards} → aboard {target} score={score:.0f}, cost={cost}")
 
+        for i, (instructions, force_left, score) in enumerate(all_presence_plans):
+            cost = force_remaining - force_left
+            cards = [inst.card_name for inst in instructions]
+            target = instructions[0].target_location_name if instructions else "?"
+            logger.info(f"      🩸 PRESENCE {i+1}: {cards} → {target} (STOP BLEEDING) score={score:.0f}, cost={cost}")
+
         # =================================================================
         # STEP 5B: GENERATE COMBINED GROUND+SPACE PLANS
         # Instead of just picking best single-domain and using leftover,
@@ -3147,6 +3851,9 @@ class DeployPhasePlanner:
         # Add re-pilot plans (reclaiming unpiloted ships already in play)
         for instructions, force_left, score in all_repilot_plans:
             all_plans.append(('repilot', instructions, force_left, score))
+        # Add "stop the bleeding" presence plans (low threshold, high drain priority)
+        for instructions, force_left, score in all_presence_plans:
+            all_plans.append(('presence', instructions, force_left, score))
 
         # Generate COMBINED ground+space plans
         # For each ground plan, check if we can add a compatible space plan
@@ -3245,8 +3952,21 @@ class DeployPhasePlanner:
 
                     if total_cost <= force_remaining:
                         combined_force_left = force_remaining - total_cost
-                        # Bonus for controlling multiple locations
-                        multi_loc_bonus = 30  # Significant bonus for spreading control
+
+                        # Check if either plan involves CRUSHING an enemy
+                        # If so, reduce multi-location bonus - should commit to the crush!
+                        g1_is_crush = any('Crush' in (inst.reason or '') for inst in g1_inst)
+                        g2_is_crush = any('Crush' in (inst.reason or '') for inst in g2_inst)
+
+                        if g1_is_crush or g2_is_crush:
+                            # One plan is a CRUSH - prefer committing to battle over spreading
+                            # Give NO bonus for splitting forces away from a crush opportunity
+                            multi_loc_bonus = 0
+                            logger.debug(f"   ⚔️ Multi-ground: No bonus (one plan is CRUSH)")
+                        else:
+                            # Neither is a crush - normal bonus for spreading control
+                            multi_loc_bonus = 30
+
                         combined_score = g1_score + g2_score + multi_loc_bonus
 
                         combined_instructions = list(g1_inst) + list(g2_inst)
@@ -3280,7 +4000,18 @@ class DeployPhasePlanner:
 
                     if total_cost <= force_remaining:
                         combined_force_left = force_remaining - total_cost
-                        multi_loc_bonus = 30
+
+                        # Check if either plan involves CRUSHING an enemy
+                        s1_is_crush = any('Crush' in (inst.reason or '') for inst in s1_inst)
+                        s2_is_crush = any('Crush' in (inst.reason or '') for inst in s2_inst)
+
+                        if s1_is_crush or s2_is_crush:
+                            # One plan is a CRUSH - prefer committing to battle
+                            multi_loc_bonus = 0
+                            logger.debug(f"   ⚔️ Multi-space: No bonus (one plan is CRUSH)")
+                        else:
+                            multi_loc_bonus = 30
+
                         combined_score = s1_score + s2_score + multi_loc_bonus
 
                         combined_instructions = list(s1_inst) + list(s2_inst)
@@ -3349,6 +4080,114 @@ class DeployPhasePlanner:
                 logger.info(f"   ✅ CHOSE {best_type.upper()} PLAN (score {best_score:.0f}, reserve {best_reserve})")
                 for inst in best_instructions:
                     logger.info(f"      - {inst.card_name} -> {inst.target_location_name} ({inst.power_contribution} power)")
+
+                # =================================================================
+                # NEXT-TURN CRUSH CHECK
+                # If the best current plan is NOT a CRUSH, check if waiting one turn
+                # would allow a CRUSHING attack. Only consider this for CRUSH, not
+                # for establish or reinforcement.
+                # =================================================================
+                best_is_crush = any('Crush' in (inst.reason or '') for inst in best_instructions)
+
+                if not best_is_crush:
+                    # Current plan is NOT a crush - check for next-turn crush opportunity
+                    all_hand_cards = self._get_all_hand_cards_as_dicts(board_state)
+                    next_turn_crush = self._find_next_turn_crush_opportunities(
+                        board_state, locations, all_hand_cards, total_force
+                    )
+
+                    if next_turn_crush:
+                        # Compare scores: next-turn crush advantage vs current plan
+                        # Score next-turn crush: advantage * 10 + icons * 15 (matching our scoring)
+                        next_turn_score = (next_turn_crush.expected_advantage * 10 +
+                                          locations[0].their_icons * 15 if locations else 0)
+
+                        # Prefer next-turn crush if it has significantly better advantage
+                        # The next-turn crush should provide at least +4 advantage (CRUSH threshold)
+                        # AND be better than current marginal play
+                        if (next_turn_crush.expected_advantage >= BATTLE_FAVORABLE_THRESHOLD and
+                            next_turn_score > best_score * 0.8):  # Allow some slack
+
+                            logger.info(f"🔮 HOLD FOR NEXT-TURN CRUSH!")
+                            logger.info(f"   Current plan: {best_type} score={best_score:.0f}")
+                            logger.info(f"   Next-turn crush: {next_turn_crush.card_names} → {next_turn_crush.target_location_name}")
+                            logger.info(f"   Power: {next_turn_crush.total_power} vs {next_turn_crush.target_enemy_power} "
+                                       f"(+{next_turn_crush.expected_advantage})")
+                            logger.info(f"   Force needed: {next_turn_crush.force_needed}, expected next turn: {next_turn_crush.expected_force_next_turn}")
+
+                            # Clear the plan and set HOLD_BACK
+                            plan.instructions.clear()
+                            plan.strategy = DeployStrategy.HOLD_BACK
+                            plan.reason = (f"Saving for next-turn CRUSH: {', '.join(next_turn_crush.card_names)} → "
+                                          f"{next_turn_crush.target_location_name} "
+                                          f"(+{next_turn_crush.expected_advantage} advantage)")
+
+                            # Store the next-turn crush plan on board_state for other evaluators
+                            board_state.next_turn_crush_plan = next_turn_crush
+
+                            # Skip all further plan additions
+                            self.current_plan = plan
+                            return plan
+                        else:
+                            logger.debug(f"🔮 Next-turn crush found but current plan is better: "
+                                       f"crush score ~{next_turn_score:.0f} vs current {best_score:.0f}")
+
+                # =================================================================
+                # NEXT-TURN BLEED STOP CHECK
+                # If we're losing the drain economy and have uncovered bleeds,
+                # check if waiting one turn would let us stop a significant bleed.
+                # =================================================================
+                if drain_gap < 0 and bleed_locations:
+                    # Check if current plan already covers bleed locations
+                    current_targets = {inst.target_location_name for inst in best_instructions}
+                    uncovered_for_next_turn = [
+                        loc for loc in bleed_locations
+                        if loc.name not in current_targets
+                    ]
+
+                    if uncovered_for_next_turn:
+                        all_hand_cards = self._get_all_hand_cards_as_dicts(board_state)
+                        next_turn_bleed_stop = self._find_next_turn_bleed_stop_opportunities(
+                            board_state, locations, uncovered_for_next_turn, all_hand_cards, total_force
+                        )
+
+                        if next_turn_bleed_stop:
+                            # Score: icons saved per turn × 20 (compounding value)
+                            # Compare to current plan score, but weight bleed stops highly
+                            # (each icon saved per turn is like gaining 1 force advantage permanently)
+                            icons_at_target = next([
+                                loc.my_icons for loc in uncovered_for_next_turn
+                                if loc.card_id == next_turn_bleed_stop.target_location_id
+                            ], 2)
+                            next_turn_score = icons_at_target * 25  # High weight for stopping bleeds
+
+                            # Prefer next-turn bleed stop if:
+                            # - Current plan is weak (score < 40) AND bleed is significant (icons >= 2)
+                            # OR current plan is just marginally better
+                            if (best_score < 40 and icons_at_target >= 2) or next_turn_score > best_score * 0.9:
+
+                                logger.info(f"🩸🔮 HOLD FOR NEXT-TURN BLEED STOP!")
+                                logger.info(f"   Current plan: {best_type} score={best_score:.0f}")
+                                logger.info(f"   Next-turn stop: {next_turn_bleed_stop.card_names} → {next_turn_bleed_stop.target_location_name}")
+                                logger.info(f"   Will save {icons_at_target} drain/turn")
+                                logger.info(f"   Force needed: {next_turn_bleed_stop.force_needed}, expected next turn: {next_turn_bleed_stop.expected_force_next_turn}")
+
+                                # Clear the plan and set HOLD_BACK
+                                plan.instructions.clear()
+                                plan.strategy = DeployStrategy.HOLD_BACK
+                                plan.reason = (f"Saving for next-turn BLEED STOP: {', '.join(next_turn_bleed_stop.card_names)} → "
+                                              f"{next_turn_bleed_stop.target_location_name} "
+                                              f"(stop {icons_at_target} drain/turn)")
+
+                                # Store the plan on board_state for other evaluators
+                                board_state.next_turn_crush_plan = next_turn_bleed_stop
+
+                                # Skip all further plan additions
+                                self.current_plan = plan
+                                return plan
+                            else:
+                                logger.debug(f"🩸🔮 Next-turn bleed stop found but current plan is better: "
+                                           f"bleed score ~{next_turn_score:.0f} vs current {best_score:.0f}")
 
                 # CRITICAL: Filter out cards already in the plan from earlier steps
                 # (e.g., STEP 4 may have added cards for weak location reinforcement)
@@ -4187,6 +5026,48 @@ class DeployPhasePlanner:
                 # No viable backup found after checking all candidates
                 logger.debug(f"   ⚠️ No viable backup for {inst.card_name} - all locations too dangerous or restricted")
 
+    def _get_all_hand_cards_as_dicts(self, board_state) -> List[Dict]:
+        """
+        Get ALL cards in hand as dicts, regardless of cost.
+
+        Used for next-turn planning where we want to consider expensive cards
+        that we can't afford this turn but could afford next turn.
+        """
+        from .card_loader import get_card
+
+        all_cards = []
+        for card in board_state.cards_in_hand:
+            if not card.blueprint_id:
+                continue
+            metadata = get_card(card.blueprint_id)
+            if not metadata:
+                continue
+
+            has_permanent_pilot = getattr(metadata, 'has_permanent_pilot', False)
+            is_warrior = metadata.is_warrior if hasattr(metadata, 'is_warrior') else False
+            is_unpiloted_craft = (metadata.is_starship or metadata.is_vehicle) and not has_permanent_pilot
+
+            all_cards.append({
+                'blueprint_id': card.blueprint_id,
+                'name': metadata.title,
+                'cost': metadata.deploy_value or 0,
+                'deploy_value': metadata.deploy_value or 0,
+                'power': 0 if is_unpiloted_craft else (metadata.power_value or 0),
+                'power_value': metadata.power_value or 0,
+                'base_power': metadata.power_value or 0,
+                'is_character': metadata.is_character,
+                'is_starship': metadata.is_starship,
+                'is_vehicle': metadata.is_vehicle,
+                'is_pilot': metadata.is_pilot,
+                'is_warrior': is_warrior,
+                'is_location': metadata.is_location,
+                'has_permanent_pilot': has_permanent_pilot,
+                'needs_pilot': is_unpiloted_craft,
+                'pilot_adds_power': getattr(metadata, 'pilot_adds_power', 2) if metadata.is_pilot else 0,
+            })
+
+        return all_cards
+
     def _get_all_deployable_cards(self, board_state) -> List[Dict]:
         """Get all cards we can deploy with their metadata.
 
@@ -4652,9 +5533,23 @@ class DeployPhasePlanner:
                     return (-100.0, f"Not in plan ({card_type} not allowed as extra action)")
             elif getattr(self.current_plan, 'force_allow_extras', False):
                 # Plan is stale - planned cards aren't available anymore
-                if is_extra_allowed:
-                    logger.info(f"🎁 Stale plan, allowing extra action")
-                    return (25.0, "EXTRA ACTION (planned cards unavailable)")
+                # CRITICAL: When the stale plan had characters/vehicles/starships that aren't
+                # available, we MUST allow deploying other characters/vehicles/starships!
+                # Otherwise the bot will pass when it could be deploying useful cards.
+                #
+                # Check if the stale plan had any "major" cards (chars/vehicles/ships)
+                stale_plan_had_major_cards = False
+                for inst in self.current_plan.instructions:
+                    inst_meta = get_card(inst.card_blueprint_id)
+                    if inst_meta and (inst_meta.is_character or inst_meta.is_vehicle or inst_meta.is_starship):
+                        stale_plan_had_major_cards = True
+                        break
+
+                # If stale plan had major cards, allow this major card as substitute
+                if stale_plan_had_major_cards or is_extra_allowed:
+                    card_type = card_meta.card_type if card_meta else "card"
+                    logger.info(f"🎁 Stale plan, allowing {card_type} as substitute")
+                    return (25.0, f"SUBSTITUTE ({card_type} replacing unavailable planned card)")
                 else:
                     card_type = card_meta.card_type if card_meta else "unknown"
                     logger.info(f"🚫 Extra action rejected - {card_type} not allowed as extra")

@@ -1,0 +1,359 @@
+Data Tapes – 05 – The Unofficial NARP Defensive Shield Primer
+May 4, 2017
+Or, wow, I really just let him use that same Sense 3 times…
+
+[Updated: 05/29/18]
+
+Happy Star Wars day! I figured that today would be the perfect day to finally release this article!
+
+When I first got back into Star Wars ccg, easily one of my weakest areas as a player was in the realm of Defensive Shields. Maybe it is because they weren’t a thing when I played “back in the day,” or maybe it’s because they sit under an effect and I literally forgot that they’re even there until my opponent plays one of their own. Regardless, they are an integral part of the game that cannot be ignored!
+
+
+
+I want to start out by saying that I think Defensive Shields bring a lot to the game, so if you’re feeling frustrated with them, or opting to play without them altogether, hold strong! Once you get the hang of using them it’ll click, and you’ll see why they do what they do.
+
+Let’s quickly go over how to play shields before we dive in. Defensive Shields can be played at any time you could play a “top level” action. This means that you can play them at almost any time, including  your opponent’s turn, even between each force they activate. However, once your opponent has played a card or, for example, retrieved a force, you cannot play a shield to have it retroactively effect that action (there’s no stack here, for the mtg folks). You are typically allowed to play four per game unless you have a card such as Onyx 2(v) or Hear Me Baby Hold Together(v) in your deck. Because of this it is always important to weigh your options and not throw out shields that will have little impact on the game overall, especially considering one or two shields are sort of “auto-plays” meaning you’re really choosing between two or three shields to play during a game.
+
+Contrary to that advice, if you are just starting out in the world of Star Wars CCG with Defensive Shields, I’d actually suggest starting the game by pulling a couple shields and just having them out all game, instead of trying to wait out the opportune moment, because if you’re anything like me, you’ll miss it. For Dark Side, I’d start by playing Allegations of Corruption and Secret Plans. For Light Side, go ahead and play A Tragedy Has Occurred and Aim High. These shields are typically useful in just about every game, and we’ll get to why soon. If your deck starts any of the effect versions of these shields, you can’t play the shield.
+
+Now let’s get into the real reason you came here – the shields!
+
+
+
+Allegations of Corruption/A Tragedy Has Occurred
+Almost every game of Star Wars CCG starts with both players playing these shields, which are referred to as “grabbers,” because they, well, grab an opponent’s card. The way they work allows you to have them sit in play as long as you want before deciding what to grab, so getting it out right away is the way to go.
+
+You can only grab one card, and it must be an interrupt. Any copies of that card they play throughout the game will be automatically grabbed by the shield as well and, for each copy of the card on the shield, your opponent must pay 1 extra force to play the interrupt.
+
+As far as what makes an interrupt grab worthy, you’re mostly looking for Used Interrupts that have a significant impact on the game. Rebel Leadership and Imperial Command are popular targets, as well as each side’s Barrier. The combo cards All Wings Report In & Darklighter Spin and Short Range Fighters & Watch Your Back can also be really nasty if they’re allowed to use them multiple times, so you may consider grabbing those. Light Side has a couple other high-priority targets in the cards It Could Be Worse and We’re Doomed, as these can be cycled to greatly reduce all of Dark Side’s damage late in the game. If your opponent has some sort of retrieval engine, or something like Luke’s Bionic Hand(v), it can be worth grabbing nasty Lost Interrupts as well. There are, really, countless good targets and it ultimately comes down to the match-up, so you’ll have to play some games to really figure out what you should be grabbing.
+
+
+
+Secret Plans/Aim High
+Another shield that sees play nearly every game, because no one wants their opponent to be retrieving force for free! Simply put, this shield makes players pay one force for each card they wish to retrieve when a card allows them some retrieval. Popular retrieval options these days include Luke Skywalker (v), Scum and Villainy and the Firepower (v) and Weapons Display (v) Defensive Shields, just to name a few. I’d say that a good majority of decks have at least some kind of retrieval, so this is almost always a good play.
+
+ 
+
+ 
+
+
+
+Battle Order/Battle Plan
+No one wants their opponent to be able to sit in one theater (ground or space) and drain away to their heart’s content, and these shields prevent that, to a degree, by requiring a player to pay three force to initiate a force drain if they don’t occupy a battleground site and a battleground system. These cards, I think possibly more than any others, really shape how decks are built and games are played. If you’re going to build a deck without any ships, for instance, you must be prepared to pay three force for every force drain you make throughout the entire game.
+
+You’ll want to have this down before your opponent’s first control phase in which they’ll be able to drain without occupying a battleground site and system. Remember that you can play shields as your opponent activates force, and that is pretty much your last chance to get these down if needed.
+
+Firepower(v)/Weapons Display(v)
+I was a little apprehensive about these two, perhaps because they read more like actual cards you’d have in your deck than shields (considering they can both do damage and retrieve force, which is pretty powerful). Their actual impact on games is less crazy than you might think, especially because they are not at full power unless you control a battleground site and a battleground system.
+The retrieval aspect of both cards function identically, if your opponent plays a card with ability and doesn’t initiate a battle in the same turn, you get to retrieve one force if you control both kinds of battlegrounds (a site and a system).
+The other function of each card is slightly different. For Dark Side, you get to deal some damage if they’re using tricks to move around during your turn, such as Path of Least Resistance or Dodge. For Light Side, your damage is triggered by your opponent excluding a character from battle, using something like Imperial Barrier or You Are Beaten.
+These shields are also especially useful against certain decks. For example, as Dark Side, you’ll probably want this every game you play against Quiet Mining Colony, as that deck relies heavily on escaping from battle. As Light Side, you’re looking for cards like Imperial Barrier and Stunning Leader, which are common choices for decks like Court of the Vile Gangster.
+
+
+
+Resistance/Ultimatum
+These two are another set that see a lot of play, and also shape the game quite a bit. They both essentially say that as long as you occupy three battlegrounds, your opponent can’t force drain for more than two per location. This is great for limiting force drains set up by mains decks especially, which like to put a lightsaber on a site where you have two icons and get a big drain in. Be especially careful in these situations, though, as these same mains decks are just waiting to punish you for spreading too thin to cover those three battlegrounds.
+
+ 
+
+ 
+
+
+
+Do, or Do Not/There is no Try & Wise Advice/Oppressive Enforcement
+These are the anti-Sense & Alter shields and as such will only be played against opponents who are running those cards. Mains decks are the most common deck type to use these cards, but they can pop up in anything with high ability characters like Emperor Palpatine or Yoda.
+If you’re given an opportunity to verify an opponent’s reserve deck, make sure to check for copies of Sense or Alter, especially if you have important interrupts or effects that are not immune to them. Otherwise, it is up to you whether or not your cards are important enough to warrant spending a shield pull on these shields without knowing for sure if your opponent is running Sense or Alter. Despite my brain telling me how inefficient it is, there is no shame in playing one or both of these shields after having a card canceled by Sense or Alter, because it is better to be prepared for the next time these nasty used interrupts resurface.
+
+
+
+Come Here You Big Coward/Simple Tricks and Nonsense
+This pair of shields is meant to punish players who are stacking a single battleground, and can be used to further hurt an opponent who you have knocked off of battlegrounds by canceling all of their retrieval outright. It also prevents opponents who don’t occupy two battlegrounds from force draining at non-battlegrounds.
+These shields are really great against mains, especially light side mains, mostly because of Wokling(v). If you find yourself locked in battle at one battleground, you may consider playing this shield so that your opponent has more incentive to spread out (or more punishment for not being able to do so). It is common, in the first turn or two, to have Luke Skywalker, Jedi Knight come down to your battleground with his lightsaber and start a battle. If you have some tricks (or lucky destiny draws) you can clear him, and they will most likely want to use their Wokling(v) to retrieve his saber. These shields will mess up that whole plan, hopefully long enough for you to bury that saber under some other cards.
+
+
+
+A Useless Gesture(v)
+This one doesn’t have a light side mirror and is specifically meant to help curb the awesome power of the Watch Your Step objective, the flip side of which allows light side to play an interrupt from their lost pile every. single. turn. If you played on GEMP before this shield was implemented you know that WYS was the dominant light side choice.
+
+ 
+
+ 
+
+ 
+
+
+
+Death Star Sentry/Yavin Sentry
+These shields exist to stop massive swarms of non-unique characters from coming down on a single location in one turn by increasing the cost of each of them by the number of copies already at the site. This is an especially important one for the light side to have in their toolbox because of the existence of the powerful and often free First Order Stormtroopers. These shields also cancel Colo Claw Fish, an effect that can be used for all sorts of tomfoolery.
+
+ 
+
+ 
+
+
+
+Goldenrod/Imperial Detention
+These shields say hey, are you playing that for free? Did that card’s game text make it free, or was it made free by something else? If the latter, it actually costs two now. Why? Because Blizzard 4 is an unfair card, among other culprits like Nightfall. If you know your opponent has Blizzard 4 or They Must Never Again Leave This City, you will probably want to use this shield. The 2 Force they must spend is most detrimental to them in the beginning of the game, so this is really one you don’t want to miss the opportunity to use early. The more you play, the more you’ll be able to tell when you’ll need this shield.
+
+ 
+
+
+
+Do They Have Code Clearance?
+This is a pretty great shield, though it doesn’t see play all that often, when it does it has some pretty interesting effects. It basically grabs an interrupt or uttini effect played by your opponent that causes them to retrieve force. If you manage to grab something with it, your opponent’s retrieval for the entire rest of the game is -1. This can be really great vs decks that use something like Harvest or On the Edge in conjunction with something like Tatooine Celebration. Jedi Levitation(v) is another good one to look out for, and if you have shields to spare, you can throw this down to limit its effectiveness.
+
+ 
+
+
+
+Don’t Do That Again(v)/Fanfare(v)
+These shields are interesting and do a lot of things. One, they allow you to, once per game, take an immediate effect into hand from your reserve deck. That in itself is pretty cool. Then, they suspend opponent’s effects that pull systems and increase force generation unless said opponent occupies a battleground system. The shields also both reduce the effectiveness of two mean interrupts, Always Thinking with Your Stomach and Lost in the Wilderness, which would usually make your characters go missing. With these shields, those cards just make their targets unable to move for a turn instead. The dark side shield, Fanfare, also cancels a couple nasty effects. These can also be used if you need to look through your reserve deck, perhaps to check your destinies before a big battle, or to make sure a card you’re about to try to search for is actually in your reserve deck.
+
+
+
+Only Jedi Carry That Weapon/Weapon of a Sith
+Maybe Kabe is secretly super sweet? In all actuality, this is for when you are playing mains and toys and you see a Weapon Levitation in your opponent’s deck. The shields prevent your opponent from stealing your weapons. Unfortunately these shields do nothing if they are played after an opponent uses their interrupt, so you have to be on the lookout when verifying their reserve deck.
+
+ 
+
+ 
+
+ 
+
+
+
+The Republic No Longer Functions/Vote of No Confidence
+Senate can do some pretty crazy things, and is personally one of my least favorite decks to play against, so I’m glad these shields exist. As far as I have seen, however, Senate doesn’t even need political effects to be good, so this may not be an auto-pull against it. It also protects you, as dark side, from losing your entire hand to The Shield is Down. Lastly, they can protect you from Uncertain is the Future and Recoil in Fear, which are both parts of combo cards with the ever-useful Sense.
+
+ 
+
+ 
+
+
+
+We’ll Let Face Decide, Huh?/Your Ship?
+Sabacc can be a bummer, and it will often times slip through once before you get to play one of these shields (much like Weapon Levitation mentioned above), so these make sure you aren’t getting slammed by sabacc constantly.
+
+ 
+
+ 
+
+ 
+
+ 
+
+
+
+Another Pathetic Lifeform/Wipe Them Out, All of Them
+I’m honestly not sure what the light side version of this shield is really used for, but the dark side one is used primarily to stop Palace Raiders (non-v) from being next-level bananas.
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+
+
+A Useless Gesture/He Can Go About His Business
+These two shields counter specific cards that are considered, by some, to cause a NPE (negative playing experience, or in other words, a bad time). The cards in question are Ketwol and Brangus Glee. These characters essentially let players exchange docking bays from their hand with cards in their lost pile, which led to a bunch of shenanigans.
+
+ 
+
+ 
+
+ 
+
+
+
+Affect Mind/I Find Your Lack of Faith Disturbing
+Another shield pair mostly aimed at one specific deck, these shields help tone down the power of “combat” decks, which play the objectives Let Them Make the First Move or We’ll Handle This. They also cancel a couple effects that increase the deploy cost of main characters.
+
+ 
+
+ 
+
+ 
+
+ 
+
+
+
+Leave Them to Me/Let’s Keep a Little Optimism Here/No Escape/Ounee Ta
+These four shields all have essentially the same function, stopping operatives from being a thing. If you played the game in 1998 when operatives hit the scene, you know why, otherwise, just know that there is a very good reason why two shields for each side and an entire rules entry exist to tone these guys down.
+
+ 
+
+ 
+
+ 
+
+
+
+A Close Race/Your Insight Serves You Well/You Cannot Hide Forever/You’ve Never Won a Race?
+These four shields effectively stop you from taking damage from podracing, something that sees very little play. A Close Race and You’ve Never Won a Race are actually obsolete because they do the same things the other shields do, but not as well, and with no added benefits like the other two, which cancel certain overpowered cards, such as “insert” cards which, if you don’t know how those work or what they are, count yourself lucky and never travel back in time to 1997 when the stupid things were everywhere.
+
+ 
+
+
+
+Planetary Defenses
+Proton Bombs are pretty painful and considered NPE, so here’s a shield for that. I believe the second function is to stop TTO from blowing up planets, but I could be wrong.
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+
+
+Crossfire
+This shield tones down the power of S-Foils and Maneuvering Flaps.
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+I think that just about covers it! This one got pretty long so I’m going to keep the outro short and leave you with a link to The NARP Fortnightly Defensive Shield article if you’d like a second opinion on all of this! Thanks for reading, and May the Fourth be with you!
+
+
+The NARP Fortnightly #1: Defensive Shields
+May 14, 2016
+Hi everyone,
+
+Welcome to the first in a series of articles for NARPs. (That’s “new and returning players.” You can get caught up on Star Wars CCG’s alphabet soup here.) No matter how long you’ve been gone, or even if you’re picking up the game for the first time, we’re here to help you get up to speed. Welcome (back) to Star Wars CCG! We’re going to start with probably the biggest hurdle for new players: Defensive Shields.
+
+At the start of the game, in addition to your normal starting location (or objective), starting interrupt, and all the cards they allow you to deploy, you also get to deploy a starting effect. The original starting effects were Fear Is My Ally and An Unusual Amount Of Fear, but the Players Committee has given us Knowledge And Defense (V) and Anger, Fear, Aggression (V), which let you use more shields, so they are the ones everyone uses (and you should too). It’s the first card of every 60-card deck; only 59 to go!
+
+These starting effects let you put 15 cards underneath them, which don’t count toward your deck limit. Four times per game, you can play a defensive shield from under your starting effect. Those shields then stay on the table for the rest of the game.
+
+A lot of players shy away from these teal-colored beauties. “It’s hard enough to keep track of my 60-card deck, now you want to make it 75? And I have to keep track of those other 15 and pick the right ones to play at the right time?” Yes, playing with shields can be a bit daunting at first. But I encourage you to think of them not as cards, but as “rules of the game.”
+
+A good example is Battle Plan and its counterpart, Battle Order. You might be familiar with these cards from the Endor set. The defensive shield versions work the same way, but you can put them on the table (as a top-level action) whenever you want. In practice, that means your opponent will almost always play Battle Plan/Battle Order if doing so will slow down your deck. So, when building a deck, you have to assume Battle Plan/Battle Order will be on the table: you either need to play in both theaters (ground and space) or be prepared to use 3 Force to Force drain. By keeping that “rule” in your head, you will become a better player and deckbuilder.
+
+So, what are the different shields, and which ones should you use? Here’s are my thoughts. (I encourage you to follow along with the cards here as you read through this list.)
+
+Light Side
+
+The Force Will Be with You… Always:
+
+A Tragedy Has Occurred – This hits the table in just about every game. Grabbing your opponent’s key interrupt so they can’t recycle it and have to pay extra for future copies, is great. And you don’t even have to devote a deck slot to it, because it’s a shield.
+Aim High – Needing to pay for retrieval is practically a rule of the game at this point. Decks that retrieve a lot are built on the assumption that they will need to pay for it. If your opponent deploys a card that can retrieve force, this shield is all but mandatory. Obviously, if your deck starts the effect version (or the Insurrection & Aim High combo effect), you don’t need the shield.
+Battle Plan – This should be under every starting effect. As discussed above, it’s practically a rule of the game. You don’t need this if you start the Battle Plan & Draw Their Fire combo effect.
+Goldenrod – Pretty much its only use is to make them pay 2 Force to pull a guy with Blizzard 4. That can be pretty good, especially if it delays them by a turn. It also makes the Executor deploy for 2 (instead of free) with They Must Never Again Leave This City. Goldenrod’s existence also stops ISB Sunsdown from being a deck.
+Simple Tricks And Nonsense – Worth playing to discourage them from taking over your 2/0 sites with spies; doing so will be pointless unless they also occupy two battlegrounds (or you don’t occupy any). If Simple Tricks stops them from draining at a site for a turn, or stops retrieval for a turn, it’s often worth the price of a shield.
+The Republic No Longer Functions – In addition to its obvious utility against Senate decks, this also stops annoying cards like Scanning Crew and M’iiyoom Onith.
+Ultimatum – This should almost always make the cut. Depending on the matchup, you may or may not be at three battlegrounds, and your opponent may or may not be draining for 3+ at one location, but with lightsabers, Presence Of The Force, etc., it happens more often than you’d expect. As with Simple Tricks, stopping one or two points of damage is usually worth the price of a shield. We Have A Plan can probably get away with skipping this one, because the objective does the same thing while flipped (and that deck is unlikely to be at three battlegrounds when not flipped).
+Weapons Display (V) – This is probably the hardest shield to wrap your head around. The first function makes them lose Force when they exclude someone from a battle—with Stunning Leader, You Are Beaten, Force Push (V), or even when they Imperial Barrier your character but your other characters initiate battle anyway. The second function rewards you (and punishes your opponent) if you’re in both theaters and they deploy without battling. Any deck that plays any amount of ground needs this card. Hidden Base can probably get away with skipping it.
+Your Insight Serves You Well (V) – The main reason to include this is so you don’t auto-lose to Podracing. Scanning Crew and inserts are abusive but are rarely seen.
+
+I’m Getting Pretty Good at This:
+
+Affect Mind (V) – If your game plan against Combat is to battle at their sites, then you need this. If your plan is to win the game by damage racing, it’s not important.
+Do, Or Do Not – This falls into the “often, but not always” category. If you’re not playing your own Sense and Alter cards, playing this is a no-brainer. If you are playing your own, then you probably don’t want to put this on the table until late in the game when your copies are all lost (if you play it at all). Watch Your Step can probably get away with skipping this one; the objective prevents Sense and Alter from being played as long as it stays flipped (but note that Alter (V) gets around the objective’s limitation).
+Jabba’s Prize (V) – Not technically a shield, but you need it if your deck relies on a Han other than Han, Chewie, And The Falcon (e.g., Watch Your Step, Rebel Strike Team, many builds of Quiet Mining Colony and Diplomatic Mission To Alderaan).
+Only Jedi Carry That Weapon – If you’re playing with matching lightsabers, you need this shield to stop Weapon Levitation. Otherwise, skip it.
+Wise Advice – This is the Sense/Alter shield you should use if you want to also play your own Senses and Alters. Do, Or Do Not punishes both players; Wise Advice isn’t quite as strong, but it only helps you. If your deck relies on a key effect that isn’t immune to Alter, such as Echo Base Garrison, Crash Site Memorial, or I Hope She’s All Right, this is a must.
+
+It Could Be Worse:
+
+Don’t Do That Again (V) – Right now, the only commonly-played deck that uses Mobilization Points is Imperial Entanglements, and that deck starts the game occupying a battleground system, so this is currently not that important (as of May 2016). But other decks sometimes arise that use Mobilization Points, so it’s a good card to keep in mind. Protection from Always Thinking With Your Stomach is good, but you need to have the foresight to play it before they play the interrupt. Pulling an immediate effect once per game can be handy even if you don’t have any immediate effects to pull, if your deck lack other ways to check your Reserve Deck.
+He Can Go About His Business – Brangus Glee decks do turn up once in a while, and they can really be a pain if you don’t have this shield.
+Ounee Ta – <> sites aren’t seen too often, but this can be handy if they have a random Spaceport Docking Bay or something. Usually the 17th or 18th shield I want; rarely makes the cut.
+Planetary Defenses (V) – Just by virtue of this shield existing, Commence Primary Ignition decks that try to blow up all of your locations are never played anymore. Proton Bombs are occasionally played by particularly wacky players, so this is worth packing if you have room. Usually a 17th or 18th option though.
+Yavin Sentry (V) – Playing against Colo Claw Fish is the worst, so this often makes the cut. Non-uniques are rarely seen.
+Your Ship? – You will still see Sabacc every now and then, despite the existence of this shield, and it can be brutal when it’s timed right. (A good player will time it right.) If you see Brangus Glee, 4-LOM (on Cloud City), or troopers, putting this shield on the table isn’t the worst decision in the world.
+
+That One’s Garbage!:
+
+A Close Race – Never use this. Your Insight Serves You Well (V) is strictly better.
+Another Pathetic Lifeform – You don’t need it. First, non-unique aliens and starfighters aren’t seen too terribly often. Second, limiting your opponent to two battle destiny isn’t very good. There are cards like Rebel Leadership (V), Evacuation Control (V), and the Tatooine system (the Episode I version) that are much more effective.
+Don’t Do That Again – The virtual version is strictly better.
+Let’s Keep A Little Optimism Here – I haven’t seen operatives in a tournament since I returned to SWCCG. That’s a good thing, and it doesn’t seem likely to change any time soon. Skip this one.
+Planetary Defenses – The virtual version is strictly better.
+Your Insight Serves You Well – The virtual version is strictly better.
+
+Dark Side
+
+You Want This, Don’t You?:
+
+A Useless Gesture (V) – Without this shield, Watch Your Step can play a dozen or more interrupts from its Lost Pile during the game. With it, they’re limited (in practice) to three or four at most. Has the added benefit of making sure Revolution is rarely (if ever) played in Light Side decks anymore.
+Allegations Of Corruption – See A Tragedy Has Occurred.
+Battle Order – See Battle Plan.
+Come Here You Big Coward – See Simple Tricks And Nonsense. This is a smidge more important than its mirror because Light Side has a lot more ways to retrieve Force.
+Do They Have A Code Clearance? – Speaking of which, a lot of the more abusive ways for Light Side to retrieve Force are Interrupts and Utinni Effects: Kessel Run, Death Star Plans, On The Edge, Off The Edge, Harvest, Our Most Desperate Hour… even Jedi Levitation (V). This shield stops them from cycling those abusive cards back into their deck. It also reduces ALL of their retrieval – so Luke Skywalker (V) does nothing for the rest of the game, for example. This should be one of your shields, unless your deck plays the effect version.
+Firepower (V) – See Weapons Display (V), but instead of punishing exclusion from battle, Firepower (V) punishes moving away from a site you occupy during your turn – Dodge, Path Of Least Resistance, Run Luke Run, Hyper Escape, etc.
+Resistance – See Ultimatum.
+Secret Plans – See Aim High, but again, Light Side has more retrieval, so this is even more important than its mirror.
+Vote Of No Confidence – See The Republic No Longer Functions. Also prevents annoying things like Stone Pile.
+We’ll Let Fate-a Decide, Huh? – This is much better than its mirror (Your Ship?) because it also cancels Beggar and Frozen Assets. If you’ve never been on the receiving end of a Beggar/Frozen Assets beatdown with Draw Their Fire, count yourself lucky and make sure to pack this shield.
+You Cannot Hide Forever (V) – See Your Insight Serves You Well (V).
+
+Goooood… Goooood…:
+
+I Find Your Lack Of Faith Disturbing (V) – See Affect Mind (V). Note that Light Side Combat is quite a bit more prevalent than Dark Side Combat.
+Oppressive Enforcement – See Wise Advice. Important if you rely on an effect that isn’t immune to Alter, such as Search And Destroy or Blaster Rack (non-V).
+There Is No Try – See Do, Or Do Not. Hunt Down And Destroy The Jedi can get away with skipping the Sense and Alter shields, but note that Alter (V) gets around Hunt Down’s limitations.
+Weapon Of A Sith – See Only Jedi Carry That Weapon.
+
+She May Yet Be of Some Use to Us:
+
+A Useless Gesture (non-V) – You can play both versions of A Useless Gesture (V and non-V) under your starting effect, but you can only play one to the table, because it’s unique. The virtual version is better against Watch Your Step, but the non-virtual is worth considering just in case you run into a Ketwol deck. (They do turn up from time to time.)
+Death Star Sentry (V) – See Yavin Sentry (V). Note that Light Side non-uniques are seen a bit more frequently (Hidden Base, Watch Your Step with Palace Raiders, etc.).
+Fanfare (V) – Same as Don’t Do That Again (V), except that Staging Areas is never played, so you don’t have to worry about it. This is handy if you have an Immediate Effect you want to pull (or just don’t have many other ways to check your deck), or if you’re scared of Lost In The Wilderness.
+Imperial Detention – While Goldenrod is a must-play for Light Side because of how prevalent Blizzard 4 is, the only real uses for Imperial Detention are Artoo-Detoo In Red 5 (with Luke Skywalker (V)), Panic, and Nightfall. Making the Red 5 combo cost 6 instead of 4 can be good—they deploy Wedge Antilles, Red Squadron Leader and have 5 Force remaining; play this to stop the Red 5 beatdown—but it’s much narrower than Goldenrod. Panic and Nightfall turn up in Watch Your Step every once in a while, but the existence of this shield makes them no more than novelties.
+Wipe Them Out, All Of Them – Slightly better than its mirror, Another Pathetic Lifeform, because of Watch Your Step with Palace Raiders, which plays a lot of the non-unique aliens and can easily get up to three battle destinies.
+
+Bantha Poodoo:
+
+Crossfire – S-foils and Maneuvering Flaps are rarely (if ever) seen nowadays. To the extent they are played (which isn’t much), X-wing swarm decks usually skip S-foils because being able to move is important. Speeder decks prefer the virtual Maneuvering Flaps (which Crossfire doesn’t work against). Also, neither of those two cards is particularly broken or abusive. You’ve got more important things to worry about.
+Fanfare – The virtual version is strictly better.
+Leave Them To Me – Ops are dead. Long live Ops.
+No Escape – Putting Nudj’s at <> sites used to be really good in 1999. And that was the last time anyone played it. (The Effect version of this is a really good card though.)
+You Cannot Hide Forever – The virtual version is strictly better.
+You’ve Never Won A Race? – You Cannot Hide Forever (V) is strictly better.
+
+In addition to your four shields per game that you get by default, there are also six virtual card that can get an extra shield for you:
+
+Hear Me Baby, Hold Together (V)
+Perimeter Scan (V)
+Red 8 (V)
+Cold Feet (V)
+Turn It Off! Turn It Off! (V)
+Onyx 2 (V)
+
+As I mentioned at the top of this list, it’s helpful to think of defensive shields as “rules of the game.” So, assume Battle Order and Secret Plans will always be in play. Assume that you’ll need to be at two battlegrounds in order to retrieve. Assume that you’ll have to lose 2 Force to Sense interrupts. Assume that you’ll need to stack and pay for interrupts played from your Lost Pile in Watch Your Step. Assume that your Podrace won’t make your opponent lose any Force. Don’t play Colo Claw Fish, or Revolution, or Beggar, or Frozen Assets, or Bad Feeling Have I. Sometimes you’ll get lucky and you won’t be subject to one of those restrictions, but it’s best to plan for the worst.
+
+Card of the Fortnight
+
+In this section, I’m going to highlight cards that you often see in competitive decklists, but whose usefulness might not be immediately apparent to new players.
+
+Our first Card of the Fortnight is a special twofer: Evacuation Control (V) and Imperial Justice (V). These cards are exact mirrors of one another and were released in Set 0 (the cards that stuck around after the 2014 Reset).
+
+evacuationcontrol imperialjustice
+
+These cards do four important things:
+
+They limit both sides to one battle destiny. Adding battle destinies used to be the province of hard-to-pull-off interrupts like Skywalkers and Don’t Get Cocky. Today, we have things like Grand Moff Tarkin (V); Lando Calrissian, Scoundrel; Boba Fett, Bounty Hunter; Watch Your Step/This Place Can Be A Little Rough; Death Star II: Capacitors; and many others. There’s a lot of destiny-adding in the modern game, and Evac/Justice is a great way to make sure multiple destinies only happen when you want them to. They also makes your cards with immunity to attrition really shine. For example, if your characters/ships at a location are immune to attrition <5, and your opponent can only draw one battle destiny, it has to be a 5 or higher, or else your characters/ships will stick around—letting you satisfy Battle Plan for that much longer, block their drain for that much longer, or even counterattack on a subsequent turn.
+They prevent those battle destinies from being modified. This includes cards like Close Call (V), Darth Vader (V), and Anakin Skywalker, Padawan Learner.
+They prevent those destinies from being cancelled. This includes cards like We Have A Plan/They Will Be Lost And Confused; Wedge Antilles, Red Squadron Leader; My Kind Of Scum/Fearless And Inventive; and even good old non-V Grand Moff Tarkin from Premiere.
+In order to use it, you choose a card stacked on it and put it in your hand. Unless you have Toryn Farr (V) on the table, this means you only get to use it three times per game, so choose wisely. It also means you get to see three random cards from your Reserve Deck and pick one each time you use it. If you stack a Ghhhk or Houjix on it, you’re in luck! If it looks like you’re going to get hit for a lot of battle damage, simply keep calm and pick up the Ghhhk.
+That does it for this fortnight. In two weeks, I’ll recap the Endor Grand Prix and talk a little bit about going to your first major tournament.
+
+Peace, Love, and High Destinies,
+Lenny (lsrubin)

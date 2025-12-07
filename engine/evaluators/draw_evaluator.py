@@ -218,6 +218,33 @@ class DrawEvaluator(ActionEvaluator):
             )
             return
 
+        # === NEXT-TURN CRUSH PLAN AWARENESS ===
+        # If we're holding back for a next-turn crush, limit drawing to preserve force
+        # The crush plan tells us exactly how much force we need next turn
+        if hasattr(board_state, 'next_turn_crush_plan') and board_state.next_turn_crush_plan:
+            crush_plan = board_state.next_turn_crush_plan
+            # Calculate max force we can spend on draws while still affording crush next turn
+            max_draw_force = crush_plan.get_max_draw_force(force_pile)
+
+            logger.info(f"🔮 Next-turn crush plan active: need {crush_plan.force_needed} force, "
+                       f"expect {crush_plan.expected_force_next_turn}, can spend {max_draw_force} on draws")
+
+            if max_draw_force <= 0:
+                # Can't afford to draw at all - need to save every bit of force!
+                action.add_reasoning(
+                    f"SAVING FOR NEXT-TURN CRUSH: Need {crush_plan.force_needed} force for "
+                    f"{', '.join(crush_plan.card_names)} → {crush_plan.target_location_name}",
+                    VERY_BAD_DELTA * 0.9  # Strong penalty but allow if hand is truly empty
+                )
+                if hand_size >= 3:  # If we have at least 3 cards, definitely don't draw
+                    return
+            else:
+                # Can afford some drawing, but penalize to encourage saving
+                action.add_reasoning(
+                    f"Next-turn crush: can spend up to {max_draw_force} on draws",
+                    BAD_DELTA  # Moderate penalty - encourage saving but don't block
+                )
+
         # === FUTURE TURN PLANNING: EXPENSIVE CARDS ===
         # Check if we have expensive cards worth saving force for
         max_deployable_cost = 0

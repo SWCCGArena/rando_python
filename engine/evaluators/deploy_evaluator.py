@@ -25,6 +25,7 @@ from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 from ..card_loader import get_card
 from ..game_strategy import GameStrategy, ThreatLevel
 from ..deploy_planner import DeployPhasePlanner, DeployStrategy
+from ..shield_strategy import score_shield_for_deployment, get_shield_tracker, reset_shield_tracker
 from config import config
 
 logger = logging.getLogger(__name__)
@@ -232,6 +233,79 @@ class DeployEvaluator(ActionEvaluator):
     def _has_unpiloted_ship_on_board(self, bs) -> bool:
         """Check if we have any unpiloted starship/vehicle on the board."""
         return self._find_unpiloted_ship_on_board(bs) is not None
+
+    def _has_valid_weapon_targets(self, bs, card_metadata) -> tuple[bool, str]:
+        """
+        Check if there are valid targets for a weapon on the board.
+
+        For targeted weapons (character/vehicle/starship weapons):
+        - Finds all our cards of the target type
+        - Checks if ANY of them don't already have a weapon attached
+        - Returns (has_valid_target, reason_message)
+
+        This prevents the bot from trying to deploy weapons when all
+        potential targets already have weapons attached, which causes
+        a cancelled target selection loop.
+        """
+        if not bs or not card_metadata:
+            return (True, "")  # No board state - assume valid
+
+        if not card_metadata.is_targeted_weapon:
+            return (True, "")  # Not a targeted weapon - doesn't need target check
+
+        target_type = card_metadata.weapon_target_type
+        if not target_type:
+            return (True, "")  # Unknown target type - assume valid
+
+        # Find all potential targets of the right type
+        potential_targets = []
+        armed_count = 0
+        unarmed_count = 0
+
+        for card_id, card in bs.cards_in_play.items():
+            if card.owner != bs.my_player_name:
+                continue
+            if card.zone != "AT_LOCATION":
+                continue
+
+            metadata = get_card(card.blueprint_id) if card.blueprint_id else None
+            if not metadata:
+                continue
+
+            # Check if this card matches the weapon's target type
+            is_valid_type = False
+            if target_type == 'vehicle' and metadata.card_type == 'Vehicle':
+                is_valid_type = True
+            elif target_type == 'starship' and metadata.is_starship:
+                is_valid_type = True
+            elif target_type == 'character' and metadata.is_warrior:
+                # Character weapons can only be held by warriors
+                is_valid_type = True
+
+            if not is_valid_type:
+                continue
+
+            potential_targets.append(card)
+
+            # Check if this target already has a weapon
+            has_weapon = any(
+                get_card(ac.blueprint_id) and get_card(ac.blueprint_id).is_weapon
+                for ac in card.attached_cards
+            )
+
+            if has_weapon:
+                armed_count += 1
+            else:
+                unarmed_count += 1
+
+        if not potential_targets:
+            return (False, f"No {target_type}s on board to attach weapon to")
+
+        if unarmed_count == 0:
+            # All targets already have weapons!
+            return (False, f"All {armed_count} {target_type}(s) already have weapons attached")
+
+        return (True, f"{unarmed_count} {target_type}(s) available for weapon")
 
     def can_evaluate(self, context: DecisionContext) -> bool:
         """Applies to Deploy phase decisions during OUR turn only"""
@@ -494,6 +568,20 @@ class DeployEvaluator(ActionEvaluator):
                     # Always check affordability
                     if bs and bs.force_pile < card_metadata.deploy_value:
                         action.add_reasoning(f"Can't afford! Need {card_metadata.deploy_value}, have {bs.force_pile}", -1000.0)
+
+                    # =======================================================
+                    # WEAPON DEPLOYMENT: Check if valid targets exist
+                    # Don't try to deploy weapons if all potential targets
+                    # already have weapons attached - this causes cancelled
+                    # target selection loops
+                    # =======================================================
+                    if card_metadata.is_targeted_weapon and bs:
+                        has_valid, target_msg = self._has_valid_weapon_targets(bs, card_metadata)
+                        if not has_valid:
+                            action.add_reasoning(f"NO VALID TARGETS: {target_msg}", -500.0)
+                            logger.warning(f"⚠️ {card_metadata.title}: {target_msg}")
+                        else:
+                            logger.debug(f"🗡️ {card_metadata.title}: {target_msg}")
                 else:
                     logger.warning(f"⚠️  Deploy action with unknown card: cardId={card_id}")
                     action.add_reasoning(f"Deploy action (card unknown)", -50.0)
@@ -904,16 +992,10 @@ class DeployEvaluator(ActionEvaluator):
         # Track if we're playing defensive shields
         is_playing_shields = False
 
-        # Priority defensive shields (from C# logic)
-        PRIORITY_SHIELDS = [
-            "aim high",
-            "secret plans",
-            "allegations of corruption",
-            "come here you big coward",
-            "goldenrod",
-            "simple tricks and nonsense",
-            "tragedy has occurred",
-        ]
+        # Get board state info for shield decisions
+        bs = context.board_state
+        turn_number = bs.turn_number if bs else 1
+        my_side = getattr(bs, 'my_side', 'dark') if bs else 'dark'
 
         # Only evaluate selectable cards
         for i, card_id in enumerate(context.card_ids):
@@ -966,14 +1048,12 @@ class DeployEvaluator(ActionEvaluator):
                     # === DEFENSIVE SHIELD LOGIC ===
                     if card_metadata.is_defensive_shield:
                         is_playing_shields = True
-                        # Check if it's a priority shield
-                        for shield_name in PRIORITY_SHIELDS:
-                            if shield_name in title_lower:
-                                action.add_reasoning(f"Priority shield: {shield_name}", +100.0)
-                                break
-                        else:
-                            # Not a priority shield - lower score
-                            action.add_reasoning("Non-priority defensive shield", +20.0)
+                        # Use comprehensive shield strategy scoring
+                        shield_score, shield_reason = score_shield_for_deployment(
+                            blueprint, card_metadata.title, turn_number, my_side, bs
+                        )
+                        action.add_reasoning(f"Shield: {shield_reason}", shield_score)
+                        logger.debug(f"🛡️ {card_metadata.title}: score={shield_score:.0f} ({shield_reason})")
 
                     # === RESERVE DECK DEPLOY LOGIC ===
                     if "reserve deck" in text_lower:

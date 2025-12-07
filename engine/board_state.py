@@ -214,6 +214,10 @@ class BoardState:
         self.game_winner: Optional[str] = None  # Player name who won, or None if game ongoing
         self.game_win_reason: Optional[str] = None  # "Conceded", "Life Force depleted", etc.
 
+        # Next-turn crush plan (from deploy_planner when holding back for a future attack)
+        # Set when we decide to skip deploying this turn to save for a crushing attack next turn
+        self.next_turn_crush_plan = None  # NextTurnCrushPlan or None
+
     def clear(self):
         """Reset all state (for new game)"""
         self.cards_in_play.clear()
@@ -235,6 +239,10 @@ class BoardState:
         self.hit_cards.clear()
         self.game_winner = None
         self.game_win_reason = None
+        self.next_turn_crush_plan = None
+        # Reset shield tracker for new game
+        from .shield_strategy import reset_shield_tracker
+        reset_shield_tracker()
         logger.info("🗑️  Board state cleared")
 
     # ========== Card Management ==========
@@ -443,6 +451,15 @@ class BoardState:
         if zone == "SIDE_OF_TABLE" and card.card_type == "Objective":
             side = "back" if collapsed else "front"
             logger.info(f"📋 Objective {card.card_title} on {side} side (collapsed={collapsed})")
+            # Feed opponent objectives to shield tracker
+            if owner != self.my_player_name and card.card_title:
+                try:
+                    from .shield_strategy import get_shield_tracker
+                    tracker = get_shield_tracker(self.my_side)
+                    if tracker:
+                        tracker.set_opponent_objective(card.card_title)
+                except Exception:
+                    pass  # Shield tracking is optional
         else:
             logger.debug(f"➕ Card {card_id} ({card.card_title or blueprint_id}) in zone {zone}")
 

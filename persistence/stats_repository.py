@@ -464,7 +464,11 @@ class StatsRepository:
                    won: bool, route_score: int = 0, damage: int = 0,
                    force_remaining: int = 0, turns: int = 0,
                    duration_seconds: int = 0, achievements_unlocked: int = 0) -> GameHistory:
-        """Record a game to history"""
+        """Record a game to history
+
+        Args:
+            won: Whether the OPPONENT won (True = opponent won, False = bot won)
+        """
         with session_scope() as session:
             game = GameHistory(
                 opponent_name=opponent_name,
@@ -483,7 +487,9 @@ class StatsRepository:
             session.refresh(game)
             session.expunge(game)
 
-            logger.info(f"Recorded game: {'Won' if won else 'Lost'} vs {opponent_name}, score={route_score}")
+            # won=True means opponent won (bot lost), won=False means bot won
+            bot_result = 'Lost' if won else 'Won'
+            logger.info(f"Recorded game: Bot {bot_result} vs {opponent_name}, score={route_score}")
             return game
 
     def get_recent_games(self, limit: int = 10) -> List[GameHistory]:
@@ -530,20 +536,29 @@ class StatsRepository:
     # =========================================================================
 
     def get_overall_stats(self) -> Dict:
-        """Get overall bot statistics"""
+        """Get overall bot statistics
+
+        Note: GameHistory.won stores whether the OPPONENT won (True = opponent won, False = bot won).
+        This method returns stats from the BOT's perspective for the admin page.
+        """
         with session_scope() as session:
             total_games = session.query(func.count(GameHistory.id)).scalar() or 0
-            total_wins = session.query(func.count(GameHistory.id)).filter(
+            # GameHistory.won == True means OPPONENT won (bot lost)
+            # So bot wins = games where won == False
+            opponent_wins = session.query(func.count(GameHistory.id)).filter(
                 GameHistory.won == True
             ).scalar() or 0
+            bot_wins = total_games - opponent_wins
+            bot_losses = opponent_wins
+
             total_players = session.query(func.count(PlayerStats.id)).scalar() or 0
             total_achievements = session.query(func.count(Achievement.id)).scalar() or 0
 
             return {
                 'total_games': total_games,
-                'total_wins': total_wins,
-                'total_losses': total_games - total_wins,
-                'win_rate': (total_wins / total_games * 100) if total_games > 0 else 0,
+                'total_wins': bot_wins,  # Bot's wins (games where opponent lost)
+                'total_losses': bot_losses,  # Bot's losses (games where opponent won)
+                'win_rate': (bot_wins / total_games * 100) if total_games > 0 else 0,
                 'unique_players': total_players,
                 'total_achievements_awarded': total_achievements,
             }

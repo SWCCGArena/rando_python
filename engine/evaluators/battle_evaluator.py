@@ -188,21 +188,18 @@ class BattleEvaluator(ActionEvaluator):
         logger.info(f"   Cards: {my_card_count} (me) vs {their_card_count} (them)")
         logger.info(f"   Ability: {my_ability}, ability test: {ability_test}")
 
-        # Check if we have a flee plan for this location
+        # Check if this location is marked for fleeing in the deploy plan
+        # Note: Flee status is tracked on LocationAnalysis.should_flee during plan creation
         if hasattr(board_state, 'current_deploy_plan') and board_state.current_deploy_plan:
             plan = board_state.current_deploy_plan
-            for inst in plan.instructions:
-                if inst.flee_from_location_id:
-                    # We have a flee instruction - check if it's for this location
-                    flee_loc_idx = None
-                    for idx, check_loc in enumerate(board_state.locations):
-                        if check_loc and str(check_loc.card_id) == str(inst.flee_from_location_id):
-                            flee_loc_idx = idx
-                            break
-                    if flee_loc_idx == loc_idx:
-                        logger.warning(f"   ⚠️ FLEE PLAN EXISTS for this location! Should flee, not battle!")
-                        action.add_reasoning(f"FLEE PLAN EXISTS - should flee, not battle!", VERY_BAD_DELTA)
-                        return
+            # Check if any location analysis marked this location for fleeing
+            if hasattr(plan, 'target_locations'):
+                for analysis in plan.target_locations:
+                    if hasattr(analysis, 'should_flee') and analysis.should_flee:
+                        if hasattr(analysis, 'location_index') and analysis.location_index == loc_idx:
+                            logger.warning(f"   ⚠️ FLEE PLAN EXISTS for this location! Should flee, not battle!")
+                            action.add_reasoning(f"FLEE PLAN EXISTS - should flee, not battle!", VERY_BAD_DELTA)
+                            return
 
         # =================================================================
         # OPPONENT DAMAGE CANCEL AWARENESS (Houjix/Ghhhk - 24-28% of decks)
