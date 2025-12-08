@@ -62,6 +62,10 @@ DANGEROUS_THRESHOLD = -2  # Power diff <= this = dangerous, need serious reinfor
 # Power advantage where we stop reinforcing (overkill prevention)
 DEPLOY_OVERKILL_THRESHOLD = 8
 
+# Enemy power buildup that prevents threshold relaxation (react/move threat)
+# If opponent has this much power anywhere, they can react/move to crush weak deploys
+REACT_THREAT_THRESHOLD = 8
+
 # Bonus score for matching pilot/ship combos (soft preference, not requirement)
 MATCHING_PILOT_BONUS = 10
 
@@ -1078,15 +1082,36 @@ class DeployPhasePlanner:
                     break
 
             if not has_contested:
-                # Ground: Lower threshold by 3 to allow 3-power characters to establish
-                # presence at locations with opponent icons (enables force drains early).
-                # Space: Keep the standard -2 reduction (starships usually have higher power).
-                # With threshold=6: ground -> max(2, 6-3) = 3, space -> max(3, 6-2) = 4
-                if is_space:
-                    threshold = max(3, threshold - 2)
+                # REACT THREAT CHECK: Before relaxing, check for large enemy buildups
+                # that could react/move to crush weak deploys. If opponent has significant
+                # power anywhere in the same domain, they can move to an "uncontested"
+                # location and crush a lone weak character we just deployed.
+                has_react_threat = False
+                for loc in locations:
+                    # Check enemy power in the relevant domain
+                    if is_space and loc.is_space and loc.their_power >= REACT_THREAT_THRESHOLD:
+                        has_react_threat = True
+                        logger.debug(f"   ⚠️ React threat in space: {loc.name} has {loc.their_power} enemy power")
+                        break
+                    elif not is_space and loc.is_ground and loc.their_power >= REACT_THREAT_THRESHOLD:
+                        has_react_threat = True
+                        logger.debug(f"   ⚠️ React threat on ground: {loc.name} has {loc.their_power} enemy power")
+                        break
+
+                if has_react_threat:
+                    # Don't relax threshold - enemy can react/move to crush weak deploys
+                    logger.debug(f"   📊 No threshold relaxation ({domain}): react threat exists")
                 else:
-                    threshold = max(2, threshold - 3)
-                early_game_relaxed = True
+                    # Safe to relax - no large enemy buildups to threaten weak deploys
+                    # Ground: Lower threshold by 3 to allow 3-power characters to establish
+                    # presence at locations with opponent icons (enables force drains early).
+                    # Space: Keep the standard -2 reduction (starships usually have higher power).
+                    # With threshold=6: ground -> max(2, 6-3) = 3, space -> max(3, 6-2) = 4
+                    if is_space:
+                        threshold = max(3, threshold - 2)
+                    else:
+                        threshold = max(2, threshold - 3)
+                    early_game_relaxed = True
 
         # LATE GAME LIFE FORCE DECAY: Lower threshold when losing badly
         life_force_decay = 0
