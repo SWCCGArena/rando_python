@@ -565,9 +565,12 @@ class CardDatabase:
             light_icons = front.get('lightSideIcons', 0) or 0
             dark_icons = front.get('darkSideIcons', 0) or 0
 
-            # Check for defensive shield
+            # Get gametext for various checks
             gametext = front.get('gametext', '')
-            is_defensive_shield = 'Defensive Shield' in gametext
+
+            # Check for defensive shield - check card TYPE, not gametext
+            card_type_str = front.get('type', '')
+            is_defensive_shield = card_type_str == 'Defensive Shield'
 
             card = Card(
                 blueprint_id=blueprint_id,
