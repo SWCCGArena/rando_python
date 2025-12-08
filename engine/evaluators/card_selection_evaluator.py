@@ -25,6 +25,7 @@ from ..priority_cards import (
     get_protection_score,
     get_protection_score_by_title,
 )
+from ..shield_strategy import score_shield_for_deployment
 
 logger = logging.getLogger(__name__)
 
@@ -1270,12 +1271,16 @@ class CardSelectionEvaluator(ActionEvaluator):
 
     def _evaluate_target_selection(self, context: DecisionContext) -> List[EvaluatedAction]:
         """
-        Choose a target for a weapon or ability.
+        Choose a target for a weapon or ability, OR select a defensive shield.
 
         IMPORTANT: Once we've decided to use an ability, we MUST select a target.
         Canceling wastes the action and can cause game flow issues.
 
-        Prefer:
+        For defensive shields (from Starting Effect):
+        - Use shield_strategy scoring to pick the best shield
+        - Shields aren't in cards_in_play, so we use context.blueprints
+
+        For weapon/ability targets:
         - Enemy cards (always target enemies!)
         - High-value targets (more power/forfeit = more damage to opponent)
         - Characters over droids/vehicles (usually more valuable)
@@ -1287,7 +1292,37 @@ class CardSelectionEvaluator(ActionEvaluator):
 
         logger.info(f"Target selection: {len(context.card_ids)} potential targets")
 
-        for card_id in context.card_ids:
+        # =============================================================
+        # DEFENSIVE SHIELD DETECTION
+        # When selecting shields from Starting Effect, cards aren't in
+        # cards_in_play. Check if we have blueprints and they're shields.
+        # =============================================================
+        is_shield_selection = False
+        shield_count = 0
+
+        # Debug: Log what blueprints we have
+        non_empty_blueprints = [b for b in context.blueprints if b and b != "inPlay" and not b.startswith("-1_")]
+        if non_empty_blueprints:
+            logger.info(f"🔍 Have {len(non_empty_blueprints)} non-empty blueprints for target selection")
+
+        # Check if context.blueprints contains defensive shields
+        if context.blueprints and len(context.blueprints) > 0:
+            for i, blueprint in enumerate(context.blueprints):
+                if blueprint and blueprint != "inPlay" and not blueprint.startswith("-1_"):
+                    card_meta = get_card(blueprint)
+                    if card_meta and card_meta.is_defensive_shield:
+                        shield_count += 1
+
+            # If majority of options are shields, treat as shield selection
+            if shield_count > 0 and shield_count >= len(context.blueprints) * 0.5:
+                is_shield_selection = True
+                logger.info(f"🛡️ Detected DEFENSIVE SHIELD selection: {shield_count}/{len(context.blueprints)} shields")
+
+        # Get turn number and side for shield scoring
+        turn_number = context.turn_number if context.turn_number else 1
+        my_side = bs.my_side if bs else "light"
+
+        for i, card_id in enumerate(context.card_ids):
             action = EvaluatedAction(
                 action_id=card_id,
                 action_type=ActionType.SELECT_CARD,
@@ -1295,6 +1330,33 @@ class CardSelectionEvaluator(ActionEvaluator):
                 display_text=f"Target {card_id}"
             )
 
+            # Get blueprint for this card (if available)
+            blueprint = context.blueprints[i] if i < len(context.blueprints) else None
+
+            # =============================================================
+            # SHIELD SELECTION PATH
+            # Use shield_strategy scoring for defensive shields
+            # =============================================================
+            if is_shield_selection and blueprint and blueprint != "inPlay" and not blueprint.startswith("-1_"):
+                card_meta = get_card(blueprint)
+                if card_meta and card_meta.is_defensive_shield:
+                    action.display_text = f"Shield: {card_meta.title}"
+                    action.card_name = card_meta.title
+                    action.blueprint_id = blueprint
+
+                    # Use comprehensive shield strategy scoring
+                    shield_score, shield_reason = score_shield_for_deployment(
+                        blueprint, card_meta.title, turn_number, my_side, bs
+                    )
+                    action.add_reasoning(f"Shield: {shield_reason}", shield_score)
+                    logger.debug(f"🛡️ {card_meta.title}: score={shield_score:.0f} ({shield_reason})")
+                    actions.append(action)
+                    continue  # Skip generic target evaluation
+
+            # =============================================================
+            # STANDARD TARGET SELECTION PATH
+            # For weapons, abilities, etc.
+            # =============================================================
             if bs:
                 card = bs.cards_in_play.get(card_id)
                 if card:
@@ -1357,8 +1419,28 @@ class CardSelectionEvaluator(ActionEvaluator):
                         # Our own card - DON'T target if we have enemy options
                         action.add_reasoning("OUR card - avoid targeting!", -200.0)
                 else:
-                    # Card not in our tracking - still give it a reasonable score
-                    action.add_reasoning("Unknown target - proceed", +10.0)
+                    # Card not in our tracking - check if we have a blueprint
+                    # This handles shields from Starting Effect that weren't detected above
+                    if blueprint and blueprint != "inPlay" and not blueprint.startswith("-1_"):
+                        card_meta = get_card(blueprint)
+                        if card_meta:
+                            action.display_text = f"Select {card_meta.title}"
+                            action.card_name = card_meta.title
+                            action.blueprint_id = blueprint
+
+                            # Check if this is a defensive shield
+                            if card_meta.is_defensive_shield:
+                                shield_score, shield_reason = score_shield_for_deployment(
+                                    blueprint, card_meta.title, turn_number, my_side, bs
+                                )
+                                action.add_reasoning(f"Shield: {shield_reason}", shield_score)
+                                logger.info(f"🛡️ Fallback shield scoring: {card_meta.title} = {shield_score:.0f}")
+                            else:
+                                action.add_reasoning(f"Card from blueprint: {card_meta.title}", +10.0)
+                        else:
+                            action.add_reasoning("Unknown target - proceed", +10.0)
+                    else:
+                        action.add_reasoning("Unknown target - proceed", +10.0)
             else:
                 action.add_reasoning("No board state - select anyway", +10.0)
 

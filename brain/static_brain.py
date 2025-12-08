@@ -137,6 +137,10 @@ class StaticBrain(Brain):
         for opt in req.options:
             if opt.card and opt.card.card_id:
                 card_ids.append(opt.card.card_id)
+                blueprints.append(opt.card.blueprint_id or "")
+            elif opt.card and opt.card.blueprint_id:
+                # Card exists but no card_id - still preserve blueprint
+                card_ids.append(opt.option_id or "")
                 blueprints.append(opt.card.blueprint_id)
             elif opt.option_id:
                 # For CARD_SELECTION, option_id is often the card_id

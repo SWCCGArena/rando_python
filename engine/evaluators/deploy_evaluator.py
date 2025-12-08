@@ -400,12 +400,19 @@ class DeployEvaluator(ActionEvaluator):
             bs.deploy_plan_summary = self.planner.get_plan_summary()
 
         # DEBUG: Log what actions are available
+        # Count regular deploys (from hand) separately from special ability deploys
+        # (from Reserve Deck, Lost Pile, etc.) - only regular deploys should cause staleness
         deploy_action_count = 0
+        regular_deploy_count = 0
         for i, action_id in enumerate(context.action_ids):
             action_text = context.action_texts[i] if i < len(context.action_texts) else "Unknown"
             has_deploy = "Deploy" in action_text or "Reserve Deck" in action_text
             if has_deploy:
                 deploy_action_count += 1
+                # Regular deploys are from hand - special ability deploys mention Reserve/Lost
+                is_special_ability = "Reserve Deck" in action_text or "Lost Pile" in action_text
+                if not is_special_ability:
+                    regular_deploy_count += 1
             logger.debug(f"   Action {i}: id={action_id}, has_deploy={has_deploy}, text={action_text[:80]}...")
 
         if deploy_action_count == 0 and deploy_plan:
@@ -444,7 +451,9 @@ class DeployEvaluator(ActionEvaluator):
                     plan_cards_available = True
                     break
 
-            if not plan_cards_available and deploy_action_count > 0 and not deploy_plan.is_plan_complete():
+            if not plan_cards_available and regular_deploy_count > 0 and not deploy_plan.is_plan_complete():
+                # Only mark stale if REGULAR deploys exist but none match the plan
+                # Don't mark stale for special ability deploys (Reserve Deck, Lost Pile)
                 # Check if ALL remaining instructions are weapons
                 # Weapons have complex deployment restrictions (matching characters, etc.)
                 # that the planner can't fully model, so don't treat weapon-only as stale
