@@ -188,9 +188,23 @@ class PassEvaluator(ActionEvaluator):
         # Can only pass if:
         # 1. noPass=false (passing is allowed)
         # 2. AND min=0 (no minimum selection required)
+        # 3. For "Required responses", only pass if there's an explicit cancel action
         # This matches C# logic in ParseArbritraryCardDecision
         min_required = context.extra.get('min', 0)
-        return not context.no_pass and min_required == 0
+
+        # Basic requirement: noPass must be false and no minimum selection
+        if context.no_pass or min_required > 0:
+            return False
+
+        # Check for "Required responses" in decision text - this semantically means
+        # we MUST respond, unless there's an explicit cancel/done action available
+        if 'required' in context.decision_text.lower():
+            # Only allow "passing" if there's a cancel action we can select
+            cancel_id = self._find_cancel_action(context)
+            if cancel_id is None:
+                return False  # No cancel option = can't pass on required responses
+
+        return True
 
     def _find_cancel_action(self, context: DecisionContext) -> Optional[str]:
         """

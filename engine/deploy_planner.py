@@ -532,6 +532,9 @@ class NextTurnCrushPlan:
     # The power advantage we'll achieve
     expected_advantage: int
 
+    # Force generation per turn (needed for draw calculations)
+    force_generation: int = 0
+
     def get_max_draw_force(self, current_force: int) -> int:
         """
         Calculate maximum force that can be spent on drawing cards.
@@ -539,23 +542,16 @@ class NextTurnCrushPlan:
         We need to save enough force so that next turn we can afford the crush.
         Drawing costs force now but we regenerate next turn.
 
-        Logic: We can spend on draws up to what we'd regenerate anyway,
-        minus a small buffer for safety.
+        IMPORTANT: This uses current_force to properly track force depletion
+        during the draw phase. Each draw reduces current_force by 1.
         """
-        # We'll regenerate force_generation next turn
-        # So any force we spend now on draws will be "refunded" via regeneration
-        # But we need to ensure we have force_needed available next turn
-        #
-        # next_turn_force = current_force - draws_spent + force_generation
-        # We need: next_turn_force >= force_needed
-        # So: current_force - draws_spent + force_generation >= force_needed
-        # draws_spent <= current_force + force_generation - force_needed
-        #
-        # But force_generation is already factored into expected_force_next_turn
-        # expected_force_next_turn = current_force + force_generation
-        # So: draws_spent <= expected_force_next_turn - force_needed
+        # Calculate what we'll actually have next turn based on CURRENT force
+        # (not the original force when the plan was made)
+        actual_next_turn = current_force + self.force_generation
 
-        max_draw = self.expected_force_next_turn - self.force_needed
+        # We need force_needed next turn, so max we can spend on draws is the excess
+        max_draw = actual_next_turn - self.force_needed
+
         # Keep at least 1 force buffer for safety
         return max(0, max_draw - 1)
 
@@ -725,7 +721,8 @@ class DeployPhasePlanner:
                                 total_deploy_cost=total_cost,
                                 force_needed=force_needed,
                                 expected_force_next_turn=next_turn_force,
-                                expected_advantage=advantage
+                                expected_advantage=advantage,
+                                force_generation=force_generation,
                             )
 
             # Option 2: Multiple characters combined
@@ -776,7 +773,8 @@ class DeployPhasePlanner:
                                     total_deploy_cost=total_cost,
                                     force_needed=force_needed,
                                     expected_force_next_turn=next_turn_force,
-                                    expected_advantage=advantage
+                                    expected_advantage=advantage,
+                                    force_generation=force_generation,
                                 )
 
         if best_opportunity:
@@ -875,7 +873,8 @@ class DeployPhasePlanner:
                             total_deploy_cost=c_cost,
                             force_needed=force_needed,
                             expected_force_next_turn=next_turn_force,
-                            expected_advantage=advantage
+                            expected_advantage=advantage,
+                            force_generation=force_generation,
                         )
 
             # For space bleed locations - check starships
@@ -921,7 +920,8 @@ class DeployPhasePlanner:
                             total_deploy_cost=s_cost,
                             force_needed=force_needed,
                             expected_force_next_turn=next_turn_force,
-                            expected_advantage=advantage
+                            expected_advantage=advantage,
+                            force_generation=force_generation,
                         )
 
         if best_opportunity:
@@ -4155,10 +4155,10 @@ class DeployPhasePlanner:
                             # Score: icons saved per turn × 20 (compounding value)
                             # Compare to current plan score, but weight bleed stops highly
                             # (each icon saved per turn is like gaining 1 force advantage permanently)
-                            icons_at_target = next([
-                                loc.my_icons for loc in uncovered_for_next_turn
-                                if loc.card_id == next_turn_bleed_stop.target_location_id
-                            ], 2)
+                            icons_at_target = next(
+                                (loc.my_icons for loc in uncovered_for_next_turn
+                                 if loc.card_id == next_turn_bleed_stop.target_location_id),
+                                2)
                             next_turn_score = icons_at_target * 25  # High weight for stopping bleeds
 
                             # Prefer next-turn bleed stop if:
