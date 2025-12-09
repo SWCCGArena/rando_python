@@ -126,6 +126,57 @@ class Card:
         return 1  # Fallback if pilot but pattern not found
 
     @property
+    def pilot_capacity(self) -> int:
+        """Get the number of pilots this starship/vehicle can add.
+
+        Parses gametext like:
+        - "May add 1 pilot" -> 1
+        - "May add 3 pilots" -> 3
+        - "May add 6 pilots, 8 passengers" -> 6
+        - "May add 1 pilot or passenger" -> 1
+        - "May add unlimited pilots" -> 99 (effectively unlimited)
+
+        Returns 0 if not a starship/vehicle or no pilot capacity.
+        """
+        if not (self.is_starship or self.is_vehicle):
+            return 0
+
+        if not self.gametext:
+            return 0
+
+        import re
+
+        # Check for "unlimited pilots" first
+        if re.search(r'May add unlimited pilots', self.gametext, re.IGNORECASE):
+            return 99  # Effectively unlimited
+
+        # Match "May add X pilot(s)" - captures the number before "pilot"
+        # Also handles "May add X pilots or passengers" and "May add X pilots, Y passengers"
+        match = re.search(r'May add (\d+) pilots?', self.gametext, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+
+        return 0
+
+    @property
+    def needs_pilot(self) -> bool:
+        """Check if this starship/vehicle needs an external pilot to function.
+
+        Ships with permanent pilots (pilot icon) can operate on their own.
+        Ships without permanent pilots need an external pilot to:
+        - Move
+        - Use weapons effectively
+        - Have full power in some cases
+
+        Returns True if the ship needs an external pilot, False otherwise.
+        """
+        if not (self.is_starship or self.is_vehicle):
+            return False
+
+        # Ships with permanent pilots don't NEED an external pilot
+        return not self.has_permanent_pilot
+
+    @property
     def is_character(self) -> bool:
         return self.card_type == "Character"
 

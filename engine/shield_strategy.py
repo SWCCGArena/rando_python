@@ -590,9 +590,17 @@ _shield_tracker: Optional[ShieldTracker] = None
 
 
 def get_shield_tracker(my_side: str = None) -> Optional[ShieldTracker]:
-    """Get or create the shield tracker for current game."""
+    """Get or create the shield tracker for current game.
+
+    IMPORTANT: If a side is provided and doesn't match the existing tracker's side,
+    the tracker is reset. This handles cases where the side changed between games.
+    """
     global _shield_tracker
     if _shield_tracker is None and my_side:
+        _shield_tracker = ShieldTracker(my_side)
+    elif _shield_tracker is not None and my_side and _shield_tracker.my_side != my_side.lower():
+        # Side changed - reset tracker (likely a new game with different side)
+        logger.warning(f"🛡️ Shield tracker side mismatch: tracker={_shield_tracker.my_side}, requested={my_side.lower()}. Resetting.")
         _shield_tracker = ShieldTracker(my_side)
     return _shield_tracker
 

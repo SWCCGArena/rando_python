@@ -1028,6 +1028,106 @@ class DeployPhasePlanner:
 
         return unpiloted
 
+    def _find_ships_with_pilot_capacity(self, board_state) -> List[Dict]:
+        """
+        Find all starships/vehicles we have in play that can accept additional pilots.
+
+        Ships may have "May add X pilots" in their gametext, allowing additional
+        pilots to be deployed aboard for extra power. This is a key reinforcement
+        strategy - adding a pilot to an existing ship boosts its power significantly.
+
+        Returns:
+            List of dicts with:
+            - 'card_id', 'name', 'blueprint_id': Ship identification
+            - 'location_index', 'location_card_id', 'location_name': Where the ship is
+            - 'current_power': Current power contribution
+            - 'pilot_capacity': Max pilots allowed (from gametext)
+            - 'pilots_aboard': Current number of pilots aboard
+            - 'remaining_capacity': How many more pilots can be added
+            - 'is_starship', 'is_vehicle': Ship type flags
+        """
+        ships_with_capacity = []
+        if not board_state:
+            return ships_with_capacity
+
+        my_player = getattr(board_state, 'my_player_name', None)
+        if not my_player:
+            return ships_with_capacity
+
+        cards_in_play = getattr(board_state, 'cards_in_play', {})
+
+        for card_id, card in cards_in_play.items():
+            # Skip if not ours
+            if card.owner != my_player:
+                continue
+
+            # Only consider cards actually AT a location (not in hand, lost pile, etc.)
+            if card.zone != "AT_LOCATION":
+                continue
+
+            # Skip placeholder blueprints (hidden cards)
+            if card.blueprint_id and card.blueprint_id.startswith('-1_'):
+                continue
+
+            metadata = get_card(card.blueprint_id) if card.blueprint_id else None
+            if not metadata:
+                continue
+
+            # Check if it's a starship or vehicle
+            if not (metadata.is_starship or metadata.is_vehicle):
+                continue
+
+            # Check pilot capacity (from gametext like "May add 3 pilots")
+            capacity = metadata.pilot_capacity
+            if capacity <= 0:
+                continue  # This ship doesn't accept pilots
+
+            # Count current pilots aboard
+            pilots_aboard = 0
+            for attached in card.attached_cards:
+                attached_meta = get_card(attached.blueprint_id) if attached.blueprint_id else None
+                if attached_meta and attached_meta.is_pilot:
+                    pilots_aboard += 1
+
+            # Calculate remaining capacity
+            remaining = capacity - pilots_aboard
+            if remaining <= 0:
+                continue  # Ship is full
+
+            # Get location info
+            location_idx = card.location_index
+            location_name = None
+            location_card_id = None
+
+            locations = getattr(board_state, 'locations', [])
+            for loc in locations:
+                if hasattr(loc, 'location_index') and loc.location_index == location_idx:
+                    location_name = getattr(loc, 'name', None) or getattr(loc, 'site_name', None) or getattr(loc, 'system_name', None)
+                    location_card_id = getattr(loc, 'card_id', None)
+                    break
+
+            # Get current power - use power_at_location if available, else base power
+            current_power = metadata.power_value if metadata.power_value else 0
+
+            ships_with_capacity.append({
+                'card_id': card_id,
+                'name': metadata.title,
+                'blueprint_id': card.blueprint_id,
+                'location_index': location_idx,
+                'location_card_id': location_card_id,
+                'location_name': location_name,
+                'current_power': current_power,
+                'pilot_capacity': capacity,
+                'pilots_aboard': pilots_aboard,
+                'remaining_capacity': remaining,
+                'is_starship': metadata.is_starship,
+                'is_vehicle': metadata.is_vehicle,
+            })
+            logger.info(f"🛳️ Found ship with pilot capacity: {metadata.title} (#{card_id}) at {location_name or 'unknown'} "
+                       f"[{pilots_aboard}/{capacity} pilots, {remaining} slots open]")
+
+        return ships_with_capacity
+
     def _get_dynamic_threshold(self, locations: List['LocationAnalysis'],
                                 is_space: bool, turn_number: int,
                                 life_force: int = 60) -> int:
@@ -3758,6 +3858,86 @@ class DeployPhasePlanner:
                            f"(score={base_score:.0f}, cost={best_pilot['cost']}, power={total_power})")
 
         # =================================================================
+        # STEP 5-PRE-B: CHECK FOR SHIPS WITH REMAINING PILOT CAPACITY
+        # If we have piloted ships that can accept MORE pilots ("May add X pilots"),
+        # generate ADD-PILOT plans. This is a key reinforcement strategy -
+        # adding a pilot to an existing ship boosts its power significantly.
+        # =================================================================
+        ships_with_capacity = self._find_ships_with_pilot_capacity(board_state)
+        all_addpilot_plans = []
+
+        if ships_with_capacity and all_pilots:
+            logger.info(f"   🛳️ Found {len(ships_with_capacity)} ships with pilot capacity - generating add-pilot plans")
+
+            for ship in ships_with_capacity:
+                # Find affordable pilots for this ship
+                affordable_pilots_for_ship = [
+                    p for p in all_pilots if p['cost'] <= force_remaining
+                ]
+
+                if not affordable_pilots_for_ship:
+                    logger.info(f"      ⏭️ No affordable pilots for {ship['name']}")
+                    continue
+
+                # Score each pilot for this ship and pick the best
+                pilot_scores = []
+                for pilot in affordable_pilots_for_ship:
+                    score = _pilot_score_for_ship(pilot, ship)
+                    # Also include pilot_adds_power for ranking
+                    pilot_card = get_card(pilot.get('blueprint_id', ''))
+                    adds_power = pilot_card.pilot_adds_power if pilot_card else 1
+                    score += adds_power * 5  # Weight power contribution
+                    pilot_scores.append((pilot, score, adds_power))
+
+                # Sort by score descending
+                pilot_scores.sort(key=lambda x: x[1], reverse=True)
+                best_pilot, pilot_score, adds_power = pilot_scores[0]
+
+                # Calculate power boost from adding this pilot
+                # Use pilot_adds_power if available (from gametext like "Adds 3 to power")
+                power_boost = adds_power
+
+                # Generate add-pilot plan
+                # Target is the SHIP card_id, not a location
+                target_aboard = f"aboard:{ship['card_id']}:{ship['name']}"
+
+                instruction = DeploymentInstruction(
+                    card_blueprint_id=best_pilot['blueprint_id'],
+                    card_name=best_pilot['name'],
+                    target_location_id=ship['card_id'],  # The ship's card_id
+                    target_location_name=target_aboard,  # Special marker for aboard
+                    priority=2,  # Medium priority
+                    reason=f"ADD-PILOT to {ship['name']} (+{power_boost} power)",
+                    power_contribution=power_boost,
+                    deploy_cost=best_pilot['cost'],
+                )
+
+                # Score: Moderate value - reinforcing existing position
+                # - Power boost * 10 (main value)
+                # - Base bonus for reinforcement (30)
+                # - Matching pilot bonus from pilot_score
+                # - Extra bonus if at contested location (check locations list)
+                reinforce_bonus = 30
+                location_bonus = 0
+
+                # Check if ship is at a contested location (higher value)
+                for loc in locations:
+                    if loc.name == ship.get('location_name'):
+                        if loc.their_power > 0:  # Contested!
+                            location_bonus = 25  # Extra value at contested location
+                            if loc.their_power > loc.my_power:
+                                location_bonus = 40  # Even more value if we're losing!
+                        break
+
+                base_score = (power_boost * 10 + reinforce_bonus + pilot_score + location_bonus)
+
+                force_left_after = force_remaining - best_pilot['cost']
+
+                all_addpilot_plans.append(([instruction], force_left_after, base_score))
+                logger.info(f"      👨‍✈️ ADD-PILOT plan: {best_pilot['name']} → {ship['name']} "
+                           f"(score={base_score:.0f}, +{power_boost} power, cost={best_pilot['cost']})")
+
+        # =================================================================
         # Generate MULTIPLE plans for each deployable card and compare
         # This ensures we consider all viable deployment options
         # (Dynamic thresholds already calculated earlier: ground_threshold, space_threshold)
@@ -3812,10 +3992,11 @@ class DeployPhasePlanner:
 
         # Log all plans for debugging
         repilot_count = len(all_repilot_plans)
+        addpilot_count = len(all_addpilot_plans)
         presence_count = len(all_presence_plans)
-        if repilot_count > 0 or presence_count > 0:
+        if repilot_count > 0 or addpilot_count > 0 or presence_count > 0:
             logger.info(f"   📊 Generated {len(all_ground_plans)} ground, {len(all_space_plans)} space, "
-                       f"{repilot_count} RE-PILOT, {presence_count} PRESENCE plans")
+                       f"{repilot_count} RE-PILOT, {addpilot_count} ADD-PILOT, {presence_count} PRESENCE plans")
         else:
             logger.info(f"   📊 Generated {len(all_ground_plans)} ground plans, {len(all_space_plans)} space plans")
 
@@ -3860,6 +4041,16 @@ class DeployPhasePlanner:
             target = instructions[0].target_location_name if instructions else "?"
             logger.info(f"      🩸 PRESENCE {i+1}: {cards} → {target} (STOP BLEEDING) score={score:.0f}, cost={cost}")
 
+        for i, (instructions, force_left, score) in enumerate(all_addpilot_plans):
+            cost = force_remaining - force_left
+            cards = [inst.card_name for inst in instructions]
+            # For add-pilot, target is "aboard:card_id:ship_name"
+            target = instructions[0].target_location_name if instructions else "?"
+            if target and target.startswith("aboard:"):
+                parts = target.split(":", 2)
+                target = parts[2] if len(parts) > 2 else target
+            logger.info(f"      🛳️ ADD-PILOT {i+1}: {cards} → aboard {target} score={score:.0f}, cost={cost}")
+
         # =================================================================
         # STEP 5B: GENERATE COMBINED GROUND+SPACE PLANS
         # Instead of just picking best single-domain and using leftover,
@@ -3876,6 +4067,9 @@ class DeployPhasePlanner:
         # Add re-pilot plans (reclaiming unpiloted ships already in play)
         for instructions, force_left, score in all_repilot_plans:
             all_plans.append(('repilot', instructions, force_left, score))
+        # Add add-pilot plans (adding pilots to ships with capacity for reinforcement)
+        for instructions, force_left, score in all_addpilot_plans:
+            all_plans.append(('addpilot', instructions, force_left, score))
         # Add "stop the bleeding" presence plans (low threshold, high drain priority)
         for instructions, force_left, score in all_presence_plans:
             all_plans.append(('presence', instructions, force_left, score))
@@ -4108,36 +4302,64 @@ class DeployPhasePlanner:
 
                 # =================================================================
                 # NEXT-TURN CRUSH CHECK
-                # If the best current plan is NOT a CRUSH, check if waiting one turn
-                # would allow a CRUSHING attack. Only consider this for CRUSH, not
-                # for establish or reinforcement.
+                # If the best current plan is NOT a CRUSH or REINFORCE (counter),
+                # check if waiting one turn would allow a CRUSHING attack.
+                # Next-turn crush should beat "establish" plans but not counters.
                 # =================================================================
                 best_is_crush = any('Crush' in (inst.reason or '') for inst in best_instructions)
+                best_is_reinforce = any('Reinforce' in (inst.reason or '') for inst in best_instructions)
+                best_is_counter = best_is_crush or best_is_reinforce
 
-                if not best_is_crush:
-                    # Current plan is NOT a crush - check for next-turn crush opportunity
+                if not best_is_counter:
+                    # Current plan is establish/other - check for next-turn crush opportunity
                     all_hand_cards = self._get_all_hand_cards_as_dicts(board_state)
                     next_turn_crush = self._find_next_turn_crush_opportunities(
                         board_state, locations, all_hand_cards, total_force
                     )
 
                     if next_turn_crush:
-                        # Compare scores: next-turn crush advantage vs current plan
-                        # Score next-turn crush: advantage * 10 + icons * 15 (matching our scoring)
-                        next_turn_score = (next_turn_crush.expected_advantage * 10 +
-                                          locations[0].their_icons * 15 if locations else 0)
+                        # For next-turn crush, we want to favor it over "establish" plans
+                        # because crushing is decisive - it removes enemy cards and deals damage.
+                        #
+                        # Scoring: A +7 crush is much more valuable than establishing at
+                        # a 2-icon location because:
+                        # 1. Crush deals direct damage (cards lost = life damage)
+                        # 2. Removes enemy presence, potentially stopping their drains
+                        # 3. Is a forcing play that puts opponent on back foot
+                        #
+                        # Score next-turn crush more generously:
+                        # - Base: advantage * 25 (each point of advantage is very valuable)
+                        # - Bonus: +50 for any valid crush (guaranteed damage)
+                        # - Icons at target: their_icons * 10
+                        target_icons = 0
+                        for loc in locations:
+                            if loc.name == next_turn_crush.target_location_name:
+                                target_icons = loc.their_icons
+                                break
+                        next_turn_score = (50 +  # Base crush value
+                                          next_turn_crush.expected_advantage * 25 +
+                                          target_icons * 10)
 
-                        # Prefer next-turn crush if it has significantly better advantage
-                        # The next-turn crush should provide at least +4 advantage (CRUSH threshold)
-                        # AND be better than current marginal play
-                        if (next_turn_crush.expected_advantage >= BATTLE_FAVORABLE_THRESHOLD and
-                            next_turn_score > best_score * 0.8):  # Allow some slack
+                        # Prefer next-turn crush if:
+                        # 1. Has meaningful advantage (>= BATTLE_FAVORABLE_THRESHOLD)
+                        # 2. AND either:
+                        #    a. Current plan is just "establish" (not a counter) - always prefer crush
+                        #    b. Score comparison favors crush
+                        #
+                        # For establish plans, we use a lower threshold (0.5) because
+                        # establishing only denies icons, while crushing removes cards.
+                        should_hold_for_crush = (
+                            next_turn_crush.expected_advantage >= BATTLE_FAVORABLE_THRESHOLD and
+                            next_turn_score > best_score * 0.5
+                        )
 
+                        if should_hold_for_crush:
                             logger.info(f"🔮 HOLD FOR NEXT-TURN CRUSH!")
-                            logger.info(f"   Current plan: {best_type} score={best_score:.0f}")
+                            logger.info(f"   Current plan: {best_type} score={best_score:.0f} (establish, not counter)")
                             logger.info(f"   Next-turn crush: {next_turn_crush.card_names} → {next_turn_crush.target_location_name}")
                             logger.info(f"   Power: {next_turn_crush.total_power} vs {next_turn_crush.target_enemy_power} "
                                        f"(+{next_turn_crush.expected_advantage})")
+                            logger.info(f"   Crush score: {next_turn_score:.0f} vs establish score: {best_score:.0f}")
                             logger.info(f"   Force needed: {next_turn_crush.force_needed}, expected next turn: {next_turn_crush.expected_force_next_turn}")
 
                             # Clear the plan and set HOLD_BACK

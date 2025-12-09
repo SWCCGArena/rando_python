@@ -879,7 +879,11 @@ def bot_worker():
                             from engine.objective_handler import reset_objective_handler
                             reset_objective_handler()
 
-                            logger.info(f"🧠 Brain evaluators, decision tracker, and objective handler reset for new game")
+                            # Reset shield tracker for new game (side will be set when detected)
+                            from engine.shield_strategy import reset_shield_tracker
+                            reset_shield_tracker()
+
+                            logger.info(f"🧠 Brain evaluators, decision tracker, objective handler, and shield tracker reset for new game")
 
                             # Set opponent_name EARLY so achievements work for initial cards
                             # The full reset_for_game will be called later with correct side info
