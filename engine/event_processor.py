@@ -293,6 +293,16 @@ class EventProcessor:
                 objective_handler.set_objective(blueprint_id)
                 logger.info(f"🎯 Detected our objective: {card_title} ({blueprint_id})")
 
+        # === DEFENSIVE SHIELD TRACKING ===
+        # Track shields we play for pacing (don't play too many early)
+        if zone == "SIDE_OF_TABLE" and owner == self.board_state.my_player_name:
+            card_metadata = get_card(blueprint_id) if blueprint_id and not blueprint_id.startswith('-1_') else None
+            if card_metadata and card_metadata.is_defensive_shield:
+                from .shield_strategy import get_shield_tracker
+                tracker = get_shield_tracker(self.board_state.my_side)
+                if tracker:
+                    tracker.record_shield_played(blueprint_id, card_title)
+
         # Notify callbacks (for achievements, etc.)
         self._notify_card_placed(card_title, blueprint_id, zone, owner)
 

@@ -412,6 +412,15 @@ class ShieldTracker:
         self.opponent_cards_seen: Set[str] = set()  # Card titles we've seen opponent play
         self.opponent_objective: Optional[str] = None
 
+        # Shield pacing - don't play all shields immediately
+        # This allows us to see opponent's strategy before committing
+        # Format: {turn_number: max_shields_by_that_turn}
+        self.shield_pacing = {
+            1: 2,  # Play at most 2 shields on turn 1
+            2: 3,  # Play at most 3 shields by turn 2
+            3: 4,  # Play all 4 shields by turn 3
+        }
+
         # Get the right shield database
         self.shield_db = DARK_SHIELDS if self.my_side == "dark" else LIGHT_SHIELDS
 
@@ -419,10 +428,33 @@ class ShieldTracker:
         """How many shields can we still play?"""
         return max(0, self.max_shields - len(self.shields_played))
 
+    def shields_allowed_this_turn(self, turn_number: int) -> int:
+        """How many shields should we have played by this turn (pacing limit)."""
+        # Find the applicable limit for this turn
+        for turn in sorted(self.shield_pacing.keys(), reverse=True):
+            if turn_number >= turn:
+                return self.shield_pacing[turn]
+        return 0  # Turn 0 or negative - no shields yet
+
+    def at_pacing_cap(self, turn_number: int) -> bool:
+        """Check if we've reached our shield pacing cap for this turn.
+
+        Shield pacing prevents playing all 4 shields on turn 1, allowing
+        us to see opponent's strategy before committing all shield slots.
+        """
+        shields_played = len(self.shields_played)
+        max_for_turn = self.shields_allowed_this_turn(turn_number)
+        at_cap = shields_played >= max_for_turn
+        if at_cap:
+            logger.debug(f"🛡️ At shield pacing cap: {shields_played}/{max_for_turn} for turn {turn_number}")
+        return at_cap
+
     def record_shield_played(self, blueprint_id: str, card_title: str):
         """Record that we played a shield."""
         self.shields_played.add(blueprint_id)
-        logger.info(f"🛡️ Shield played: {card_title} ({self.shields_remaining()} remaining)")
+        played = len(self.shields_played)
+        remaining = self.shields_remaining()
+        logger.info(f"🛡️ Shield #{played} played: {card_title} ({remaining} remaining of {self.max_shields})")
 
     def record_opponent_shield(self, blueprint_id: str, card_title: str):
         """Record an opponent shield we've seen."""
@@ -487,8 +519,20 @@ class ShieldTracker:
             board_state: Optional board state for context
 
         Returns:
-            Score from 0-200 indicating priority
+            Score from 0-200 indicating priority, or -200 if at pacing cap
         """
+        # Check if already played (shouldn't happen but be safe)
+        if blueprint_id in self.shields_played:
+            return -100.0
+
+        # SHIELD PACING: Don't play too many shields early
+        # This reserves shield slots to respond to opponent's strategy
+        if self.at_pacing_cap(turn_number):
+            # At pacing cap - return very low score to prevent playing
+            # (but not -100 to differentiate from "never play" shields)
+            logger.info(f"🛡️ {card_title}: Holding back (pacing cap for turn {turn_number})")
+            return -50.0
+
         # Find the shield info
         shield_info = None
         for name, info in self.shield_db.items():
@@ -504,10 +548,6 @@ class ShieldTracker:
             # Unknown shield - give moderate priority
             logger.debug(f"Unknown shield: {card_title} ({blueprint_id})")
             return 50.0
-
-        # Check if already played (shouldn't happen but be safe)
-        if blueprint_id in self.shields_played:
-            return -100.0
 
         # Base score by category
         category_scores = {
