@@ -296,6 +296,18 @@ class MockCardMetadata:
                 return True
         return False
 
+    @property
+    def pilot_capacity(self) -> int:
+        """Mock pilot capacity - returns 0 for most cards, can be overridden in mock DB"""
+        return getattr(self, '_pilot_capacity', 0)
+
+    @property
+    def needs_pilot(self) -> bool:
+        """Check if this ship/vehicle needs an external pilot."""
+        if not (self.is_starship or self.is_vehicle):
+            return False
+        return not self.has_permanent_pilot
+
 
 def mock_get_card(blueprint_id: str) -> Optional[MockCardMetadata]:
     """Mock version of card_loader.get_card"""
@@ -7217,6 +7229,9 @@ def test_backup_skips_triple_power_deficit():
 
     Even if deficit is under 8, if opponent has 3x our power we can't compete.
     E.g., 4 power character vs 12 opponent = 3x = skip.
+
+    Note: With REACT_THREAT_THRESHOLD=8, the 12-power Danger Zone triggers react
+    threat detection, keeping the threshold at 6. We need 6+ power to deploy.
     """
     patch_card_loader()
     try:
@@ -7230,8 +7245,9 @@ def test_backup_skips_triple_power_deficit():
             .add_ground_location("Danger Zone", my_icons=2, their_icons=2, their_power=12)
             # Safe alternative
             .add_ground_location("Safe Zone", my_icons=2, their_icons=1, their_power=0)
-            # 4 power character
+            # Two characters: 4 + 3 = 7 power (meets threshold 6 when react threat exists)
             .add_character("Trooper", power=4, deploy_cost=3)
+            .add_character("Support", power=3, deploy_cost=2)
             .expect_target("Target A")
             .build()
         )

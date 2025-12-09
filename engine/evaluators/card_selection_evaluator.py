@@ -1345,10 +1345,12 @@ class CardSelectionEvaluator(ActionEvaluator):
                     action.blueprint_id = blueprint
 
                     # Use comprehensive shield strategy scoring
+                    # Set score directly (don't add to base) so shield strategy fully controls priority
                     shield_score, shield_reason = score_shield_for_deployment(
                         blueprint, card_meta.title, turn_number, my_side, bs
                     )
-                    action.add_reasoning(f"Shield: {shield_reason}", shield_score)
+                    action.score = shield_score  # Override base score entirely
+                    action.add_reasoning(f"Shield: {shield_reason}")  # Log reason without adding to score
                     logger.debug(f"🛡️ {card_meta.title}: score={shield_score:.0f} ({shield_reason})")
                     actions.append(action)
                     continue  # Skip generic target evaluation
@@ -1433,7 +1435,8 @@ class CardSelectionEvaluator(ActionEvaluator):
                                 shield_score, shield_reason = score_shield_for_deployment(
                                     blueprint, card_meta.title, turn_number, my_side, bs
                                 )
-                                action.add_reasoning(f"Shield: {shield_reason}", shield_score)
+                                action.score = shield_score  # Override base score entirely
+                                action.add_reasoning(f"Shield: {shield_reason}")  # Log reason without adding
                                 logger.info(f"🛡️ Fallback shield scoring: {card_meta.title} = {shield_score:.0f}")
                             else:
                                 action.add_reasoning(f"Card from blueprint: {card_meta.title}", +10.0)
