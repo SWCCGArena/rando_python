@@ -322,6 +322,7 @@ class TestGroundVsSpaceDecision:
         """
         board = MockBoardState(
             force_pile=10,
+            turn_number=4,  # Past early game threshold
             cards_in_hand=[
                 MockCardInHand("h1", "char_luke", "Luke Skywalker"),
                 MockCardInHand("h2", "char_leia", "Leia Organa"),
@@ -517,6 +518,7 @@ class TestInteriorExteriorLocations:
         """
         board = MockBoardState(
             force_pile=10,
+            turn_number=4,  # Past early game threshold
             cards_in_hand=[
                 MockCardInHand("h1", "vehicle_speeder", "Snowspeeder"),  # 3 power
                 MockCardInHand("h2", "char_luke", "Luke Skywalker"),  # 4 power

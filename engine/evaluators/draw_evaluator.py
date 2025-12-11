@@ -218,6 +218,52 @@ class DrawEvaluator(ActionEvaluator):
             )
             return
 
+        # === NON-STRATEGIC HOLD-BACK: DRAW TO FIND OPTIONS ===
+        # If we held back this turn because we COULDN'T deploy (not because we're
+        # saving for a strategic play), draw aggressively to find new options.
+        # This prevents the bot from sitting with a big hand of undeployable cards
+        # while having plenty of force.
+        #
+        # Conditions for aggressive draw:
+        # 1. Deploy planner held back due to inability (not strategic save)
+        # 2. Force pile is decent (>6) - we have resources to spare
+        # 3. Life force is decent (>10) - not in survival mode
+        # 4. Hand is below hard cap
+        HOLD_BACK_DRAW_FORCE_THRESHOLD = 6
+        HOLD_BACK_DRAW_LIFE_THRESHOLD = 10
+        HOLD_BACK_DRAW_FORCE_FLOOR = 6  # Stop drawing when force pile reaches this
+
+        if hasattr(board_state, 'deploy_planner') and board_state.deploy_planner:
+            planner = board_state.deploy_planner
+            if planner.current_plan and planner.should_hold_back():
+                hold_reason = planner.current_plan.reason or ""
+                hold_reason_lower = hold_reason.lower()
+
+                # Check if this is a NON-STRATEGIC hold (couldn't deploy vs choosing not to)
+                # Strategic holds mention: "crush", "bleed", "early game", "saving"
+                is_strategic_hold = any(keyword in hold_reason_lower for keyword in
+                                       ['crush', 'bleed', 'early game', 'saving', 'next-turn'])
+
+                if not is_strategic_hold:
+                    # This is a "couldn't deploy" hold - check if we should draw
+                    if (force_pile > HOLD_BACK_DRAW_FORCE_THRESHOLD and
+                        remaining_life_force > HOLD_BACK_DRAW_LIFE_THRESHOLD and
+                        hand_size < MAX_HAND_SIZE):
+
+                        # Calculate how many draws we can afford while keeping force floor
+                        draws_affordable = force_pile - HOLD_BACK_DRAW_FORCE_FLOOR
+
+                        if draws_affordable > 0:
+                            # Boost drawing significantly - we need new options!
+                            draw_boost = 50.0 + (draws_affordable * 5)  # Strong base + bonus per affordable draw
+                            action.add_reasoning(
+                                f"HOLD-BACK DRAW: Couldn't deploy ({hold_reason[:50]}...), "
+                                f"force {force_pile} > {HOLD_BACK_DRAW_FORCE_THRESHOLD}, "
+                                f"drawing to find options (up to {draws_affordable} draws)",
+                                draw_boost
+                            )
+                            logger.info(f"🎴 HOLD-BACK DRAW boost: +{draw_boost} (reason: {hold_reason[:60]})")
+
         # === NEXT-TURN CRUSH PLAN AWARENESS ===
         # If we're holding back for a next-turn crush, limit drawing to preserve force
         # The crush plan tells us exactly how much force we need next turn

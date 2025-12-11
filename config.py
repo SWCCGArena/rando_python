@@ -55,6 +55,8 @@ class Config:
     DEPLOY_OVERKILL_THRESHOLD: int = 8    # Power advantage where we stop reinforcing
     DEPLOY_COMFORTABLE_THRESHOLD: int = 4 # Power advantage where reinforcing is low priority
     BATTLE_FORCE_RESERVE: int = 1         # Force to reserve for initiating battle after deploy
+    DEPLOY_EARLY_GAME_THRESHOLD: int = 110  # Minimum score to deploy in turns 1-3 (hold back weak plays)
+    DEPLOY_EARLY_GAME_TURNS: int = 3        # How many turns count as "early game"
 
     # Network rate limiting (matching web client behavior)
     # These delays make the bot behave more like a human player

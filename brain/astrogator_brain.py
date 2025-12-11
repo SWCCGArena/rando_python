@@ -784,9 +784,12 @@ class AstrogatorBrain(StaticBrain):
                 high_score=previous_score or 0
             )
 
-        # Add cumulative score
+        # Add prefix to clarify this is the score for this game
+        message = f"Route score: {message}"
+
+        # Add cumulative lifetime score
         if new_total_score is not None:
-            message += f" Total: {new_total_score}."
+            message += f" Lifetime: {new_total_score}."
 
         # Add top astrogator notification
         if is_new_top_astrogator:

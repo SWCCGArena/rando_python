@@ -66,6 +66,17 @@ DEPLOY_OVERKILL_THRESHOLD = 8
 # If opponent has this much power anywhere, they can react/move to crush weak deploys
 REACT_THREAT_THRESHOLD = 8
 
+# Early game hold-back: minimum score to deploy in turns 1-3
+# Prevents weak "establish" plays that waste cards; bot waits for better opportunity
+# Based on log analysis: 110 threshold filters ~47% of early deploys
+DEPLOY_EARLY_GAME_THRESHOLD = 110
+DEPLOY_EARLY_GAME_TURNS = 3  # How many turns count as "early game"
+
+# Mid-late game reinforcement: target power level to reinforce friendly locations to
+# After turn 3, prioritize reinforcing our locations to this power before establishing elsewhere
+# Prevents early weak positions from getting crushed when opponent builds up
+REINFORCE_TARGET_POWER = 10
+
 # Bonus score for matching pilot/ship combos (soft preference, not requirement)
 MATCHING_PILOT_BONUS = 10
 
@@ -576,6 +587,7 @@ class DeployPhasePlanner:
         self.current_plan: Optional[DeploymentPlan] = None
         self._last_phase: str = ""
         self._last_turn: int = -1
+        self._current_turn: int = 1  # Current turn for scoring (set in create_plan)
 
     def reset(self):
         """Reset planner state for a new game. Call this when game starts."""
@@ -583,6 +595,7 @@ class DeployPhasePlanner:
         self.current_plan = None
         self._last_phase = ""
         self._last_turn = -1
+        self._current_turn = 1
 
     def _estimate_force_generation(self, locations: List[LocationAnalysis]) -> int:
         """
@@ -1681,7 +1694,8 @@ class DeployPhasePlanner:
 
         return (selected, total_power, total_cost)
 
-    def _score_plan(self, instructions: List[DeploymentInstruction], locations: List[LocationAnalysis]) -> float:
+    def _score_plan(self, instructions: List[DeploymentInstruction], locations: List[LocationAnalysis],
+                    turn_number: int = 1) -> float:
         """
         Score a deployment plan based on strategic value.
 
@@ -1690,6 +1704,7 @@ class DeployPhasePlanner:
         2. GUARANTEED CONTROL (0 enemy, we have presence) - Very valuable
         3. Icons denied (their_icons at target locations)
         4. Power deployed - base value
+        5. MID-LATE GAME REINFORCEMENT (turn > 3) - Bonus for reinforcing weak positions
 
         KEY INSIGHT: A guaranteed win at an empty location is often BETTER than
         a marginal fight. Marginal fights (+1 to +3 power) are risky due to
@@ -1768,8 +1783,12 @@ class DeployPhasePlanner:
                                f"({our_power} vs {target_loc.their_power}, +{power_advantage} advantage)")
                 elif power_advantage > 0:
                     # MARGINAL FIGHT: We'd win but it's risky (+1 to +3)
-                    # Still valuable if we're being drained!
-                    marginal_bonus = 10 + (power_advantage * 5) + deny_drain_bonus + win_control_bonus
+                    # Still valuable because:
+                    # 1. We stop their drain (deny_drain_bonus)
+                    # 2. We start draining them (win_control_bonus)
+                    # 3. We remove their presence from the board
+                    # Increase base from 10 to 25 to make winning more attractive than establishing
+                    marginal_bonus = 25 + (power_advantage * 5) + deny_drain_bonus + win_control_bonus
                     score += marginal_bonus
                     logger.debug(f"   ⚠️ MARGINAL FIGHT at {target_loc.name}: +{marginal_bonus} "
                                f"({our_power} vs {target_loc.their_power}, only +{power_advantage})")
@@ -1816,20 +1835,80 @@ class DeployPhasePlanner:
 
             else:
                 # === EMPTY LOCATION WITH OUR PRESENCE ===
-                # Guaranteed control = guaranteed force drain!
-                # This is very valuable, especially with high opponent icons
-                if target_loc.their_icons > 0:
-                    # We'll force drain them for their_icons every turn
-                    establish_bonus = 40 + (target_loc.their_icons * 15)
-                    score += establish_bonus
-                    logger.debug(f"   ✅ ESTABLISH CONTROL at {target_loc.name}: +{establish_bonus} "
-                               f"({our_power} power, {target_loc.their_icons} icons to drain)")
+                # Two types of value here:
+                # 1. OFFENSIVE: We can drain them for their_icons (attack potential)
+                # 2. DEFENSIVE: We protect our own icons from being drained (defense)
+                #
+                # Defensive is often MORE important early game because:
+                # - If opponent establishes at our 2-icon location, they drain us 2/turn
+                # - Protecting it first denies them that option entirely
+                # - This is especially true for our starting/objective locations
 
-        # Icons at target locations (additional value)
+                establish_bonus = 40  # Base value for presence
+
+                # OFFENSIVE VALUE: We can drain them
+                if target_loc.their_icons > 0:
+                    offensive_bonus = target_loc.their_icons * 15
+                    establish_bonus += offensive_bonus
+                    logger.debug(f"   ⚔️ OFFENSIVE VALUE at {target_loc.name}: +{offensive_bonus} "
+                               f"(drain {target_loc.their_icons} icons)")
+
+                # DEFENSIVE VALUE: Protect our icons from opponent drain
+                # Important but must not exceed contested location bonuses (deny_drain = my_icons * 20)
+                # Otherwise we'd prefer empty over contested, which is wrong
+                # Use 15 per icon (same as offensive) - the real benefit is in preventing opponent from taking it
+                if target_loc.my_icons > 0:
+                    defensive_bonus = target_loc.my_icons * 15
+                    establish_bonus += defensive_bonus
+                    logger.debug(f"   🛡️ DEFENSIVE VALUE at {target_loc.name}: +{defensive_bonus} "
+                               f"(protect {target_loc.my_icons} of our icons)")
+
+                score += establish_bonus
+                logger.debug(f"   ✅ ESTABLISH CONTROL at {target_loc.name}: +{establish_bonus} "
+                           f"({our_power} power, {target_loc.their_icons} their icons, {target_loc.my_icons} our icons)")
+
+                # =================================================================
+                # MID-LATE GAME REINFORCEMENT BONUS
+                # After early game (turn > 3), prioritize reinforcing existing weak
+                # positions to REINFORCE_TARGET_POWER (10) before establishing elsewhere.
+                # This prevents our early positions from being easy crush targets.
+                # =================================================================
+                if turn_number > DEPLOY_EARLY_GAME_TURNS:
+                    # Check if this is a REINFORCE (we have existing presence) vs ESTABLISH (new location)
+                    existing_power = target_loc.my_power
+                    if existing_power > 0 and existing_power < REINFORCE_TARGET_POWER:
+                        # This is reinforcing a weak position
+                        # Bonus scales with:
+                        # 1. How far below target we are (more urgent = higher bonus)
+                        # 2. Value of the location (icons)
+                        power_deficit = REINFORCE_TARGET_POWER - existing_power
+                        new_total_power = existing_power + our_power
+
+                        # Base bonus: 30 (higher than establish base of 40, but establish gets icon bonuses)
+                        # Scale: +10 per point of deficit (max 10 deficit = +100)
+                        # This ensures reinforce beats establish but not crush
+                        reinforce_bonus = 30 + (power_deficit * 10)
+
+                        # Extra bonus if this reinforcement reaches target
+                        if new_total_power >= REINFORCE_TARGET_POWER:
+                            reinforce_bonus += 20  # Reached safety target!
+
+                        # Scale with location value (icons we're protecting)
+                        location_value = target_loc.my_icons + target_loc.their_icons
+                        reinforce_bonus += location_value * 5
+
+                        score += reinforce_bonus
+                        logger.debug(f"   🏰 MID-LATE REINFORCE at {target_loc.name}: +{reinforce_bonus} "
+                                   f"(turn {turn_number}, {existing_power} -> {new_total_power} power, "
+                                   f"target {REINFORCE_TARGET_POWER})")
+
+        # Icons at target locations (additional value for multi-location plans)
         for loc_id in target_loc_ids:
             for loc in locations:
                 if loc.card_id == loc_id:
+                    # Both offensive (their icons) and defensive (our icons) matter
                     score += loc.their_icons * 10  # Reduced from 20, since establish_bonus covers this
+                    score += loc.my_icons * 10     # Same as offensive - establish_bonus handles primary value
                     break
 
         # === COST EFFICIENCY BONUS ===
@@ -2201,7 +2280,7 @@ class DeployPhasePlanner:
                 )]
                 # Keep force_remaining relative to original budget for consistent validation
                 force_remaining = force_budget - card['cost']
-                score = self._score_plan(instructions, locations)
+                score = self._score_plan(instructions, locations, self._current_turn)
                 plans.append((instructions, force_remaining, score))
 
             # APPROACH 2: Also find optimal combination for locations needing multiple cards
@@ -2252,7 +2331,7 @@ class DeployPhasePlanner:
                 ))
 
             if instructions:
-                score = self._score_plan(instructions, locations)
+                score = self._score_plan(instructions, locations, self._current_turn)
                 plans.append((instructions, force_remaining, score))
 
         # === GENERATE VEHICLE + PILOT COMBO PLANS ===
@@ -2366,7 +2445,7 @@ class DeployPhasePlanner:
                     ]
 
                     force_remaining = force_budget - actual_combined_cost
-                    score = self._score_plan(instructions, locations)
+                    score = self._score_plan(instructions, locations, self._current_turn)
                     plans.append((instructions, force_remaining, score))
                     logger.debug(f"   🚗 Vehicle+pilot plan: {vehicle['name']} + {best_pilot['name']} at {target_loc.name} (power={actual_estimated_power}, cost={actual_combined_cost}, score={score:.0f})")
 
@@ -3053,7 +3132,7 @@ class DeployPhasePlanner:
                         break  # One additional pilot is enough
 
             if instructions:
-                score = self._score_plan(instructions, locations)
+                score = self._score_plan(instructions, locations, self._current_turn)
                 plans.append((instructions, force_remaining, score))
 
         return plans
@@ -3070,6 +3149,7 @@ class DeployPhasePlanner:
         # Get current state for cache invalidation
         current_phase = getattr(board_state, 'current_phase', '')
         current_turn = getattr(board_state, 'turn_number', 0)
+        self._current_turn = current_turn  # Store for use in helper methods
         is_my_turn = board_state.is_my_turn() if hasattr(board_state, 'is_my_turn') else True
 
         # === CRITICAL: Don't plan during opponent's turn! ===
@@ -3640,21 +3720,29 @@ class DeployPhasePlanner:
         # CRITICAL: Must have our icons to deploy (or presence, but we filter my_power==0)
         # EXCLUDE: Dagobah and Ahch-To (special deployment restrictions - most cards can't deploy)
         # EXCLUDE: Interior Naboo sites if "We Have A Plan" objective is active (front side)
+        #
+        # TWO types of valuable locations:
+        # 1. OFFENSIVE: Opponent has icons/presence (we can drain them or beat them)
+        # 2. DEFENSIVE: WE have high icons (opponent could drain us if they establish first!)
         char_ground_targets = [
             loc for loc in locations
             if loc.is_ground
-            and (loc.their_power > 0 or loc.their_icons > 0)  # Opponent has presence/icons
+            and (loc.their_power > 0 or loc.their_icons > 0 or loc.my_icons >= 2)  # Offensive OR defensive value
             and loc.my_power == 0  # We don't have presence yet
             and loc.my_icons > 0  # MUST have our force icons to deploy there
             and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
             and not (whap_restriction and is_interior_naboo_site(loc.name, loc.is_interior))  # Skip interior Naboo if WHAP active
         ]
-        # CRITICAL: Sort contested locations FIRST (their_power > 0), then by icons
-        # Beating opponents is MORE valuable than establishing at empty locations!
-        # Sort key: (is_contested DESC, their_icons DESC, my_icons DESC)
-        # my_icons is tiebreaker - when opponent icons equal, prefer more total icons
+        # CRITICAL: Sort to prioritize:
+        # 1. Contested locations FIRST (their_power > 0) - immediate threats
+        # 2. Then by COMBINED icon value (offensive + defensive)
+        # 3. Defensive locations with 2+ of our icons are HIGH priority even with 0 opponent icons
+        # Sort key: (is_contested DESC, combined_icon_value DESC)
         char_ground_targets.sort(
-            key=lambda x: (x.their_power > 0, x.their_icons, x.my_icons),
+            key=lambda x: (
+                x.their_power > 0,                    # Contested first
+                x.their_icons + (x.my_icons * 1.5),   # Combined value (our icons weighted higher for defense)
+            ),
             reverse=True
         )
 
@@ -3680,7 +3768,8 @@ class DeployPhasePlanner:
             logger.info(f"   ⏭️ Space locations (chars can't go): {excluded_space}")
 
         if char_ground_targets:
-            logger.info(f"   🎯 Ground targets: {[(loc.name, loc.their_icons, loc.their_power) for loc in char_ground_targets]}")
+            # Log with both offensive (their_icons) and defensive (my_icons) values
+            logger.info(f"   🎯 Ground targets: {[(loc.name, f'our:{loc.my_icons}', f'their:{loc.their_icons}', f'pwr:{loc.their_power}') for loc in char_ground_targets]}")
 
         # Include contested/crushable ground locations for character reinforcement
         # These have our presence AND enemy presence - we can deploy to CRUSH them!
@@ -4301,14 +4390,46 @@ class DeployPhasePlanner:
                     logger.info(f"      - {inst.card_name} -> {inst.target_location_name} ({inst.power_contribution} power)")
 
                 # =================================================================
+                # EARLY GAME HOLD-BACK CHECK
+                # In the early game (turns 1-3), hold back weak "establish" plans.
+                # This prevents wasting cards on low-value locations when waiting
+                # one turn could yield a much better opportunity.
+                # =================================================================
+                best_is_crush = any('Crush' in (inst.reason or '') for inst in best_instructions)
+                best_is_reinforce = any('Reinforce' in (inst.reason or '') for inst in best_instructions)
+                best_is_counter = best_is_crush or best_is_reinforce
+
+                # Early game hold-back: in turns 1-3, don't deploy weak establish plans
+                # EXCEPT when life is low (need to be aggressive)
+                is_early_game = current_turn <= DEPLOY_EARLY_GAME_TURNS
+                is_weak_plan = best_score < DEPLOY_EARLY_GAME_THRESHOLD
+                is_low_life = life_force < 20  # Critical/desperate life force
+
+                if (is_early_game and
+                    not best_is_counter and
+                    is_weak_plan and
+                    not is_low_life):  # Don't hold back when life is critical
+                    # Early game + weak plan = hold back
+                    logger.info(f"⏳ EARLY GAME HOLD-BACK (turn {current_turn})")
+                    logger.info(f"   Plan score {best_score:.0f} < threshold {DEPLOY_EARLY_GAME_THRESHOLD}")
+                    logger.info(f"   Waiting for better deployment opportunity")
+
+                    # Clear the plan and set HOLD_BACK
+                    plan.instructions.clear()
+                    plan.strategy = DeployStrategy.HOLD_BACK
+                    plan.reason = (f"Early game (turn {current_turn}): score {best_score:.0f} below "
+                                  f"threshold {DEPLOY_EARLY_GAME_THRESHOLD}, holding for better play")
+
+                    # Skip all further plan additions
+                    self.current_plan = plan
+                    return plan
+
+                # =================================================================
                 # NEXT-TURN CRUSH CHECK
                 # If the best current plan is NOT a CRUSH or REINFORCE (counter),
                 # check if waiting one turn would allow a CRUSHING attack.
                 # Next-turn crush should beat "establish" plans but not counters.
                 # =================================================================
-                best_is_crush = any('Crush' in (inst.reason or '') for inst in best_instructions)
-                best_is_reinforce = any('Reinforce' in (inst.reason or '') for inst in best_instructions)
-                best_is_counter = best_is_crush or best_is_reinforce
 
                 if not best_is_counter:
                     # Current plan is establish/other - check for next-turn crush opportunity

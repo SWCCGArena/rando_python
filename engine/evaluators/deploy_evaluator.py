@@ -396,6 +396,9 @@ class DeployEvaluator(ActionEvaluator):
             # (e.g., card_selection_evaluator needs to know target locations)
             bs.current_deploy_plan = deploy_plan
 
+            # Store planner reference so draw_evaluator can check hold_back status
+            bs.deploy_planner = self.planner
+
             # Store plan summary on board_state for admin UI display
             bs.deploy_plan_summary = self.planner.get_plan_summary()
 
