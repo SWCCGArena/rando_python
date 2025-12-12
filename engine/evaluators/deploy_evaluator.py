@@ -608,6 +608,7 @@ class DeployEvaluator(ActionEvaluator):
 
         Example: "Choose where to deploy •Boba Fett In Slave I"
         Example: "Choose where to deploy •X-wing Laser Cannon"
+        Example: "Choose a pilot from hand to simultaneously deploy aboard •Pulsar Skate"
 
         IMPORTANT rules:
         - Starships should ONLY deploy to space locations (0 power at ground)
@@ -615,6 +616,7 @@ class DeployEvaluator(ActionEvaluator):
         - Weapons should prefer targets WITHOUT existing weapons
         - PILOTS should prefer unpiloted vehicles/starships over ground locations!
         - FOLLOW THE DEPLOY PLAN if one exists!
+        - SIMULTANEOUS PILOT: card_ids are pilots in hand, not locations!
         """
         actions = []
         bs = context.board_state
@@ -623,6 +625,15 @@ class DeployEvaluator(ActionEvaluator):
         if not context.card_ids:
             logger.warning("No card IDs in CARD_SELECTION decision")
             return actions
+
+        # =====================================================
+        # SPECIAL CASE: Simultaneous pilot deployment
+        # When deploying an unpiloted ship, GEMP asks which pilot to put aboard.
+        # The card_ids are PILOTS IN HAND, not locations!
+        # =====================================================
+        text_lower = context.decision_text.lower() if context.decision_text else ""
+        if "pilot" in text_lower and "simultaneously deploy aboard" in text_lower:
+            return self._evaluate_simultaneous_pilot_selection(context)
 
         # Extract the card being deployed from decision text
         # Format: "Choose where to deploy <div class='cardHint' value='109_8'>•Boba Fett In Slave I</div>"
@@ -979,6 +990,102 @@ class DeployEvaluator(ActionEvaluator):
                         action.score += score
                     else:
                         action.add_reasoning("Location not found in board state", -5.0)
+
+            actions.append(action)
+
+        return actions
+
+    def _evaluate_simultaneous_pilot_selection(self, context: DecisionContext) -> List[EvaluatedAction]:
+        """
+        Evaluate pilot selection for simultaneous deployment aboard a ship/vehicle.
+
+        When deploying an unpiloted ship, GEMP asks which pilot to simultaneously deploy.
+        The card_ids in this decision are PILOT CARDS IN HAND, not locations!
+
+        Example text: "Choose a pilot from hand to simultaneously deploy aboard •Pulsar Skate"
+
+        Scoring factors:
+        - If the deploy plan specified a pilot for this ship, give it big bonus
+        - Otherwise score by: matching pilot > lower deploy cost > higher ability
+        """
+        actions = []
+        bs = context.board_state
+
+        # Extract the ship being deployed from decision text
+        # Format: "...simultaneously deploy aboard <div class='cardHint' value='109_8'>•Ship Name</div>"
+        ship_blueprint = self._extract_blueprint_from_action(context.decision_text)
+        ship_card = get_card(ship_blueprint) if ship_blueprint else None
+        ship_name = ship_card.title if ship_card else "unknown ship"
+
+        logger.info(f"🚀 Simultaneous pilot selection for {ship_name}")
+        logger.info(f"   Pilot choices (card_ids): {context.card_ids}")
+
+        # Check if the deploy plan specified a pilot for this ship
+        planned_pilot_blueprint = None
+        if bs and hasattr(bs, 'current_deploy_plan') and bs.current_deploy_plan:
+            # Look through plan instructions for the ship and its pilot
+            for instruction in bs.current_deploy_plan.instructions:
+                # Find if any instruction is for a pilot going aboard this ship
+                if instruction.aboard_ship_blueprint_id == ship_blueprint:
+                    planned_pilot_blueprint = instruction.card_blueprint_id
+                    logger.info(f"   📋 Plan says pilot: {instruction.card_name} (blueprint={planned_pilot_blueprint})")
+                    break
+
+        # Build list of pilot cards from hand that match the card_ids
+        # card_ids are game instance IDs, we need to match against cards_in_hand
+        pilot_card_map = {}  # card_id -> (card_in_hand, metadata)
+        if bs and bs.cards_in_hand:
+            for card in bs.cards_in_hand:
+                if card.card_id in context.card_ids:
+                    metadata = get_card(card.blueprint_id)
+                    if metadata:
+                        pilot_card_map[card.card_id] = (card, metadata)
+                        logger.debug(f"   Found pilot: {metadata.title} (card_id={card.card_id}, blueprint={card.blueprint_id})")
+
+        # Score each pilot option
+        for card_id in context.card_ids:
+            action = EvaluatedAction(
+                action_id=card_id,
+                action_type=ActionType.SELECT_CARD,
+                score=50.0,  # Base score
+                display_text=f"Deploy pilot (card {card_id})"
+            )
+
+            if card_id in pilot_card_map:
+                card_in_hand, pilot_meta = pilot_card_map[card_id]
+                action.card_name = pilot_meta.title
+                action.display_text = f"Deploy pilot {pilot_meta.title}"
+
+                # Check if this is the planned pilot
+                if planned_pilot_blueprint and card_in_hand.blueprint_id == planned_pilot_blueprint:
+                    action.add_reasoning(f"PLANNED pilot for {ship_name}", +200.0)
+                    logger.info(f"   ✅ {pilot_meta.title} is the PLANNED pilot (+200)")
+                else:
+                    # Score based on pilot quality
+                    # Lower deploy cost is better (we're paying extra for this)
+                    deploy_cost = pilot_meta.deploy_value or 0
+                    cost_score = max(0, 30 - deploy_cost * 5)  # 0 cost = +30, 6 cost = 0
+                    action.add_reasoning(f"Deploy cost {deploy_cost}", cost_score)
+
+                    # Higher ability is better for piloting
+                    ability = pilot_meta.ability_value or 0
+                    ability_score = ability * 10
+                    action.add_reasoning(f"Ability {ability}", ability_score)
+
+                    # Prefer matching pilots (check gametext for ship name)
+                    if pilot_meta.gametext and ship_name and ship_name.lower().replace('•', '') in pilot_meta.gametext.lower():
+                        action.add_reasoning(f"Matching pilot for {ship_name}!", +50.0)
+
+                    logger.debug(f"   {pilot_meta.title}: cost={deploy_cost}, ability={ability}, score={action.score}")
+
+                # Check affordability
+                if bs and pilot_meta.deploy_value:
+                    if bs.force_pile < pilot_meta.deploy_value:
+                        action.add_reasoning(f"Can't afford! Need {pilot_meta.deploy_value}, have {bs.force_pile}", -500.0)
+            else:
+                # Card not found in hand mapping - use basic scoring
+                action.add_reasoning(f"Pilot card {card_id} (unknown)", 0.0)
+                logger.warning(f"   ⚠️ Card {card_id} not found in hand - can't score properly")
 
             actions.append(action)
 
