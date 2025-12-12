@@ -4420,7 +4420,8 @@ class DeployPhasePlanner:
                     plan.reason = (f"Early game (turn {current_turn}): score {best_score:.0f} below "
                                   f"threshold {DEPLOY_EARLY_GAME_THRESHOLD}, holding for better play")
 
-                    # Skip all further plan additions
+                    # Mark phase as started so this plan gets cached properly
+                    plan.phase_started = True
                     self.current_plan = plan
                     return plan
 
@@ -4493,7 +4494,8 @@ class DeployPhasePlanner:
                             # Store the next-turn crush plan on board_state for other evaluators
                             board_state.next_turn_crush_plan = next_turn_crush
 
-                            # Skip all further plan additions
+                            # Mark phase as started so this plan gets cached properly
+                            plan.phase_started = True
                             self.current_plan = plan
                             return plan
                         else:
@@ -4550,7 +4552,8 @@ class DeployPhasePlanner:
                                 # Store the plan on board_state for other evaluators
                                 board_state.next_turn_crush_plan = next_turn_bleed_stop
 
-                                # Skip all further plan additions
+                                # Mark phase as started so this plan gets cached properly
+                                plan.phase_started = True
                                 self.current_plan = plan
                                 return plan
                             else:
@@ -4967,7 +4970,9 @@ class DeployPhasePlanner:
                     for char in eligible_chars[:]:
                         if force_remaining <= REINFORCE_THRESHOLD:
                             break
-                        if char['cost'] <= force_remaining - battle_reserve:
+                        # NOTE: No battle_reserve needed here - these are UNCONTESTED locations
+                        # (their_power == 0), so no battle will be initiated
+                        if char['cost'] <= force_remaining:
                             plan.instructions.append(DeploymentInstruction(
                                 card_blueprint_id=char['blueprint_id'],
                                 card_name=char['name'],
