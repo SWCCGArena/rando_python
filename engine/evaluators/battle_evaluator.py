@@ -9,13 +9,14 @@ Decision factors:
 - Ability test (ability >= 5 or card count >= 3)
 - Reserve deck (need cards for destiny draws)
 - Strategic threat assessment from GameStrategy
+- Opponent weapon presence (increases required advantage)
 
-Enhanced with threat levels:
-- CRUSH: Power advantage 6+ -> definitely battle
-- FAVORABLE: Power advantage 2-5 -> battle recommended
-- RISKY: Power diff -2 to +2 -> preemptive battle (contested is dangerous)
-- DANGEROUS: Power disadvantage 2-6 -> avoid unless necessary
-- RETREAT: Power disadvantage 6+ -> don't battle, consider retreat
+Enhanced with threat levels (conservative thresholds to account for attrition):
+- CRUSH: Power advantage 8+ -> definitely battle
+- FAVORABLE: Power advantage 6-7 -> battle recommended
+- MARGINAL: Power advantage 4-5 -> battle if no weapons
+- RISKY: Power diff 0 to +3 -> avoid unless necessary
+- DANGEROUS: Power disadvantage -> avoid/retreat
 """
 
 import logging
@@ -46,10 +47,38 @@ class BattleEvaluator(ActionEvaluator):
     - Ability requirements
     - Reserve deck status (for destiny draws)
     - Strategic threat assessment from GameStrategy
+    - Opponent weapons at location (lightsabers, blasters, etc.)
     """
 
     def __init__(self):
         super().__init__("Battle")
+
+    def _count_opponent_weapons_at_location(self, board_state, loc_idx: int) -> tuple[int, list[str]]:
+        """
+        Count opponent weapons at a location (attached to their characters).
+
+        Returns:
+            Tuple of (weapon_count, list of weapon names)
+        """
+        weapon_count = 0
+        weapon_names = []
+
+        if loc_idx >= len(board_state.locations):
+            return 0, []
+
+        loc = board_state.locations[loc_idx]
+        if not loc:
+            return 0, []
+
+        # Check each opponent card at the location
+        for card in loc.their_cards:
+            # Check attached cards (weapons are usually attached to characters)
+            for attached in card.attached_cards:
+                if attached.card_type and attached.card_type.lower() == "weapon":
+                    weapon_count += 1
+                    weapon_names.append(attached.card_title or attached.blueprint_id)
+
+        return weapon_count, weapon_names
 
     def _get_game_strategy(self, context: DecisionContext) -> Optional[GameStrategy]:
         """Get GameStrategy from board_state's strategy_controller"""
@@ -182,11 +211,16 @@ class BattleEvaluator(ActionEvaluator):
         loc_name = loc.site_name if loc else f"location #{loc_idx}"
         is_space = loc.is_space if loc else False
 
+        # Detect opponent weapons at this location
+        weapon_count, weapon_names = self._count_opponent_weapons_at_location(board_state, loc_idx)
+
         # Log the battle analysis for debugging
         logger.info(f"⚔️ BATTLE ANALYSIS at {loc_name}:")
         logger.info(f"   Power: {my_power} (me) vs {their_power} (them) = diff {power_diff}")
         logger.info(f"   Cards: {my_card_count} (me) vs {their_card_count} (them)")
         logger.info(f"   Ability: {my_ability}, ability test: {ability_test}")
+        if weapon_count > 0:
+            logger.info(f"   ⚠️ WEAPONS: {weapon_count} opponent weapons: {', '.join(weapon_names)}")
 
         # Check if this location is marked for fleeing in the deploy plan
         # Note: Flee status is tracked on LocationAnalysis.should_flee during plan creation
@@ -252,34 +286,54 @@ class BattleEvaluator(ActionEvaluator):
 
         # Calculate threat level FRESH from current power values
         # (Don't use stale cached values from game_strategy - those are outdated after deploy phase)
+        # CONSERVATIVE: Account for weapons which can swing battles before they resolve
         if game_strategy and their_power > 0:
-            # Get thresholds from config
+            # Get thresholds from config (but use more conservative values)
             favorable = game_strategy._get_config('BATTLE_FAVORABLE_THRESHOLD', 4)
             danger = game_strategy._get_config('BATTLE_DANGER_THRESHOLD', -6)
 
-            # Calculate fresh threat level
-            if power_diff >= favorable + 4:  # CRUSH
+            # Calculate effective power diff accounting for weapons
+            weapon_penalty = weapon_count * 2
+            effective_diff = power_diff - weapon_penalty
+
+            # Calculate fresh threat level with RAISED thresholds
+            # Old: CRUSH at favorable+4 (8), FAVORABLE at favorable (4)
+            # New: CRUSH at 8, FAVORABLE at 6, need +4 minimum for battle
+            if effective_diff >= 8:  # CRUSH - overwhelming
                 threat_level = ThreatLevel.CRUSH
-            elif power_diff >= favorable:  # FAVORABLE
+            elif effective_diff >= 6:  # FAVORABLE - strong advantage
                 threat_level = ThreatLevel.FAVORABLE
-            elif power_diff >= -favorable:  # RISKY (contested)
+            elif effective_diff >= 4:  # Still worth fighting
+                threat_level = ThreatLevel.FAVORABLE
+            elif effective_diff >= 0:  # RISKY - marginal, avoid if possible
                 threat_level = ThreatLevel.RISKY
-            elif power_diff >= danger:  # DANGEROUS
+            elif effective_diff >= danger:  # DANGEROUS
                 threat_level = ThreatLevel.DANGEROUS
             else:  # RETREAT
                 threat_level = ThreatLevel.RETREAT
 
-            logger.debug(f"⚔️ Fresh threat level at loc {loc_idx}: power_diff={power_diff}, threat={threat_level.value}")
+            logger.debug(f"⚔️ Fresh threat level at loc {loc_idx}: power_diff={power_diff}, "
+                        f"weapons={weapon_count}, effective_diff={effective_diff}, threat={threat_level.value}")
+
+            # Apply weapon penalty to score
+            if weapon_count > 0:
+                action.add_reasoning(
+                    f"Opponent has {weapon_count} weapon(s) - need extra advantage",
+                    -weapon_count * 10.0
+                )
 
             if threat_level == ThreatLevel.CRUSH:
                 action.add_reasoning(f"Overwhelming advantage (+{power_diff}) - crush them!", VERY_GOOD_DELTA)
                 return
             elif threat_level == ThreatLevel.FAVORABLE:
-                action.add_reasoning(f"Good battle odds (+{power_diff})", GOOD_DELTA * 2)
+                if effective_diff >= 6:
+                    action.add_reasoning(f"Strong battle odds (+{power_diff})", GOOD_DELTA * 3)
+                else:
+                    action.add_reasoning(f"Good battle odds (+{power_diff})", GOOD_DELTA * 2)
                 return
             elif threat_level == ThreatLevel.RISKY:
-                # Contested locations are threats - better to battle now than let them reinforce
-                action.add_reasoning(f"Contested location - preemptive battle", GOOD_DELTA)
+                # Marginal advantage - risky due to attrition
+                action.add_reasoning(f"Marginal advantage ({power_diff}) - risky, attrition likely", GOOD_DELTA * 0.5)
                 return
             elif threat_level == ThreatLevel.DANGEROUS:
                 action.add_reasoning(f"Dangerous odds ({power_diff}) - avoid battle", BAD_DELTA * 2)
@@ -289,29 +343,46 @@ class BattleEvaluator(ActionEvaluator):
                 return
 
         # Fallback: Battle logic when GameStrategy not available
-        # IMPORTANT: When we have a power advantage, we should ALMOST ALWAYS battle!
-        # Battles are how we win the game - force drains are based on control.
-        # Scores need to be HIGH (50+) to beat PassEvaluator's "save force" bonuses.
+        # CONSERVATIVE THRESHOLDS: A +2 power advantage can still result in losing
+        # all your characters due to destiny-based attrition. Require higher margins.
+        # Weapon presence requires even higher advantage (weapons fire before battle resolves).
 
-        if power_diff >= 6:
+        # Calculate effective power diff accounting for weapons
+        # Each weapon represents potential to hit/kill one of our characters before battle
+        weapon_penalty = weapon_count * 2  # Weapons effectively reduce our advantage
+        effective_diff = power_diff - weapon_penalty
+
+        if weapon_count > 0:
+            action.add_reasoning(
+                f"Opponent has {weapon_count} weapon(s) - need extra advantage",
+                -weapon_count * 10.0  # -10 per weapon
+            )
+
+        if effective_diff >= 8:
             # Overwhelming advantage - definitely battle
             action.add_reasoning(f"Crushing advantage (+{power_diff}) - BATTLE!", VERY_GOOD_DELTA)
-        elif power_diff >= 4:
+        elif effective_diff >= 6:
             # Strong advantage - highly recommended
             action.add_reasoning(f"Strong advantage (+{power_diff}) - battle!", 80.0)
-        elif power_diff >= 2:
-            # Good odds - battle recommended (score high enough to beat Pass)
+        elif effective_diff >= 4:
+            # Good odds - battle recommended
             action.add_reasoning(f"Good advantage (+{power_diff}) - battle!", 60.0)
-        elif power_diff >= 0:
-            # Even fight - still worth battling to contest
-            action.add_reasoning(f"Even fight ({power_diff}) - battle to contest", 40.0)
-        elif power_diff >= -2:
-            # Close fight - only battle if we have good ability for destiny
-            if ability_test:
-                action.add_reasoning(f"Close fight ({power_diff}) but good ability ({my_ability}) - risky battle", GOOD_DELTA)
+        elif effective_diff >= 2:
+            # Marginal advantage - risky, attrition likely
+            if weapon_count > 0:
+                action.add_reasoning(f"Marginal advantage (+{power_diff}) with weapons present - risky!", 20.0)
             else:
-                action.add_reasoning(f"Close fight ({power_diff}) without ability - avoid", BAD_DELTA)
-        elif power_diff >= -5:
+                action.add_reasoning(f"Marginal advantage (+{power_diff}) - risky battle", 35.0)
+        elif effective_diff >= 0:
+            # Even or slight advantage - avoid unless forced
+            if ability_test and weapon_count == 0:
+                action.add_reasoning(f"Even fight ({power_diff}) with good ability - risky", 15.0)
+            else:
+                action.add_reasoning(f"Even fight ({power_diff}) - avoid, attrition likely", BAD_DELTA)
+        elif effective_diff >= -2:
+            # Close fight but losing - avoid
+            action.add_reasoning(f"Close fight ({power_diff}) - avoid, will take losses", BAD_DELTA * 2)
+        elif effective_diff >= -5:
             # Disadvantage - avoid unless desperate
             action.add_reasoning(f"Losing battle ({power_diff}) - AVOID!", BAD_DELTA * 3)
         else:
