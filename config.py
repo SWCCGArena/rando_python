@@ -8,6 +8,11 @@ try:
 except ImportError:
     _SECRETS_PASSWORD = None
 
+try:
+    from credentials import GEMP_USERNAME as _SECRETS_USERNAME
+except ImportError:
+    _SECRETS_USERNAME = None
+
 @dataclass
 class Config:
     """Configuration for the Rando Cal bot"""
@@ -19,8 +24,9 @@ class Config:
     DEBUG: bool = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
 
     # GEMP server settings
-    GEMP_SERVER_URL: str = os.environ.get('GEMP_SERVER_URL', 'http://localhost:8082/gemp-swccg-server/')
-    GEMP_USERNAME: str = os.environ.get('GEMP_USERNAME', 'rando_cal')
+    # Default to 200monkeys test server - NOT production GEMP
+    GEMP_SERVER_URL: str = os.environ.get('GEMP_SERVER_URL', 'https://www.200monkeys.com/gemp-swccg-server/')
+    GEMP_USERNAME: str = os.environ.get('GEMP_USERNAME', _SECRETS_USERNAME or 'rando_cal')
     # Password priority: env var > credentials.py > empty (will fail login)
     GEMP_PASSWORD: str = os.environ.get('GEMP_PASSWORD', _SECRETS_PASSWORD or '')
 
