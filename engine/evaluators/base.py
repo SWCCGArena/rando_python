@@ -12,6 +12,8 @@ from enum import Enum
 import logging
 import random
 
+from ..strategy_profile import get_current_profile, StrategyMode
+
 logger = logging.getLogger(__name__)
 
 
@@ -278,6 +280,29 @@ class PassEvaluator(ActionEvaluator):
         if context.board_state:
             bs = context.board_state
 
+            # STRATEGY PROFILE: Adjust pass preference based on game position
+            # Aggressive/Desperation = lower pass score, Defensive/Crushing = higher
+            profile = get_current_profile(bs)
+            pass_multiplier = profile.pass_multiplier
+
+            # Apply strategy-based adjustment
+            if profile.mode == StrategyMode.DESPERATION:
+                action.add_reasoning("DESPERATION: Must act, not pass!", -8.0)
+            elif profile.mode == StrategyMode.AGGRESSIVE:
+                action.add_reasoning("AGGRESSIVE: Push harder, less passing", -4.0)
+            elif profile.mode == StrategyMode.DEFENSIVE:
+                action.add_reasoning("DEFENSIVE: Ahead, can afford to pass", +3.0)
+            elif profile.mode == StrategyMode.CRUSHING:
+                action.add_reasoning("CRUSHING: Way ahead, play safe", +5.0)
+
+            # EARLY GAME AGGRESSION: Turns 1-3, halve all pass bonuses to encourage action
+            # This prevents the bot from being too passive when it needs to establish board presence
+            early_game_multiplier = 0.5 if context.turn_number <= 3 else 1.0
+            # Combine with strategy multiplier
+            combined_multiplier = early_game_multiplier * pass_multiplier
+            if context.turn_number <= 3:
+                action.add_reasoning("Early game - reduced pass preference", -3.0)
+
             # CRITICAL: Don't apply "save force" logic during certain decisions!
             # - ACTIVATE: Costs nothing, just moves cards from reserve to force pile
             # - DRAW: Drawing IS what we want to do
@@ -314,26 +339,31 @@ class PassEvaluator(ActionEvaluator):
                 return [action]  # Don't add resource-based bonuses
 
             if bs.force_pile < 3 and not is_activate_decision and not is_draw_decision:
-                action.add_reasoning("Low on Force - prefer to pass", +5.0)
+                bonus = 2.0 * combined_multiplier
+                action.add_reasoning("Low on Force - prefer to pass", bonus)
 
             if bs.reserve_deck_low():
-                action.add_reasoning("Reserve deck low - conserve cards", +3.0)
+                bonus = 3.0 * combined_multiplier
+                action.add_reasoning("Reserve deck low - conserve cards", bonus)
 
             # Hand management: If hand is small, save force for drawing
             # BUT NOT DURING ACTIVATE or DRAW - we're already drawing!
             hand_size = bs.hand_size if bs.hand_size > 0 else len(bs.cards_in_hand)
             if not is_activate_decision and not is_draw_decision:
                 if hand_size < 5:
-                    # Small hand - strongly prefer passing to save force for draw phase
-                    action.add_reasoning(f"Small hand ({hand_size}) - save force for drawing", +15.0)
+                    # Small hand - prefer passing to save force for draw phase
+                    bonus = 8.0 * combined_multiplier
+                    action.add_reasoning(f"Small hand ({hand_size}) - save force for drawing", bonus)
                 elif hand_size < 7:
-                    # Below target hand size - moderately prefer passing
-                    action.add_reasoning(f"Hand below target ({hand_size}/7) - conserve force", +8.0)
+                    # Below target hand size - slightly prefer passing
+                    bonus = 4.0 * combined_multiplier
+                    action.add_reasoning(f"Hand below target ({hand_size}/7) - conserve force", bonus)
 
             # During Move phase, be more conservative to save force for drawing
             phase_lower = (context.phase or "").lower()
             if "move" in phase_lower and bs.force_pile <= 4 and hand_size < 7:
-                action.add_reasoning("Move phase + low force + small hand - pass to draw", +10.0)
+                bonus = 10.0 * combined_multiplier
+                action.add_reasoning("Move phase + low force + small hand - pass to draw", bonus)
 
         return [action]
 

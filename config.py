@@ -41,7 +41,7 @@ class Config:
     # characters to a location. Prevents deploying lone weak characters that get
     # overwhelmed. From C# deployThresholdSlider (typical value 6-8).
     # Controlled by admin UI slider.
-    DEPLOY_THRESHOLD: int = 6        # Don't deploy until we can deploy this much power
+    DEPLOY_THRESHOLD: int = 4        # Don't deploy until we can deploy this much power (reduced from 6 for early aggression)
 
     # AI configuration - Force Economy
     FORCE_GEN_TARGET: int = 6        # Target force generation (icons)

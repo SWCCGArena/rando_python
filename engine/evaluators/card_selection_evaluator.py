@@ -29,11 +29,11 @@ from ..shield_strategy import score_shield_for_deployment
 
 logger = logging.getLogger(__name__)
 
-# Rank deltas (from C# BotAIHelper)
-VERY_GOOD_DELTA = 999.0
+# Rank deltas (from C# BotAIHelper) - normalized for better decision nuance
+VERY_GOOD_DELTA = 150.0  # Reduced from 999 - strongly prefer but allows comparison
 GOOD_DELTA = 10.0
 BAD_DELTA = -10.0
-VERY_BAD_DELTA = -999.0
+VERY_BAD_DELTA = -150.0  # Reduced from -999 - strongly avoid but allows override
 
 
 class CardSelectionEvaluator(ActionEvaluator):

@@ -18,14 +18,15 @@ import logging
 from typing import List, Optional
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 from ..game_strategy import GameStrategy, HAND_SOFT_CAP, HAND_HARD_CAP
+from ..strategy_profile import get_current_profile, StrategyMode
 
 logger = logging.getLogger(__name__)
 
-# Rank deltas (from C# BotAIHelper)
-VERY_GOOD_DELTA = 999.0
+# Rank deltas (from C# BotAIHelper) - normalized for better decision nuance
+VERY_GOOD_DELTA = 150.0  # Reduced from 999 - strongly prefer but allows comparison
 GOOD_DELTA = 10.0
 BAD_DELTA = -10.0
-VERY_BAD_DELTA = -999.0
+VERY_BAD_DELTA = -150.0  # Reduced from -999 - strongly avoid but allows override
 
 # Draw thresholds (from C# AICACHandler)
 TARGET_HAND_SIZE = 7  # Target hand size before extra draw penalties
@@ -154,11 +155,26 @@ class DrawEvaluator(ActionEvaluator):
         - GameStrategy hand size caps and force gen awareness
         - Future turn planning (save force for expensive cards)
         - Late-game life force preservation
+        - Dynamic strategy profiles for game-state-aware decisions
 
         CRITICAL: When life force is low, reduce max hand size proportionally.
         Having 12 cards in hand but only 2 force to spend is TERRIBLE.
         """
         from ..card_loader import get_card
+
+        # === STRATEGY PROFILE ADJUSTMENT ===
+        # Modify draw preference based on game position
+        profile = get_current_profile(board_state)
+        draw_multiplier = profile.draw_multiplier
+
+        if profile.mode == StrategyMode.DESPERATION:
+            action.add_reasoning("DESPERATION: Need action, not cards!", -10.0)
+        elif profile.mode == StrategyMode.AGGRESSIVE:
+            action.add_reasoning("AGGRESSIVE: Less drawing, more deploying", -5.0)
+        elif profile.mode == StrategyMode.DEFENSIVE:
+            action.add_reasoning("DEFENSIVE: Build hand for destiny draws", 8.0)
+        elif profile.mode == StrategyMode.CRUSHING:
+            action.add_reasoning("CRUSHING: Draw for better destiny", 12.0)
 
         hand_size = board_state.hand_size if hasattr(board_state, 'hand_size') else 7
         reserve_deck = board_state.reserve_deck if hasattr(board_state, 'reserve_deck') else 20

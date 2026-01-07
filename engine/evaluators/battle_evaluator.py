@@ -23,14 +23,15 @@ import logging
 from typing import List, Optional
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 from ..game_strategy import GameStrategy, ThreatLevel
+from ..strategy_profile import get_current_profile, StrategyMode
 
 logger = logging.getLogger(__name__)
 
-# Rank deltas (from C# BotAIHelper)
-VERY_GOOD_DELTA = 999.0
+# Rank deltas (from C# BotAIHelper) - normalized for better decision nuance
+VERY_GOOD_DELTA = 150.0  # Reduced from 999 - crushing advantage still high but comparable
 GOOD_DELTA = 10.0
 BAD_DELTA = -10.0
-VERY_BAD_DELTA = -999.0
+VERY_BAD_DELTA = -150.0  # Reduced from -999 - bad odds still avoided but can be overridden
 
 # Battle thresholds (from C# AICACHandler)
 POWER_DIFF_FOR_BATTLE = 4  # Acceptable power disadvantage
@@ -53,32 +54,48 @@ class BattleEvaluator(ActionEvaluator):
     def __init__(self):
         super().__init__("Battle")
 
-    def _count_opponent_weapons_at_location(self, board_state, loc_idx: int) -> tuple[int, list[str]]:
+    def _count_opponent_weapons_at_location(self, board_state, loc_idx: int) -> tuple[int, list[str], float]:
         """
-        Count opponent weapons at a location (attached to their characters).
+        Count opponent weapons at a location and calculate total threat.
+
+        Weapon threat is based on wielder's ability:
+        - Higher ability = more accurate weapon fire
+        - Lightsaber on Luke (ability 6) is more dangerous than blaster on trooper (ability 1)
 
         Returns:
-            Tuple of (weapon_count, list of weapon names)
+            Tuple of (weapon_count, list of weapon names, total_threat_score)
         """
         weapon_count = 0
         weapon_names = []
+        total_threat = 0.0
 
         if loc_idx >= len(board_state.locations):
-            return 0, []
+            return 0, [], 0.0
 
         loc = board_state.locations[loc_idx]
         if not loc:
-            return 0, []
+            return 0, [], 0.0
 
         # Check each opponent card at the location
         for card in loc.their_cards:
+            # Get wielder's ability (default 1 if unknown)
+            wielder_ability = getattr(card, 'ability', None) or 1
+
             # Check attached cards (weapons are usually attached to characters)
             for attached in card.attached_cards:
                 if attached.card_type and attached.card_type.lower() == "weapon":
                     weapon_count += 1
                     weapon_names.append(attached.card_title or attached.blueprint_id)
 
-        return weapon_count, weapon_names
+                    # Calculate weapon threat based on wielder ability
+                    # Base threat: 5 (any weapon is dangerous)
+                    # Ability bonus: wielder_ability * 3 (higher ability = better accuracy)
+                    # So: ability 1 = 8 threat, ability 6 = 23 threat
+                    weapon_threat = 5.0 + (wielder_ability * 3.0)
+                    total_threat += weapon_threat
+                    logger.debug(f"   Weapon {attached.card_title}: wielder ability {wielder_ability}, threat {weapon_threat}")
+
+        return weapon_count, weapon_names, total_threat
 
     def _get_game_strategy(self, context: DecisionContext) -> Optional[GameStrategy]:
         """Get GameStrategy from board_state's strategy_controller"""
@@ -196,14 +213,32 @@ class BattleEvaluator(ActionEvaluator):
 
         Ported from C# AICACHandler.RankBattleAction
         Enhanced with threat level assessment from GameStrategy.
+        Enhanced with dynamic strategy profiles for game-state-aware decisions.
         """
+        # Get strategy profile for risk tolerance adjustment
+        profile = get_current_profile(board_state)
+        risk_tolerance = profile.risk_tolerance  # Negative = need MORE advantage, positive = accept disadvantage
+        battle_multiplier = profile.battle_multiplier
+
+        # Apply strategy-based reasoning
+        if profile.mode == StrategyMode.DESPERATION:
+            action.add_reasoning("DESPERATION: Taking risky battles!", 15.0)
+        elif profile.mode == StrategyMode.AGGRESSIVE:
+            action.add_reasoning("AGGRESSIVE: More willing to fight", 8.0)
+        elif profile.mode == StrategyMode.DEFENSIVE:
+            action.add_reasoning("DEFENSIVE: Being picky about battles", -10.0)
+        elif profile.mode == StrategyMode.CRUSHING:
+            action.add_reasoning("CRUSHING: Only fight sure wins", -20.0)
+
         my_power = board_state.my_power_at_location(loc_idx)
         their_power = board_state.their_power_at_location(loc_idx)
         my_ability = board_state.my_ability_at_location(loc_idx)
         my_card_count = board_state.my_card_count_at_location(loc_idx) if hasattr(board_state, 'my_card_count_at_location') else 0
         their_card_count = board_state.their_card_count_at_location(loc_idx) if hasattr(board_state, 'their_card_count_at_location') else 0
 
-        power_diff = my_power - their_power
+        # Apply risk_tolerance: positive = accept more risk, negative = need more advantage
+        # This effectively shifts our perception of the power differential
+        power_diff = my_power - their_power + risk_tolerance
         ability_test = (my_ability >= ABILITY_TEST_HIGH or my_card_count >= ABILITY_TEST_LOW)
 
         # Get location name for logging
@@ -211,8 +246,8 @@ class BattleEvaluator(ActionEvaluator):
         loc_name = loc.site_name if loc else f"location #{loc_idx}"
         is_space = loc.is_space if loc else False
 
-        # Detect opponent weapons at this location
-        weapon_count, weapon_names = self._count_opponent_weapons_at_location(board_state, loc_idx)
+        # Detect opponent weapons at this location (with ability-based threat scoring)
+        weapon_count, weapon_names, weapon_threat = self._count_opponent_weapons_at_location(board_state, loc_idx)
 
         # Log the battle analysis for debugging
         logger.info(f"⚔️ BATTLE ANALYSIS at {loc_name}:")
@@ -220,7 +255,7 @@ class BattleEvaluator(ActionEvaluator):
         logger.info(f"   Cards: {my_card_count} (me) vs {their_card_count} (them)")
         logger.info(f"   Ability: {my_ability}, ability test: {ability_test}")
         if weapon_count > 0:
-            logger.info(f"   ⚠️ WEAPONS: {weapon_count} opponent weapons: {', '.join(weapon_names)}")
+            logger.info(f"   ⚠️ WEAPONS: {weapon_count} opponent weapons (threat={weapon_threat:.0f}): {', '.join(weapon_names)}")
 
         # Check if this location is marked for fleeing in the deploy plan
         # Note: Flee status is tracked on LocationAnalysis.should_flee during plan creation
@@ -292,9 +327,11 @@ class BattleEvaluator(ActionEvaluator):
             favorable = game_strategy._get_config('BATTLE_FAVORABLE_THRESHOLD', 4)
             danger = game_strategy._get_config('BATTLE_DANGER_THRESHOLD', -6)
 
-            # Calculate effective power diff accounting for weapons
-            weapon_penalty = weapon_count * 2
-            effective_diff = power_diff - weapon_penalty
+            # Calculate effective power diff accounting for weapons (using threat-based scoring)
+            # weapon_threat is based on wielder ability: ability 6 = 23 threat, ability 1 = 8 threat
+            # Convert threat to effective power penalty: ~10 threat = ~1 power disadvantage
+            weapon_power_penalty = weapon_threat / 5.0  # Higher ability weapons are more impactful
+            effective_diff = power_diff - weapon_power_penalty
 
             # Calculate fresh threat level with RAISED thresholds
             # Old: CRUSH at favorable+4 (8), FAVORABLE at favorable (4)
@@ -313,13 +350,13 @@ class BattleEvaluator(ActionEvaluator):
                 threat_level = ThreatLevel.RETREAT
 
             logger.debug(f"⚔️ Fresh threat level at loc {loc_idx}: power_diff={power_diff}, "
-                        f"weapons={weapon_count}, effective_diff={effective_diff}, threat={threat_level.value}")
+                        f"weapon_threat={weapon_threat:.0f}, effective_diff={effective_diff:.1f}, threat={threat_level.value}")
 
-            # Apply weapon penalty to score
+            # Apply weapon penalty to score (ability-based: high ability weapons hurt more)
             if weapon_count > 0:
                 action.add_reasoning(
-                    f"Opponent has {weapon_count} weapon(s) - need extra advantage",
-                    -weapon_count * 10.0
+                    f"Opponent has {weapon_count} weapon(s) (threat={weapon_threat:.0f}) - dangerous!",
+                    -weapon_threat  # Use threat score directly as penalty
                 )
 
             if threat_level == ThreatLevel.CRUSH:
@@ -347,15 +384,15 @@ class BattleEvaluator(ActionEvaluator):
         # all your characters due to destiny-based attrition. Require higher margins.
         # Weapon presence requires even higher advantage (weapons fire before battle resolves).
 
-        # Calculate effective power diff accounting for weapons
-        # Each weapon represents potential to hit/kill one of our characters before battle
-        weapon_penalty = weapon_count * 2  # Weapons effectively reduce our advantage
-        effective_diff = power_diff - weapon_penalty
+        # Calculate effective power diff accounting for weapons (using threat-based scoring)
+        # Each weapon's threat is based on wielder ability - high ability = more dangerous
+        weapon_power_penalty = weapon_threat / 5.0  # Higher ability weapons are more impactful
+        effective_diff = power_diff - weapon_power_penalty
 
         if weapon_count > 0:
             action.add_reasoning(
-                f"Opponent has {weapon_count} weapon(s) - need extra advantage",
-                -weapon_count * 10.0  # -10 per weapon
+                f"Opponent has {weapon_count} weapon(s) (threat={weapon_threat:.0f}) - dangerous!",
+                -weapon_threat  # Use threat score directly as penalty
             )
 
         if effective_diff >= 8:

@@ -20,11 +20,11 @@ from ..game_strategy import GameStrategy, ThreatLevel
 
 logger = logging.getLogger(__name__)
 
-# Rank deltas (from C# BotAIHelper)
-VERY_GOOD_DELTA = 999.0
+# Rank deltas (from C# BotAIHelper) - normalized for better decision nuance
+VERY_GOOD_DELTA = 150.0  # Reduced from 999 - still strongly prefer but allows comparison
 GOOD_DELTA = 10.0
 BAD_DELTA = -10.0
-VERY_BAD_DELTA = -999.0
+VERY_BAD_DELTA = -150.0  # Reduced from -999 - still strongly avoid but allows override
 
 # Move thresholds (from C# AICACHandler)
 POWER_DIFF_FOR_FLEE = 2  # Their power advantage to trigger flee

@@ -23,8 +23,8 @@ LATE_GAME_LIFE_FORCE = 12  # Below this, be more strategic
 CRITICAL_LIFE_FORCE = 6  # Below this, minimize activation
 
 # Force activation limits
-MAX_FORCE_PILE = 20  # Never have more than this in force pile
-RESERVE_FOR_DESTINY_CONTESTED = 2  # Cards to keep when locations are contested
+MAX_FORCE_PILE = 25  # Never have more than this in force pile (increased from 20 for bigger plays)
+RESERVE_FOR_DESTINY_CONTESTED = 4  # Cards to keep when locations are contested (increased from 2)
 RESERVE_FOR_DESTINY_SAFE = 1  # Cards to keep when no contested locations
 
 
@@ -92,8 +92,13 @@ class ForceActivationEvaluator(ActionEvaluator):
 
         # Standard force activation logic
         if 'force to activate' in text_lower or 'activate force' in text_lower:
-            # Calculate optimal amount using board state logic
-            amount = self._calculate_activation_amount(bs, max_val)
+            # EARLY GAME AGGRESSION: Turns 1-3, activate maximum to build resources
+            if context.turn_number <= 3:
+                amount = max_val
+                logger.info(f"🚀 Early game (turn {context.turn_number}) - activating max force: {amount}")
+            else:
+                # Calculate optimal amount using board state logic
+                amount = self._calculate_activation_amount(bs, max_val)
         else:
             # Unknown INTEGER decision - use max value
             amount = max_val

@@ -26,6 +26,8 @@ from ..card_loader import get_card
 from ..game_strategy import GameStrategy, ThreatLevel
 from ..deploy_planner import DeployPhasePlanner, DeployStrategy
 from ..shield_strategy import score_shield_for_deployment, get_shield_tracker, reset_shield_tracker
+from ..combo_scorer import score_combo_potential
+from ..strategy_profile import get_current_profile, StrategyMode
 from config import config
 
 logger = logging.getLogger(__name__)
@@ -494,18 +496,32 @@ class DeployEvaluator(ActionEvaluator):
                 display_text=action_text
             )
 
+            # === STRATEGY PROFILE ADJUSTMENT ===
+            # Modify deploy enthusiasm based on game position
+            profile = get_current_profile(bs) if bs else None
+            if profile:
+                if profile.mode == StrategyMode.DESPERATION:
+                    action.add_reasoning("DESPERATION: Deploy aggressively!", 20.0)
+                elif profile.mode == StrategyMode.AGGRESSIVE:
+                    action.add_reasoning("AGGRESSIVE: Push board presence", 10.0)
+                elif profile.mode == StrategyMode.DEFENSIVE:
+                    action.add_reasoning("DEFENSIVE: Deploy more cautiously", -5.0)
+                elif profile.mode == StrategyMode.CRUSHING:
+                    action.add_reasoning("CRUSHING: Conservative deploys only", -15.0)
+
             # === APPLY PHASE-LEVEL PLAN ===
             # If the planner decided to HOLD BACK, penalize ALL deploy actions
             # This ensures we don't deploy piecemeal when we should save up
+            # Reduced from -500 to -150 for better nuance - strong penalty but can be overridden
             if deploy_plan and deploy_plan.strategy == DeployStrategy.HOLD_BACK:
-                action.add_reasoning(f"HOLD BACK: {deploy_plan.reason}", -500.0)
+                action.add_reasoning(f"HOLD BACK: {deploy_plan.reason}", -150.0)
                 actions.append(action)
                 continue  # Skip individual card evaluation - plan says don't deploy
 
             # Check if we already tried deploying this card (avoid loops)
             card_id = context.card_ids[i] if i < len(context.card_ids) else None
             if card_id and card_id in self.pending_deploy_card_ids:
-                action.add_reasoning("Already tried deploying this card this turn", -500.0)
+                action.add_reasoning("Already tried deploying this card this turn", -100.0)  # Reduced from -500
                 actions.append(action)
                 continue
 
@@ -576,6 +592,44 @@ class DeployEvaluator(ActionEvaluator):
                             action.add_reasoning("LOCATION - deploy first!", +200.0)
                         else:
                             action.add_reasoning(f"Card: {card_metadata.title}", 0.0)
+
+                    # =======================================================
+                    # COMBO SCORING - Bonus for synergistic cards
+                    # Check if this card has combo partners on board or in hand
+                    # =======================================================
+                    if bs and card_metadata.title:
+                        # Collect card titles on board (our cards)
+                        cards_on_board = []
+                        for cid, card_in_play in bs.cards_in_play.items():
+                            if card_in_play.owner == bs.my_player_name:
+                                card_title = card_in_play.card_title
+                                if not card_title and card_in_play.blueprint_id:
+                                    card_meta = get_card(card_in_play.blueprint_id)
+                                    if card_meta:
+                                        card_title = card_meta.title
+                                if card_title:
+                                    cards_on_board.append(card_title)
+
+                        # Collect card titles in hand
+                        cards_in_hand = []
+                        for hand_card in bs.cards_in_hand:
+                            if hand_card.blueprint_id:
+                                hand_meta = get_card(hand_card.blueprint_id)
+                                if hand_meta and hand_meta.title:
+                                    cards_in_hand.append(hand_meta.title)
+
+                        # Calculate combo bonus
+                        combo_score, combo_reason = score_combo_potential(
+                            card_title=card_metadata.title,
+                            blueprint_id=blueprint_id,
+                            cards_on_board=cards_on_board,
+                            cards_in_hand=cards_in_hand,
+                            same_location_cards=None  # TODO: could add location-specific combos later
+                        )
+
+                        if combo_score > 0:
+                            action.add_reasoning(combo_reason, combo_score)
+                            logger.info(f"🔗 {card_metadata.title}: {combo_reason} (+{combo_score:.0f})")
 
                     # Always check affordability
                     if bs and bs.force_pile < card_metadata.deploy_value:

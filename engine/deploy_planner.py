@@ -68,8 +68,8 @@ REACT_THREAT_THRESHOLD = 8
 
 # Early game hold-back: minimum score to deploy in turns 1-3
 # Prevents weak "establish" plays that waste cards; bot waits for better opportunity
-# Based on log analysis: 110 threshold filters ~47% of early deploys
-DEPLOY_EARLY_GAME_THRESHOLD = 110
+# Reduced from 110 to 80 to allow more early game plays (was filtering 47%)
+DEPLOY_EARLY_GAME_THRESHOLD = 80
 DEPLOY_EARLY_GAME_TURNS = 3  # How many turns count as "early game"
 
 # Mid-late game reinforcement: target power level to reinforce friendly locations to
@@ -5875,7 +5875,8 @@ class DeployPhasePlanner:
         else:
             # Card is NOT in the plan
             if self.current_plan.strategy == DeployStrategy.HOLD_BACK:
-                return (-500.0, f"HOLD BACK: {self.current_plan.reason}")
+                # Reduced from -500 to -150 for better nuance
+                return (-150.0, f"HOLD BACK: {self.current_plan.reason}")
 
             # Check if we can take extra actions
             # Plan complete + have force above reserve = allow extra actions
