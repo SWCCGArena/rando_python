@@ -1,0 +1,179 @@
+{
+  "version": "1.6.1",
+  "name": "tuned_no_gameplan",
+  "description": "tuned_v3 settings but with GamePlan DISABLED to isolate impact",
+
+  "game_plan": {
+    "enabled": false
+  },
+
+  "adaptive_strategy": {
+    "enabled": true,
+    "attack_mode_drain_threshold": -2,
+    "draw_mode_missing_types": true,
+    "critical_drain_turns": 3,
+    "urgency_life_force_critical": 15,
+    "urgency_life_force_urgent": 25,
+    "urgency_drain_gap_critical": -4,
+    "urgency_drain_gap_urgent": -2
+  },
+
+  "global": {
+    "chaos_percent": 15,
+    "max_hand_size": 16,
+    "hand_soft_cap": 12,
+    "force_gen_target": 6,
+    "max_reserve_checks": 2
+  },
+
+  "deploy_strategy": {
+    "deploy_threshold": 4,
+    "deploy_overkill_threshold": 8,
+    "deploy_comfortable_threshold": 4,
+    "early_game_threshold": 50,
+    "early_game_turns": 3,
+    "reinforce_target_power": 10,
+    "matching_pilot_bonus": 10,
+    "low_enemy_threshold": 4,
+    "max_establish_locations": 2,
+    "uncontested_fortified_threshold": 10,
+    "reinforce_force_threshold": 4,
+    "min_force_for_weapons": 2,
+    "min_establish_power": 4,
+    "weak_char_buddy_required": false,
+    "weak_character_power": 1
+  },
+
+  "battle_strategy": {
+    "favorable_threshold": 4,
+    "danger_threshold": -6,
+    "retreat_threshold": -6,
+    "dangerous_threshold": -2,
+    "force_reserve": 1,
+    "react_threat_threshold": 8,
+    "power_diff_for_battle": 3,
+    "ability_test_high": 4,
+    "ability_test_low": 3
+  },
+
+  "contest_strategy": {
+    "min_contest_advantage": 2,
+    "contest_power_margin": 2
+  },
+
+  "move_strategy": {
+    "power_diff_for_flee": 3,
+    "power_diff_for_buildup": 12,
+    "overkill_threshold": 4,
+    "establish_threshold": 6,
+    "contest_margin": 4,
+    "icon_bonus": 15.0,
+    "attack_power_advantage": 4,
+    "attack_min_power": 6,
+    "attack_score_base": 50.0,
+    "attack_crush_bonus": 25.0
+  },
+
+  "draw_strategy": {
+    "target_hand_size": 7,
+    "low_reserve_threshold": 6,
+    "small_hand_threshold": 5,
+    "aggressive_force_threshold": 10,
+    "deck_size_for_full_hand": 12,
+    "force_reserve_turn_threshold": 4,
+    "small_hand_for_reserve": 6,
+    "late_game_life_force": 12,
+    "critical_life_force": 6,
+    "expensive_card_threshold": 8,
+    "hold_back_draw_force_threshold": 6,
+    "hold_back_draw_life_threshold": 10,
+    "hold_back_draw_force_floor": 6,
+    "force_starved_activation": 8,
+    "force_starved_power_threshold": 6,
+    "force_starved_max_hand": 8
+  },
+
+  "force_activation_strategy": {
+    "late_game_life_force": 12,
+    "critical_life_force": 6,
+    "max_force_pile": 25,
+    "reserve_for_destiny_contested": 4,
+    "reserve_for_destiny_safe": 1
+  },
+
+  "card_selection_strategy": {
+    "low_reserve_threshold": 10,
+    "min_hand_size": 6
+  },
+
+  "action_text_strategy": {
+    "max_force_pile": 20,
+    "reserve_for_destiny": 3,
+    "reserve_for_destiny_endgame": 2
+  },
+
+  "gametext_abilities": {
+    "immunity_bonus_high": 25.0,
+    "immunity_bonus_low": 15.0,
+    "immunity_ratio_high": 0.5,
+    "immunity_ratio_low": 0.25,
+    "extra_destiny_bonus": 20.0,
+    "forfeit_immunity_bonus": 30.0,
+    "targeting_immunity_penalty": -100.0,
+    "pilot_power_bonus_weight": 5.0
+  },
+
+  "evaluator_weights": {
+    "deploy": {
+      "planned_target_bonus": 200,
+      "backup_target_bonus": 150,
+      "establish_presence_bonus": 50,
+      "reinforce_danger_bonus": 100,
+      "early_game_penalty": -50,
+      "immunity_value_bonus": 15.0
+    },
+    "battle": {
+      "very_good_delta": 150.0,
+      "good_delta": 10.0,
+      "bad_delta": -10.0,
+      "very_bad_delta": -150.0,
+      "initiate_bonus": 30,
+      "danger_penalty": -100,
+      "immunity_bonus_high": 25.0,
+      "immunity_bonus_low": 15.0,
+      "extra_destiny_bonus": 20.0
+    },
+    "move": {
+      "very_good_delta": 150.0,
+      "good_delta": 10.0,
+      "bad_delta": -10.0,
+      "very_bad_delta": -150.0,
+      "escape_danger_bonus": 100,
+      "join_battle_bonus": 80,
+      "reinforce_bonus": 60
+    },
+    "draw": {
+      "very_good_delta": 150.0,
+      "good_delta": 10.0,
+      "bad_delta": -10.0,
+      "very_bad_delta": -150.0,
+      "baseline_bonus": 30,
+      "hand_full_penalty": -50,
+      "low_hand_bonus": 20
+    },
+    "force_activation": {
+      "activate_all_bonus": 50,
+      "reserve_force_penalty": -10
+    },
+    "card_selection": {
+      "very_good_delta": 150.0,
+      "good_delta": 10.0,
+      "bad_delta": -10.0,
+      "very_bad_delta": -150.0
+    },
+    "action_text": {
+      "very_good_delta": 50.0,
+      "good_delta": 30.0
+    }
+  }
+}
