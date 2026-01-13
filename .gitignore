@@ -41,8 +41,6 @@ data/
 *.sqlite3
 
 # Logs
-logs/
-*.log
 
 # IDE
 .vscode/

@@ -1,0 +1,710 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<game_log started="2026-01-13T21:01:34.668180" bot="rando">
+  <event t="0.000" type="P">
+    <ge allParticipantIds="rando_cal,lepstein01" participantId="rando_cal" type="P" />
+  </event>
+  <event t="0.000" type="TC">
+    <ge participantId="rando_cal" type="TC" />
+  </event>
+  <event t="0.001" type="GPC">
+    <ge phase="Play starting cards" type="GPC" />
+  </event>
+  <event t="0.001" type="PCIP">
+    <ge blueprintId="-1_1" cardId="7" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="0.090" type="PCIP">
+    <ge blueprintId="-1_2" cardId="84" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="0.090" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="1" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="1" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="60" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="60" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations /><lightPowerAtLocations /></ge>
+  </event>
+  <event t="0.090" type="M">
+    <ge message="You're starting a game of Open" type="M" />
+  </event>
+  <event t="0.090" type="M">
+    <ge message="Players in the game are: lepstein01, rando_cal" type="M" />
+  </event>
+  <event t="1.526" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="1" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="1" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="60" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations /><lightPowerAtLocations /></ge>
+  </event>
+  <event t="1.527" type="IP">
+    <ge blueprintId="200_110" cardId="112" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="IP" zone="VOID" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="1.527" type="M">
+    <ge message="rando_cal targets to deploy &lt;div class='cardHint' value='200_110'&gt;•Knowledge And Defense (V)&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="1.527" type="PCIP">
+    <ge blueprintId="200_110" cardId="143" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="SIDE_OF_TABLE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="1.527" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='200_110'&gt;•Knowledge And Defense (V)&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="1.527" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="1" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="1" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="60" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations /><lightPowerAtLocations /></ge>
+  </event>
+  <event t="1.527" type="M">
+    <ge message="rando_cal stacks 22 cards from outside of deck  face down under &lt;div class='cardHint' value='200_110'&gt;•Knowledge And Defense (V)&lt;/div&gt;" type="M" />
+  </event>
+  <event t="1.528" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="1" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="1" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="60" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations /><lightPowerAtLocations /></ge>
+  </event>
+  <event t="17.461" type="M">
+    <ge message="rando_cal reveals Objective &lt;div class='cardHint' value='7_296'&gt;Carbon Chamber Testing&lt;/div&gt;" type="M" />
+  </event>
+  <event t="17.461" type="IP">
+    <ge blueprintId="7_296" cardId="133" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="IP" zone="RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="17.461" type="PCIP">
+    <ge blueprintId="12_76" cardId="166" collapsed="false" frozen="false" horizontal="true" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" systemName="Coruscant" type="PCIP" zone="LOCATIONS" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="17.462" type="M">
+    <ge message="lepstein01 deploys &lt;div class='cardHint' value='12_76' data-horizontal='true'&gt;•Coruscant: Jedi Council Chamber&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="17.462" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="1" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="4" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" /><lightPowerAtLocations locationIndex0="-1" /></ge>
+  </event>
+  <event t="17.462" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="1" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="4" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="58" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" /><lightPowerAtLocations locationIndex0="-1" /></ge>
+  </event>
+  <event t="17.462" type="PCIP">
+    <ge blueprintId="7_296" cardId="167" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="SIDE_OF_TABLE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="17.463" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='7_296'&gt;Carbon Chamber Testing&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="17.463" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="1" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="4" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="58" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" /><lightPowerAtLocations locationIndex0="-1" /></ge>
+  </event>
+  <event t="17.463" type="PCIP">
+    <ge blueprintId="5_166" cardId="168" collapsed="false" frozen="false" horizontal="true" inverted="false" locationIndex="1" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" systemName="Bespin" type="PCIP" zone="LOCATIONS" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="17.464" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='5_166' data-horizontal='true'&gt;•Cloud City: Carbonite Chamber&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="17.464" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="3" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="57" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" /></ge>
+  </event>
+  <event t="17.464" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="3" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="56" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" /></ge>
+  </event>
+  <event t="17.464" type="IP">
+    <ge blueprintId="211_8" cardId="107" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="IP" zone="VOID" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="17.464" type="CAC">
+    <ge blueprintId="211_8" cardId="107" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" otherCardIds="168" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="CAC" zone="VOID" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="17.464" type="M">
+    <ge message="rando_cal targets to deploy &lt;div class='cardHint' value='211_8'&gt;•Carbonite Chamber Console (V)&lt;/div&gt; from Reserve Deck on &lt;div class='cardHint' value='5_166' data-horizontal='true'&gt;•Cloud City: Carbonite Chamber&lt;/div&gt;" type="M" />
+  </event>
+  <event t="17.464" type="PCIP">
+    <ge blueprintId="211_8" cardId="169" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" targetCardId="168" type="PCIP" zone="ATTACHED" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="17.465" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='211_8'&gt;•Carbonite Chamber Console (V)&lt;/div&gt; from Reserve Deck on &lt;div class='cardHint' value='5_166' data-horizontal='true'&gt;•Cloud City: Carbonite Chamber&lt;/div&gt;" type="M" />
+  </event>
+  <event t="17.465" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="3" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="56" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" /></ge>
+  </event>
+  <event t="18.998" type="PCIP">
+    <ge blueprintId="200_126" cardId="170" collapsed="false" frozen="false" horizontal="true" inverted="false" locationIndex="1" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" systemName="Bespin" type="PCIP" zone="LOCATIONS" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="18.998" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='200_126' data-horizontal='true'&gt;•Cloud City: Security Tower (V)&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="18.998" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="55" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="18.998" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="54" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="18.999" type="PCIP">
+    <ge blueprintId="10_42" cardId="171" collapsed="false" frozen="true" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" targetCardId="170" type="PCIP" zone="ATTACHED" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="19.000" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='10_42'&gt;•Jabba's Prize&lt;/div&gt; from Reserve Deck into &lt;div class='cardHint' value='200_126' data-horizontal='true'&gt;•Cloud City: Security Tower (V)&lt;/div&gt; as an 'imprisoned' and 'frozen' captive" type="M" />
+  </event>
+  <event t="19.000" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="54" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="22.779" type="M">
+    <ge message="rando_cal reveals Starting Interrupt &lt;div class='cardHint' value='109_7'&gt;•Any Methods Necessary&lt;/div&gt;" type="M" />
+  </event>
+  <event t="22.780" type="IP">
+    <ge blueprintId="109_7" cardId="116" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="IP" zone="RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="22.780" type="M">
+    <ge message="lepstein01 reveals Starting Interrupt &lt;div class='cardHint' value='6_77'&gt;•The Signal&lt;/div&gt;" type="M" />
+  </event>
+  <event t="22.780" type="IP">
+    <ge blueprintId="6_77" cardId="49" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="IP" zone="RESERVE_DECK" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="22.780" type="M">
+    <ge message="rando_cal initiates playing &lt;div class='cardHint' value='109_7'&gt;•Any Methods Necessary&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="22.780" type="M">
+    <ge message="rando_cal plays &lt;div class='cardHint' value='109_7'&gt;•Any Methods Necessary&lt;/div&gt; as Starting Interrupt to take a prison and a bounty hunter (may also take a matching weapon and/or starship) into hand from Reserve Deck" type="M" />
+  </event>
+  <event t="22.780" type="IP">
+    <ge blueprintId="109_7" cardId="116" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="IP" zone="VOID" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="22.780" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="53" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="23.567" type="CA">
+    <ge blueprintId="200_126" cardId="170" collapsed="false" frozen="false" horizontal="true" inverted="false" locationIndex="1" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" systemName="Bespin" type="CA" zone="LOCATIONS" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="23.567" type="M">
+    <ge message="rando_cal initiates &lt;div class='cardHint' value='200_126' data-horizontal='true'&gt;•Cloud City: Security Tower (V)&lt;/div&gt; optional response" type="M" />
+  </event>
+  <event t="23.567" type="M">
+    <ge message="rando_cal targets to take Despair into hand from Reserve Deck using &lt;div class='cardHint' value='200_126' data-horizontal='true'&gt;•Cloud City: Security Tower (V)&lt;/div&gt;" type="M" />
+  </event>
+  <event t="23.567" type="PCIP">
+    <ge blueprintId="201_28" cardId="172" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="HAND" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="23.606" type="M">
+    <ge message="rando_cal takes &lt;div class='cardHint' value='201_28'&gt;•Despair (V)&lt;/div&gt; into hand from Reserve Deck" type="M" />
+  </event>
+  <event t="23.606" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="1" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="52" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="23.606" type="M">
+    <ge message="rando_cal shuffles Reserve Deck" type="M" />
+  </event>
+  <event t="23.606" type="RCFP">
+    <ge otherCardIds="84" participantId="rando_cal" type="RCFP" />
+  </event>
+  <event t="23.606" type="PCIP">
+    <ge blueprintId="-1_2" cardId="122" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="23.606" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="1" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="52" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="26.637" type="PCIP">
+    <ge blueprintId="6_164" cardId="173" collapsed="false" frozen="false" horizontal="true" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" systemName="Tatooine" type="PCIP" zone="HAND" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="26.637" type="PCIP">
+    <ge blueprintId="1_176" cardId="174" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="HAND" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="26.637" type="M">
+    <ge message="rando_cal takes &lt;div class='cardHint' value='6_164' data-horizontal='true'&gt;•Jabba's Palace: Dungeon&lt;/div&gt;, &lt;div class='cardHint' value='1_176'&gt;•Feltipern Trevagg&lt;/div&gt; into hand from Reserve Deck" type="M" />
+  </event>
+  <event t="26.637" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="3" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="50" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="26.637" type="RCFP">
+    <ge otherCardIds="122" type="RCFP" />
+  </event>
+  <event t="26.638" type="PCIP">
+    <ge blueprintId="-1_2" cardId="175" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="26.638" type="M">
+    <ge message="rando_cal puts &lt;div class='cardHint' value='109_7'&gt;•Any Methods Necessary&lt;/div&gt; in Reserve Deck" type="M" />
+  </event>
+  <event t="26.638" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="59" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="3" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="51" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="26.638" type="M">
+    <ge message="lepstein01 initiates playing &lt;div class='cardHint' value='6_77'&gt;•The Signal&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="26.638" type="M">
+    <ge message="lepstein01 plays &lt;div class='cardHint' value='6_77'&gt;•The Signal&lt;/div&gt; as Starting Interrupt to deploy an Effect with no deploy cost from Reserve Deck" type="M" />
+  </event>
+  <event t="26.638" type="IP">
+    <ge blueprintId="6_77" cardId="49" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="IP" zone="VOID" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="26.638" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="58" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="3" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="51" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="33.187" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="57" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="3" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="51" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="33.187" type="M">
+    <ge message="lepstein01 shuffles Reserve Deck" type="M" />
+  </event>
+  <event t="33.187" type="RCFP">
+    <ge otherCardIds="7" participantId="lepstein01" type="RCFP" />
+  </event>
+  <event t="33.187" type="PCIP">
+    <ge blueprintId="-1_1" cardId="24" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="33.187" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="5" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="57" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="3" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="51" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="33.187" type="IP">
+    <ge blueprintId="200_47" cardId="43" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="IP" zone="VOID" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="33.187" type="M">
+    <ge message="lepstein01 targets to deploy &lt;div class='cardHint' value='200_47'&gt;•Wokling (V)&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="33.187" type="PCIP">
+    <ge blueprintId="200_47" cardId="176" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="SIDE_OF_TABLE" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="33.187" type="M">
+    <ge message="lepstein01 deploys &lt;div class='cardHint' value='200_47'&gt;•Wokling (V)&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="33.187" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="57" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="3" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="51" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="6_77" cardId="177" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_LOST_PILE" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="33.188" type="M">
+    <ge message="lepstein01 puts &lt;div class='cardHint' value='6_77'&gt;•The Signal&lt;/div&gt; in Lost Pile" type="M" />
+  </event>
+  <event t="33.188" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="0" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="57" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="3" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="51" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="33.188" type="M">
+    <ge message="Dark Side goes first" type="M" />
+  </event>
+  <event t="33.188" type="M">
+    <ge message="rando_cal shuffles rando_cal's Reserve Deck" type="M" />
+  </event>
+  <event t="33.188" type="RCFP">
+    <ge otherCardIds="175" participantId="rando_cal" type="RCFP" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="-1_2" cardId="123" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="33.188" type="M">
+    <ge message="rando_cal draws 6 cards into hand" type="M" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="211_13" cardId="178" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="HAND" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="200_74" cardId="179" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="HAND" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="212_3" cardId="180" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="HAND" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="213_33" cardId="181" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="HAND" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="201_27" cardId="182" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="HAND" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="7_255" cardId="183" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="HAND" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="33.188" type="RCFP">
+    <ge otherCardIds="123" participantId="rando_cal" type="RCFP" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="-1_2" cardId="85" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="33.188" type="M">
+    <ge message="lepstein01 shuffles lepstein01's Reserve Deck" type="M" />
+  </event>
+  <event t="33.188" type="RCFP">
+    <ge otherCardIds="24" participantId="lepstein01" type="RCFP" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="-1_1" cardId="24" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="33.188" type="M">
+    <ge message="lepstein01 draws 8 cards into hand" type="M" />
+  </event>
+  <event t="33.188" type="RCFP">
+    <ge otherCardIds="24" participantId="lepstein01" type="RCFP" />
+  </event>
+  <event t="33.188" type="PCIP">
+    <ge blueprintId="-1_1" cardId="29" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="lepstein01" phase="PLAY_STARTING_CARDS" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="lepstein01" />
+  </event>
+  <event t="33.188" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="45" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="33.189" type="TC">
+    <ge participantId="rando_cal" type="TC" />
+  </event>
+  <event t="33.189" type="M">
+    <ge message="Start of rando_cal's turn #1" type="M" />
+  </event>
+  <event t="33.189" type="M">
+    <ge message="rando_cal's Force generation for this turn is 5" type="M" />
+  </event>
+  <event t="33.189" type="M">
+    <ge message="lepstein01's Force generation for this turn is 6" type="M" />
+  </event>
+  <event t="33.189" type="GPC">
+    <ge phase="Activate (turn #1)" type="GPC" />
+  </event>
+  <event t="40.477" type="RCFP">
+    <ge otherCardIds="85" type="RCFP" />
+  </event>
+  <event t="40.477" type="M">
+    <ge message="rando_cal activated 1 Force (1 total Force activated from Force generation)" type="M" />
+  </event>
+  <event t="40.477" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="1" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="44" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="40.478" type="M">
+    <ge message="rando_cal activated 1 Force (2 total Force activated from Force generation)" type="M" />
+  </event>
+  <event t="40.478" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="2" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="43" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="40.478" type="M">
+    <ge message="rando_cal activated 1 Force (3 total Force activated from Force generation)" type="M" />
+  </event>
+  <event t="40.478" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="3" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="42" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="40.479" type="M">
+    <ge message="rando_cal activated 1 Force (4 total Force activated from Force generation)" type="M" />
+  </event>
+  <event t="40.479" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="41" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="40.479" type="PCIP">
+    <ge blueprintId="-1_2" cardId="93" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="ACTIVATE" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="40.479" type="PCIP">
+    <ge blueprintId="-1_2" cardId="92" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="ACTIVATE" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_FORCE_PILE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="40.479" type="M">
+    <ge message="rando_cal activated 1 Force (5 total Force activated from Force generation)" type="M" />
+  </event>
+  <event t="40.479" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="5" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="0" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="45.051" type="CA">
+    <ge blueprintId="211_8" cardId="169" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="ACTIVATE" sideways="false" suspended="false" targetCardId="168" type="CA" zone="ATTACHED" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="45.051" type="M">
+    <ge message="rando_cal initiates &lt;div class='cardHint' value='211_8'&gt;•Carbonite Chamber Console (V)&lt;/div&gt; top-level action" type="M" />
+  </event>
+  <event t="48.872" type="RCFP">
+    <ge otherCardIds="92" type="RCFP" />
+  </event>
+  <event t="48.872" type="PCIP">
+    <ge blueprintId="-1_2" cardId="114" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="ACTIVATE" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_FORCE_PILE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="48.872" type="PCIP">
+    <ge blueprintId="-1_2" cardId="92" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="ACTIVATE" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_USED_PILE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="48.872" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="1" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="48.872" type="M">
+    <ge message="rando_cal uses 1 Force" type="M" />
+  </event>
+  <event t="48.873" type="M">
+    <ge message="rando_cal targets to take He's All Yours, Bounty Hunter into hand from Reserve Deck using &lt;div class='cardHint' value='211_8'&gt;•Carbonite Chamber Console (V)&lt;/div&gt;" type="M" />
+  </event>
+  <event t="48.873" type="M">
+    <ge message="lepstein01 verifies rando_cal's Reserve Deck" type="M" />
+  </event>
+  <event t="63.115" type="M">
+    <ge message="rando_cal shuffles Reserve Deck" type="M" />
+  </event>
+  <event t="63.115" type="RCFP">
+    <ge otherCardIds="93" participantId="rando_cal" type="RCFP" />
+  </event>
+  <event t="63.116" type="PCIP">
+    <ge blueprintId="-1_2" cardId="90" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="ACTIVATE" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="63.116" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="1" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="74.094" type="CA">
+    <ge blueprintId="200_110" cardId="143" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="ACTIVATE" sideways="false" suspended="false" type="CA" zone="SIDE_OF_TABLE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="74.094" type="M">
+    <ge message="rando_cal initiates &lt;div class='cardHint' value='200_110'&gt;•Knowledge And Defense (V)&lt;/div&gt; top-level action" type="M" />
+  </event>
+  <event t="74.094" type="M">
+    <ge message="rando_cal targets to play a card using &lt;div class='cardHint' value='200_110'&gt;•Knowledge And Defense (V)&lt;/div&gt;" type="M" />
+  </event>
+  <event t="74.094" type="RCFP">
+    <ge otherCardIds="145" type="RCFP" />
+  </event>
+  <event t="74.094" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="1" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="74.094" type="PCIP">
+    <ge blueprintId="13_52" cardId="192" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="ACTIVATE" sideways="false" suspended="false" type="PCIP" zone="SIDE_OF_TABLE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="74.095" type="M">
+    <ge message="rando_cal plays &lt;div class='cardHint' value='13_52'&gt;•Allegations Of Corruption&lt;/div&gt; from stacked" type="M" />
+  </event>
+  <event t="74.095" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="1" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="93.974" type="GPC">
+    <ge phase="Control (turn #1)" type="GPC" />
+  </event>
+  <event t="97.045" type="CA">
+    <ge blueprintId="200_110" cardId="143" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="CONTROL" sideways="false" suspended="false" type="CA" zone="SIDE_OF_TABLE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="97.045" type="M">
+    <ge message="rando_cal initiates &lt;div class='cardHint' value='200_110'&gt;•Knowledge And Defense (V)&lt;/div&gt; top-level action" type="M" />
+  </event>
+  <event t="97.045" type="M">
+    <ge message="rando_cal targets to play a card using &lt;div class='cardHint' value='200_110'&gt;•Knowledge And Defense (V)&lt;/div&gt;" type="M" />
+  </event>
+  <event t="97.045" type="RCFP">
+    <ge otherCardIds="157" type="RCFP" />
+  </event>
+  <event t="97.045" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="1" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="97.046" type="PCIP">
+    <ge blueprintId="13_86" cardId="193" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="CONTROL" sideways="false" suspended="false" type="PCIP" zone="SIDE_OF_TABLE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="97.046" type="M">
+    <ge message="rando_cal plays &lt;div class='cardHint' value='13_86'&gt;•Secret Plans&lt;/div&gt; from stacked" type="M" />
+  </event>
+  <event t="97.046" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="5" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="9" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="1" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" /></ge>
+  </event>
+  <event t="122.338" type="GPC">
+    <ge phase="Deploy (turn #1)" type="GPC" />
+  </event>
+  <event t="123.874" type="RCFP">
+    <ge otherCardIds="173" type="RCFP" />
+  </event>
+  <event t="123.874" type="PCIP">
+    <ge blueprintId="6_164" cardId="194" collapsed="false" frozen="false" horizontal="true" inverted="false" locationIndex="3" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" systemName="Tatooine" type="PCIP" zone="LOCATIONS" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="123.875" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='6_164' data-horizontal='true'&gt;•Jabba's Palace: Dungeon&lt;/div&gt; from hand" type="M" />
+  </event>
+  <event t="123.875" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="8" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="1" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="149.320" type="RCFP">
+    <ge otherCardIds="172" type="RCFP" />
+  </event>
+  <event t="149.320" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="7" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="1" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="149.320" type="IP">
+    <ge blueprintId="201_28" cardId="172" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="IP" zone="VOID" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="149.320" type="M">
+    <ge message="rando_cal targets to deploy &lt;div class='cardHint' value='201_28'&gt;•Despair (V)&lt;/div&gt; from hand" type="M" />
+  </event>
+  <event t="157.680" type="PCIP">
+    <ge blueprintId="201_28" cardId="195" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="SIDE_OF_TABLE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="157.680" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='201_28'&gt;•Despair (V)&lt;/div&gt; from hand" type="M" />
+  </event>
+  <event t="157.681" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="4" HAND="7" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="1" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="185.329" type="RCFP">
+    <ge otherCardIds="114" type="RCFP" />
+  </event>
+  <event t="185.329" type="RCFP">
+    <ge otherCardIds="92" type="RCFP" />
+  </event>
+  <event t="185.329" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="3" HAND="7" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="2" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="185.329" type="PCIP">
+    <ge blueprintId="-1_2" cardId="124" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_FORCE_PILE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="185.330" type="PCIP">
+    <ge blueprintId="-1_2" cardId="135" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_USED_PILE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="185.330" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="2" HAND="7" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="3" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="185.330" type="M">
+    <ge message="rando_cal uses 2 Force" type="M" />
+  </event>
+  <event t="185.330" type="RCFP">
+    <ge otherCardIds="174" type="RCFP" />
+  </event>
+  <event t="185.330" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="2" HAND="6" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="3" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="185.330" type="PCIP">
+    <ge blueprintId="1_176" cardId="196" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="2" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="AT_LOCATION" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="185.330" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='1_176'&gt;•Feltipern Trevagg&lt;/div&gt; from hand to &lt;div class='cardHint' value='5_166' data-horizontal='true'&gt;•Cloud City: Carbonite Chamber&lt;/div&gt;" type="M" />
+  </event>
+  <event t="185.331" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="2" HAND="6" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="3" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="210.029" type="RCFP">
+    <ge otherCardIds="124" type="RCFP" />
+  </event>
+  <event t="210.029" type="PCIP">
+    <ge blueprintId="-1_2" cardId="85" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_FORCE_PILE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="210.030" type="RCFP">
+    <ge otherCardIds="135" type="RCFP" />
+  </event>
+  <event t="210.030" type="PCIP">
+    <ge blueprintId="-1_2" cardId="124" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_USED_PILE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="210.030" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="1" HAND="6" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="4" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="210.030" type="M">
+    <ge message="rando_cal uses 1 Force" type="M" />
+  </event>
+  <event t="210.030" type="RCFP">
+    <ge otherCardIds="181" type="RCFP" />
+  </event>
+  <event t="210.030" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="1" HAND="5" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="4" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="210.030" type="PCIP">
+    <ge blueprintId="213_33" cardId="197" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" targetCardId="196" type="PCIP" zone="ATTACHED" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="210.031" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='213_33'&gt;Black Sun Blaster&lt;/div&gt; from hand on &lt;div class='cardHint' value='1_176'&gt;•Feltipern Trevagg&lt;/div&gt;" type="M" />
+  </event>
+  <event t="210.031" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="6" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="6" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="1" HAND="5" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="40" SABACC_HAND="0" USED_PILE="4" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" /></ge>
+  </event>
+  <event t="233.927" type="CA">
+    <ge blueprintId="7_296" cardId="167" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="CA" zone="SIDE_OF_TABLE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="233.927" type="M">
+    <ge message="rando_cal initiates &lt;div class='cardHint' value='7_296'&gt;Carbon Chamber Testing&lt;/div&gt; top-level action" type="M" />
+  </event>
+  <event t="233.927" type="M">
+    <ge message="rando_cal targets to deploy Audience Chamber, Docking Bay 94, or East Platform from Reserve Deck using &lt;div class='cardHint' value='7_296'&gt;Carbon Chamber Testing&lt;/div&gt;" type="M" />
+  </event>
+  <event t="244.135" type="RCFP">
+    <ge otherCardIds="90" participantId="rando_cal" type="RCFP" />
+  </event>
+  <event t="244.136" type="PCIP">
+    <ge blueprintId="-1_2" cardId="108" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="244.136" type="PCIP">
+    <ge blueprintId="6_162" cardId="198" collapsed="false" frozen="false" horizontal="true" inverted="false" locationIndex="3" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" systemName="Tatooine" type="PCIP" zone="LOCATIONS" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="244.136" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='6_162' data-horizontal='true'&gt;•Jabba's Palace: Audience Chamber&lt;/div&gt; from Reserve Deck" type="M" />
+  </event>
+  <event t="244.137" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="1" HAND="5" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="39" SABACC_HAND="0" USED_PILE="4" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="-1" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="261.749" type="CA">
+    <ge blueprintId="6_162" cardId="198" collapsed="false" frozen="false" horizontal="true" inverted="false" locationIndex="3" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" systemName="Tatooine" type="CA" zone="LOCATIONS" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="261.749" type="M">
+    <ge message="rando_cal initiates &lt;div class='cardHint' value='6_162' data-horizontal='true'&gt;•Jabba's Palace: Audience Chamber&lt;/div&gt; top-level action" type="M" />
+  </event>
+  <event t="261.749" type="M">
+    <ge message="rando_cal targets to deploy an alien from Reserve Deck using &lt;div class='cardHint' value='6_162' data-horizontal='true'&gt;•Jabba's Palace: Audience Chamber&lt;/div&gt;" type="M" />
+  </event>
+  <event t="264.509" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="1" HAND="5" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="38" SABACC_HAND="0" USED_PILE="4" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="-1" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="264.509" type="M">
+    <ge message="rando_cal shuffles Reserve Deck" type="M" />
+  </event>
+  <event t="264.509" type="RCFP">
+    <ge otherCardIds="108" participantId="rando_cal" type="RCFP" />
+  </event>
+  <event t="264.509" type="PCIP">
+    <ge blueprintId="-1_2" cardId="105" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="264.509" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="1" HAND="5" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="38" SABACC_HAND="0" USED_PILE="4" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="-1" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="277.234" type="PCIP">
+    <ge blueprintId="209_35" cardId="199" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="3" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="AT_LOCATION" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="277.238" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='209_35'&gt;•Dr. Chelli Lona Aphra&lt;/div&gt; from Reserve Deck to &lt;div class='cardHint' value='6_162' data-horizontal='true'&gt;•Jabba's Palace: Audience Chamber&lt;/div&gt;" type="M" />
+  </event>
+  <event t="277.238" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="1" HAND="5" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="38" SABACC_HAND="0" USED_PILE="4" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="3" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="298.883" type="M">
+    <ge message="rando_cal initiates playing &lt;div class='cardHint' value='7_255'&gt;•Jabba's Through With You&lt;/div&gt; from hand" type="M" />
+  </event>
+  <event t="298.883" type="RCFP">
+    <ge otherCardIds="183" type="RCFP" />
+  </event>
+  <event t="298.883" type="M">
+    <ge message="rando_cal plays &lt;div class='cardHint' value='7_255'&gt;•Jabba's Through With You&lt;/div&gt; from hand to deploy a character weapon from Reserve Deck" type="M" />
+  </event>
+  <event t="298.883" type="IP">
+    <ge blueprintId="7_255" cardId="183" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="IP" zone="VOID" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="298.883" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="1" HAND="4" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="38" SABACC_HAND="0" USED_PILE="4" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="3" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="318.950" type="RCFP">
+    <ge otherCardIds="85" type="RCFP" />
+  </event>
+  <event t="318.950" type="RCFP">
+    <ge otherCardIds="124" type="RCFP" />
+  </event>
+  <event t="318.951" type="PCIP">
+    <ge blueprintId="-1_2" cardId="85" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_USED_PILE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="318.951" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="4" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="38" SABACC_HAND="0" USED_PILE="5" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="3" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="318.951" type="M">
+    <ge message="rando_cal uses 1 Force" type="M" />
+  </event>
+  <event t="318.951" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="4" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="37" SABACC_HAND="0" USED_PILE="5" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="3" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="318.952" type="M">
+    <ge message="rando_cal shuffles Reserve Deck" type="M" />
+  </event>
+  <event t="318.952" type="RCFP">
+    <ge otherCardIds="105" participantId="rando_cal" type="RCFP" />
+  </event>
+  <event t="318.952" type="PCIP">
+    <ge blueprintId="-1_2" cardId="88" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_RESERVE_DECK" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="318.952" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="4" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="37" SABACC_HAND="0" USED_PILE="5" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="3" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="335.872" type="PCIP">
+    <ge blueprintId="213_33" cardId="200" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" targetCardId="196" type="PCIP" zone="ATTACHED" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="335.873" type="M">
+    <ge message="rando_cal deploys &lt;div class='cardHint' value='213_33'&gt;Black Sun Blaster&lt;/div&gt; from Reserve Deck on &lt;div class='cardHint' value='1_176'&gt;•Feltipern Trevagg&lt;/div&gt;" type="M" />
+  </event>
+  <event t="335.873" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="4" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="37" SABACC_HAND="0" USED_PILE="5" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="3" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="344.728" type="RCFP">
+    <ge otherCardIds="85" type="RCFP" />
+  </event>
+  <event t="344.728" type="PCIP">
+    <ge blueprintId="-1_2" cardId="201" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="DEPLOY" sideways="false" suspended="false" type="PCIP" zone="TOP_OF_USED_PILE" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="344.728" type="M">
+    <ge message="rando_cal puts &lt;div class='cardHint' value='7_255'&gt;•Jabba's Through With You&lt;/div&gt; in Used Pile" type="M" />
+  </event>
+  <event t="344.729" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="4" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="37" SABACC_HAND="0" USED_PILE="6" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="3" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
+  <event t="361.038" type="GPC">
+    <ge phase="Battle (turn #1)" type="GPC" />
+  </event>
+  <event t="362.574" type="M">
+    <ge message="rando_cal initiates playing &lt;div class='cardHint' value='211_13'&gt;He's All Yours, Bounty Hunter (V)&lt;/div&gt; from hand" type="M" />
+  </event>
+  <event t="362.574" type="RCFP">
+    <ge otherCardIds="178" type="RCFP" />
+  </event>
+  <event t="362.574" type="M">
+    <ge message="rando_cal plays &lt;div class='cardHint' value='211_13'&gt;He's All Yours, Bounty Hunter (V)&lt;/div&gt; from hand as Used Interrupt to target your Bounty Hunter" type="M" />
+  </event>
+  <event t="362.574" type="IP">
+    <ge blueprintId="211_13" cardId="178" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" participantId="rando_cal" phase="BATTLE" sideways="false" suspended="false" type="IP" zone="VOID" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="362.575" type="CAC">
+    <ge blueprintId="211_13" cardId="178" collapsed="false" frozen="false" horizontal="false" inverted="false" locationIndex="0" otherCardIds="196" participantId="rando_cal" phase="BATTLE" sideways="false" suspended="false" type="CAC" zone="VOID" zoneOwnerId="rando_cal" />
+  </event>
+  <event t="362.575" type="GS">
+    <ge attackingNumDestinyInAttack="0" attackingPowerOrFerocityInAttack="-1" darkBattleAttritionRemaining="0" darkBattleDamageRemaining="0" darkBattleNumBattleDestiny="0" darkBattleNumDestinyToAttrition="0" darkBattleNumDestinyToPower="0" darkBattlePower="-1" darkDuelOrLightsaberCombatNumDestiny="0" darkDuelOrLightsaberCombatTotal="-1" darkForceGeneration="8" darkImmuneToRemainingAttrition="false" darkPoliticsTotal="-1" darkRaceTotal="-1" darkSabaccTotal="-1" defendingNumDestinyInAttack="0" defendingPowerOrFerocityInAttack="-1" lightBattleAttritionRemaining="0" lightBattleDamageRemaining="0" lightBattleNumBattleDestiny="0" lightBattleNumDestinyToAttrition="0" lightBattleNumDestinyToPower="0" lightBattlePower="-1" lightDuelOrLightsaberCombatNumDestiny="0" lightDuelOrLightsaberCombatTotal="-1" lightForceGeneration="7" lightImmuneToRemainingAttrition="false" lightPoliticsTotal="-1" lightRaceTotal="-1" lightSabaccTotal="-1" type="GS"><playerZones FORCE_PILE="0" HAND="8" LOST_PILE="1" OUT_OF_PLAY="0" RESERVE_DECK="49" SABACC_HAND="0" USED_PILE="0" name="lepstein01" /><playerZones FORCE_PILE="0" HAND="3" LOST_PILE="0" OUT_OF_PLAY="0" RESERVE_DECK="37" SABACC_HAND="0" USED_PILE="6" name="rando_cal" /><darkPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="2" locationIndex3="3" locationIndex4="-1" /><lightPowerAtLocations locationIndex0="-1" locationIndex1="-1" locationIndex2="-1" locationIndex3="-1" locationIndex4="-1" /></ge>
+  </event>
