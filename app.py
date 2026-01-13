@@ -22,6 +22,9 @@ from engine.board_state import BoardState
 from engine.event_processor import EventProcessor
 from engine.strategy_controller import StrategyController
 from engine.table_manager import TableManager, TableManagerConfig, ConnectionMonitor
+from engine.decision_logger import rotate_decision_log
+from engine.game_state_logger import rotate_game_state_log
+from engine.strategy_config import get_config as get_strategy_config
 from brain import StaticBrain
 from brain.astrogator_brain import AstrogatorBrain
 from brain.achievements import AchievementTracker
@@ -30,9 +33,10 @@ from brain.command_handler import CommandHandler
 from persistence import init_db, StatsRepository
 import settings
 
-# Setup logging
+# Setup logging - use username in log filename for multi-bot setups
 os.makedirs(config.LOG_DIR, exist_ok=True)
-LOG_FILE_PATH = os.path.join(config.LOG_DIR, 'rando.log')
+_log_username = os.environ.get('GEMP_USERNAME', 'rando')
+LOG_FILE_PATH = os.path.join(config.LOG_DIR, f'{_log_username}.log')
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
 logging.basicConfig(
@@ -50,8 +54,8 @@ def rotate_game_log(opponent_name: str = None, won: bool = None):
     """
     Rotate the log file after a game ends.
 
-    Renames the current rando.log to a timestamped file preserving game info,
-    then starts a fresh rando.log for the next game.
+    Renames the current log to a timestamped file preserving game info,
+    then starts a fresh log for the next game.
 
     Args:
         opponent_name: Name of the opponent (for filename)
@@ -66,8 +70,8 @@ def rotate_game_log(opponent_name: str = None, won: bool = None):
         result_str = "win" if won else "loss" if won is not None else "unknown"
         opponent_str = opponent_name.replace(' ', '_') if opponent_name else "unknown"
 
-        # New filename: rando_20231127_143052_vs_PlayerName_win.log
-        new_filename = f"rando_{timestamp}_vs_{opponent_str}_{result_str}.log"
+        # New filename: {username}_20231127_143052_vs_PlayerName_win.log
+        new_filename = f"{_log_username}_{timestamp}_vs_{opponent_str}_{result_str}.log"
         new_path = os.path.join(config.LOG_DIR, new_filename)
 
         # Get the root logger and find the file handler
@@ -76,7 +80,7 @@ def rotate_game_log(opponent_name: str = None, won: bool = None):
         handler_index = -1
 
         for i, handler in enumerate(root_logger.handlers):
-            if isinstance(handler, logging.FileHandler) and 'rando.log' in handler.baseFilename:
+            if isinstance(handler, logging.FileHandler) and f'{_log_username}.log' in handler.baseFilename:
                 file_handler = handler
                 handler_index = i
                 break
@@ -225,14 +229,37 @@ class BotState:
     def initialize_table_manager(self):
         """Initialize table manager after client is ready"""
         if self.client and not self.table_manager:
+            # Check for joiner mode (for bot-vs-bot testing)
+            joiner_mode = os.environ.get('BOT_JOINER_MODE', 'false').lower() == 'true'
+            if joiner_mode:
+                logger.info("🔗 Joiner mode enabled - will join existing tables instead of creating")
+
+            # Check for max games limit
+            max_games = int(os.environ.get('MAX_GAMES', '0'))
+            if max_games > 0:
+                logger.info(f"🎮 Max games limit set to {max_games}")
+
+            # Table name prefix for creator mode (allows multiple bot pairs)
+            # Default: "Bot Table" -> creates tables like "Bot Table: Astrogation Chart XXXX"
+            table_prefix = os.environ.get('BOT_TABLE_PREFIX', config.TABLE_NAME)
+
+            # Joiner target prefix for joiner mode (only join tables with this prefix)
+            # Allows multiple bot pairs to run in parallel without joining wrong tables
+            joiner_target = os.environ.get('BOT_JOINER_TARGET', '')
+            if joiner_target:
+                logger.info(f"🎯 Joiner target prefix: '{joiner_target}' (will only join matching tables)")
+
             table_config = TableManagerConfig(
-                table_name_prefix=config.TABLE_NAME,
+                table_name_prefix=table_prefix,
                 create_delay_seconds=2.0,
                 retry_delay_seconds=5.0,
+                joiner_mode=joiner_mode,
+                joiner_target_prefix=joiner_target,
+                max_games=max_games,
             )
             self.table_manager = TableManager(self.client, table_config)
             self.connection_monitor = ConnectionMonitor(self.client)
-            logger.info(f"🎯 TableManager initialized")
+            logger.info(f"🎯 TableManager initialized (prefix='{table_prefix}')")
 
     def initialize_chat_manager(self):
         """Initialize chat manager after client is ready"""
@@ -263,6 +290,9 @@ class BotState:
 
     def to_dict(self):
         """Convert state to dictionary for JSON serialization"""
+        # Get strategy config values
+        strat_cfg = get_strategy_config()
+
         result = {
             'state': self.state.value,
             'config': {
@@ -270,16 +300,22 @@ class BotState:
                 'bot_mode': self.config.BOT_MODE,
                 'table_name': self.config.TABLE_NAME,
                 'auto_start': settings.get_setting('auto_start', False),
-                # Hand management
-                'max_hand_size': self.config.MAX_HAND_SIZE,
-                'hand_soft_cap': self.config.HAND_SOFT_CAP,
-                # Force economy
-                'force_gen_target': self.config.FORCE_GEN_TARGET,
-                'max_reserve_checks': self.config.MAX_RESERVE_CHECKS,
-                # Battle strategy
-                'deploy_threshold': self.config.DEPLOY_THRESHOLD,
-                'battle_favorable_threshold': self.config.BATTLE_FAVORABLE_THRESHOLD,
-                'battle_danger_threshold': self.config.BATTLE_DANGER_THRESHOLD,
+                # Strategy config info
+                'strategy_config_name': strat_cfg.name,
+                'strategy_config_version': strat_cfg.version,
+                'gameplan_enabled': 'Enabled' if strat_cfg.get('game_plan', 'enabled', False) else 'Disabled',
+                'chaos_percent': strat_cfg.get_global('chaos_percent', 25),
+                'early_game_turns': strat_cfg.get('deploy_strategy', 'early_game_turns', 3),
+                # Hand management (from strategy config)
+                'max_hand_size': strat_cfg.get_global('max_hand_size', self.config.MAX_HAND_SIZE),
+                'hand_soft_cap': strat_cfg.get_global('hand_soft_cap', self.config.HAND_SOFT_CAP),
+                # Force economy (from strategy config)
+                'force_gen_target': strat_cfg.get_global('force_gen_target', self.config.FORCE_GEN_TARGET),
+                'max_reserve_checks': strat_cfg.get_global('max_reserve_checks', self.config.MAX_RESERVE_CHECKS),
+                # Battle strategy (from strategy config)
+                'deploy_threshold': strat_cfg.get('deploy_strategy', 'deploy_threshold', self.config.DEPLOY_THRESHOLD),
+                'battle_favorable_threshold': strat_cfg.get('battle_strategy', 'favorable_threshold', self.config.BATTLE_FAVORABLE_THRESHOLD),
+                'battle_danger_threshold': strat_cfg.get('battle_strategy', 'danger_threshold', self.config.BATTLE_DANGER_THRESHOLD),
             },
             'last_error': self.last_error,
             'tables': [
@@ -771,7 +807,7 @@ def bot_worker():
                         bot_state.current_table_id = None
                         bot_state.opponent_name = None
 
-                    # Use TableManager to auto-create a table
+                    # Use TableManager to auto-create or join a table
                     if bot_state.table_manager:
                         action = bot_state.table_manager.get_required_action(tables, config.GEMP_USERNAME)
                         if action == 'create_table':
@@ -796,6 +832,33 @@ def bot_worker():
                                     'message': f'⚠️ Table creation failed, will retry...',
                                     'level': 'warning'
                                 }, namespace='/')
+                        elif action == 'join_table':
+                            logger.info("🔄 Joining existing table...")
+                            socketio.emit('log_message', {'message': '🔄 Joining existing table...', 'level': 'info'}, namespace='/')
+
+                            # Small delay before joining
+                            socketio.sleep(1)
+
+                            table_id = bot_state.table_manager.join_table()
+                            if table_id:
+                                bot_state.current_table_id = table_id
+                                bot_state.state = GameState.WAITING_FOR_OPPONENT
+                                logger.info(f"✅ Joined table: {table_id}")
+                                socketio.emit('log_message', {
+                                    'message': f'✅ Joined table with deck: {bot_state.table_manager.state.current_deck_name}',
+                                    'level': 'success'
+                                }, namespace='/')
+                            else:
+                                logger.warning(f"Table join failed")
+                                socketio.emit('log_message', {
+                                    'message': f'⚠️ Table join failed, will retry...',
+                                    'level': 'warning'
+                                }, namespace='/')
+                        elif action == 'stop':
+                            logger.info("🛑 Max games reached, stopping bot")
+                            socketio.emit('log_message', {'message': '🛑 Max games reached, stopping bot', 'level': 'info'}, namespace='/')
+                            bot_state.running = False
+                            bot_state.state = GameState.STOPPED
 
                     socketio.emit('state_update', bot_state.to_dict(), namespace='/')
 
@@ -883,7 +946,65 @@ def bot_worker():
                             from engine.shield_strategy import reset_shield_tracker
                             reset_shield_tracker()
 
-                            logger.info(f"🧠 Brain evaluators, decision tracker, objective handler, and shield tracker reset for new game")
+                            # Initialize deck strategy based on deck archetype
+                            from engine.deck_analyzer import DeckAnalyzer
+                            from engine.archetype_detector import detect_archetype
+                            from engine.strategy_profile import set_deck_strategy, clear_deck_strategy
+                            clear_deck_strategy()  # Clear any previous game's strategy
+
+                            deck_name_for_analysis = None
+                            if bot_state.table_manager and bot_state.table_manager.state.current_deck_name:
+                                deck_name_for_analysis = bot_state.table_manager.state.current_deck_name
+                            elif os.environ.get('FIXED_DECK_NAME'):
+                                # Fallback: use FIXED_DECK_NAME env var if table_manager deck name not available
+                                # (This can happen when table ID extraction fails)
+                                deck_name_for_analysis = os.environ.get('FIXED_DECK_NAME')
+                                logger.info(f"📋 Using FIXED_DECK_NAME env var for deck analysis: {deck_name_for_analysis}")
+
+                            if deck_name_for_analysis:
+                                try:
+                                    analyzer = DeckAnalyzer()
+                                    composition = analyzer.analyze_deck_by_name(deck_name_for_analysis)
+                                    if composition:
+                                        archetype, goals = detect_archetype(composition)
+                                        set_deck_strategy(goals)
+                                        logger.info(f"🎯 Deck strategy initialized: {archetype.value} "
+                                                  f"(domain={goals.primary_domain}, "
+                                                  f"space_bonus={goals.space_location_bonus}, "
+                                                  f"ground_bonus={goals.ground_location_bonus})")
+                                        socketio.emit('log_message', {
+                                            'message': f'🎯 Deck archetype: {archetype.value} ({goals.primary_domain} focused)',
+                                            'level': 'info'
+                                        }, namespace='/')
+
+                                        # Initialize GamePlan if enabled in config
+                                        from engine.game_plan import GamePlan, is_game_plan_enabled, get_game_plan_config
+                                        if is_game_plan_enabled():
+                                            game_plan_config = get_game_plan_config()
+                                            game_plan = GamePlan(
+                                                deck_strategy=goals,
+                                                archetype=archetype,
+                                                config=game_plan_config
+                                            )
+                                            bot_state.board_state.game_plan = game_plan
+                                            logger.info(f"🎯 GamePlan ENABLED: win_path={game_plan.win_path.value}")
+                                            socketio.emit('log_message', {
+                                                'message': f'🎯 GamePlan: {game_plan.win_path.value} strategy',
+                                                'level': 'info'
+                                            }, namespace='/')
+                                        else:
+                                            bot_state.board_state.game_plan = None
+                                            logger.info("🎯 GamePlan DISABLED by config")
+                                    else:
+                                        logger.warning(f"⚠️ Could not analyze deck '{deck_name_for_analysis}' - using default strategy")
+                                        bot_state.board_state.game_plan = None
+                                except Exception as e:
+                                    logger.error(f"❌ Error analyzing deck: {e}")
+                            else:
+                                logger.info("ℹ️ No deck name available for strategy analysis")
+                                bot_state.board_state.game_plan = None
+
+                            logger.info(f"🧠 Brain evaluators, decision tracker, objective handler, shield tracker, deck strategy, and game plan reset for new game")
 
                             # Set opponent_name EARLY so achievements work for initial cards
                             # The full reset_for_game will be called later with correct side info
@@ -975,8 +1096,16 @@ def bot_worker():
                                 if bot_state.table_manager:
                                     bot_state.table_manager.on_game_ended()
 
-                                # Rotate log file BEFORE clearing state
+                                # Rotate log files BEFORE clearing state
                                 rotate_game_log(
+                                    opponent_name=bot_state.opponent_name,
+                                    won=bot_won
+                                )
+                                rotate_decision_log(
+                                    opponent_name=bot_state.opponent_name,
+                                    won=bot_won
+                                )
+                                rotate_game_state_log(
                                     opponent_name=bot_state.opponent_name,
                                     won=bot_won
                                 )
@@ -1361,8 +1490,16 @@ def bot_worker():
                             bot_state.client.leave_chat(bot_state.game_id)
                         logger.info(f"💬 Left chat system for game {bot_state.game_id}")
 
-                    # Rotate log file (preserve game log with timestamp)
+                    # Rotate log files (preserve game logs with timestamp)
                     rotate_game_log(
+                        opponent_name=bot_state.opponent_name,
+                        won=bot_won
+                    )
+                    rotate_decision_log(
+                        opponent_name=bot_state.opponent_name,
+                        won=bot_won
+                    )
+                    rotate_game_state_log(
                         opponent_name=bot_state.opponent_name,
                         won=bot_won
                     )
@@ -1384,15 +1521,12 @@ def bot_worker():
                 # long-polling blocking the game loop. The bot may lose chat room presence
                 # but gameplay is more important. TODO: Run chat polling in separate greenlet.
 
-                # Use shorter poll interval during fast action phases (draw/activate)
-                phase = bot_state.board_state.current_phase if bot_state.board_state else ""
-                fast_phase = any(p in phase.lower() for p in ['draw', 'activate'])
-                poll_interval = 0.25 if fast_phase else config.GAME_POLL_INTERVAL
-                socketio.sleep(poll_interval)
+                # Poll interval from config (already optimized for local fast mode)
+                socketio.sleep(config.GAME_POLL_INTERVAL)
 
             else:
                 # Unknown state or not ready yet
-                socketio.sleep(0.5)
+                socketio.sleep(config.GAME_POLL_INTERVAL)
 
         except requests.RequestException as e:
             # Network errors - try to recover instead of stopping

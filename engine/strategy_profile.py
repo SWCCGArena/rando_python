@@ -1,19 +1,22 @@
 """
 Dynamic Strategy Profile System
 
-Adjusts bot behavior based on game position:
-- AGGRESSIVE: When behind - take risks, attack more, deploy faster
-- BALANCED: When even - normal play
-- DEFENSIVE: When ahead - preserve lead, avoid risky battles
-- DESPERATION: When way behind - all-in plays, must take risks
+Two layers of strategy:
+1. DECK STRATEGY (static per game): From deck archetype analysis
+   - SPACE_CONTROL, GROUND_SWARM, MAINS, DRAIN_RACE, BALANCED
+   - Sets domain preferences and key card protection
 
-The profile affects scoring multipliers across all evaluators.
+2. POSITION STRATEGY (dynamic per turn): From game state
+   - AGGRESSIVE, BALANCED, DEFENSIVE, DESPERATION, CRUSHING
+   - Adjusts risk tolerance and tempo
+
+The final profile combines both: deck_multiplier × position_multiplier
 """
 
 import logging
 from enum import Enum
-from dataclasses import dataclass
-from typing import Optional, TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import Optional, List, Set, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .board_state import BoardState
@@ -225,6 +228,25 @@ def calculate_game_position(bs: 'BoardState') -> GamePosition:
         pos.drain_potential_differential * 2  # Future damage
     )
 
+    # 6. DRAIN TRAJECTORY ADJUSTMENT
+    # If we're losing on drain economy, we can't be "CRUSHING" even if ahead on life
+    # Access the strategic_state to get actual drain trajectory
+    strategic_state = getattr(bs, 'strategic_state', None)
+    if strategic_state and strategic_state.enabled:
+        drain_gap = strategic_state.trajectory.current_drain_gap
+        turns_at_negative = strategic_state.trajectory.turns_at_negative
+
+        # Penalize for negative drain gap - this erodes any current lead
+        # Each point of negative drain gap = ~3 life force lost per turn
+        if drain_gap < 0:
+            # Heavy penalty for sustained negative drain trajectory
+            drain_penalty = abs(drain_gap) * 4  # More aggressive penalty
+            if turns_at_negative >= 2:
+                drain_penalty += 10  # Extra penalty for sustained losing
+            pos.total_score -= drain_penalty
+            logger.debug(f"📊 Drain trajectory penalty: gap={drain_gap}, turns_neg={turns_at_negative}, "
+                        f"penalty=-{drain_penalty}, adjusted_total={pos.total_score}")
+
     return pos
 
 
@@ -339,3 +361,151 @@ def reset_strategy_cache():
     _cached_profile = None
     _cached_turn = -1
     _cached_phase = ""
+
+
+# =============================================================================
+# COMBINED STRATEGY PROFILE (Deck + Position)
+# =============================================================================
+
+@dataclass
+class CombinedStrategyProfile:
+    """
+    Final strategy profile combining deck archetype with game position.
+
+    This is what evaluators should use for strategic decision-making.
+    """
+    # Source information
+    position_mode: StrategyMode
+    deck_archetype: Optional[str] = None  # From StrategicGoals.archetype.value
+
+    # Combined multipliers (deck × position)
+    deploy_multiplier: float = 1.0
+    battle_multiplier: float = 1.0
+    pass_multiplier: float = 1.0
+    draw_multiplier: float = 1.0
+
+    # Domain preferences (from deck strategy)
+    primary_domain: str = "both"  # "space", "ground", or "both"
+    space_deploy_multiplier: float = 1.0
+    ground_deploy_multiplier: float = 1.0
+    space_location_bonus: int = 0
+    ground_location_bonus: int = 0
+
+    # Behavioral adjustments
+    risk_tolerance: int = 0
+    force_reserve: int = 1
+    deploy_threshold_adjustment: int = 0
+    battle_advantage_required: int = 2
+    avoid_battles_unless_favorable: bool = False
+
+    # Key cards to protect (from deck strategy)
+    key_cards: List[str] = field(default_factory=list)
+    protect_cards: Set[str] = field(default_factory=set)
+
+    # Descriptive
+    reason: str = ""
+
+    def get_location_bonus(self, is_space: bool) -> int:
+        """Get the strategic bonus for deploying to a location."""
+        return self.space_location_bonus if is_space else self.ground_location_bonus
+
+    def get_domain_multiplier(self, is_space: bool) -> float:
+        """Get the domain multiplier for a deploy location."""
+        return self.space_deploy_multiplier if is_space else self.ground_deploy_multiplier
+
+
+# Module-level deck strategy (set once per game)
+_deck_strategy: Optional['StrategicGoals'] = None
+
+
+def set_deck_strategy(goals: 'StrategicGoals'):
+    """
+    Set the deck strategy for the current game.
+
+    Call this at game start after analyzing the deck.
+    """
+    global _deck_strategy
+    _deck_strategy = goals
+    logger.info(f"🎯 Deck Strategy Set: {goals.archetype.value}")
+    logger.info(f"   Domain: {goals.primary_domain}")
+    logger.info(f"   Space×{goals.space_deploy_multiplier:.2f}, Ground×{goals.ground_deploy_multiplier:.2f}")
+    logger.info(f"   Key cards: {goals.key_cards[:3]}")
+
+
+def clear_deck_strategy():
+    """Clear the deck strategy (call at game end)."""
+    global _deck_strategy
+    _deck_strategy = None
+
+
+def get_deck_strategy() -> Optional['StrategicGoals']:
+    """Get the current deck strategy (may be None if not set)."""
+    return _deck_strategy
+
+
+def get_combined_profile(bs: 'BoardState') -> CombinedStrategyProfile:
+    """
+    Get a combined strategy profile merging deck and position strategies.
+
+    This is the main entry point for evaluators that want full strategic context.
+
+    The combination works as follows:
+    - Multipliers: deck_multiplier × position_multiplier
+    - Domain preferences: from deck strategy
+    - Risk tolerance: position_base + deck_adjustment
+    - Key cards: from deck strategy
+    """
+    # Get position-based profile
+    position_profile = get_current_profile(bs)
+
+    # Start with position profile values
+    combined = CombinedStrategyProfile(
+        position_mode=position_profile.mode,
+        deploy_multiplier=position_profile.deploy_multiplier,
+        battle_multiplier=position_profile.battle_multiplier,
+        pass_multiplier=position_profile.pass_multiplier,
+        draw_multiplier=position_profile.draw_multiplier,
+        risk_tolerance=position_profile.risk_tolerance,
+        force_reserve=position_profile.force_reserve,
+        deploy_threshold_adjustment=position_profile.deploy_threshold_adjustment,
+        reason=position_profile.reason,
+    )
+
+    # If deck strategy is set, combine with it
+    if _deck_strategy:
+        combined.deck_archetype = _deck_strategy.archetype.value
+        combined.primary_domain = _deck_strategy.primary_domain
+
+        # Domain multipliers from deck strategy
+        combined.space_deploy_multiplier = _deck_strategy.space_deploy_multiplier
+        combined.ground_deploy_multiplier = _deck_strategy.ground_deploy_multiplier
+        combined.space_location_bonus = _deck_strategy.space_location_bonus
+        combined.ground_location_bonus = _deck_strategy.ground_location_bonus
+
+        # Combine battle aggression: deck × position
+        combined.battle_multiplier *= _deck_strategy.battle_aggression
+
+        # Battle requirements from deck strategy
+        combined.battle_advantage_required = _deck_strategy.battle_advantage_required
+        combined.avoid_battles_unless_favorable = _deck_strategy.avoid_battles_unless_favorable
+
+        # Adjust force reserve if deck says to save
+        combined.force_reserve = max(
+            combined.force_reserve,
+            _deck_strategy.save_force_threshold
+        )
+
+        # Key cards from deck strategy
+        combined.key_cards = _deck_strategy.key_cards
+        combined.protect_cards = set(_deck_strategy.key_cards)
+
+        combined.reason = (f"{position_profile.mode.value.upper()} + "
+                         f"{_deck_strategy.archetype.value} | {combined.reason}")
+
+    return combined
+
+
+# Import StrategicGoals for type hints (avoid circular import)
+# This is only needed for type checking, actual import happens at runtime
+if TYPE_CHECKING:
+    from .archetype_detector import StrategicGoals

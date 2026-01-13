@@ -15,17 +15,35 @@ Ported from C# BotAIHelper.ForceToActivate() and RankActivateForceAction()
 import logging
 from typing import List, Optional
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
+from ..strategy_config import get_config
 
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# CONFIG-DRIVEN PARAMETERS
+# =============================================================================
+
+def _get_force_config(key: str, default):
+    """Get force activation strategy config value."""
+    return get_config().get('force_activation_strategy', key, default)
+
 # Late-game thresholds
-LATE_GAME_LIFE_FORCE = 12  # Below this, be more strategic
-CRITICAL_LIFE_FORCE = 6  # Below this, minimize activation
+def get_late_game_life_force() -> int:
+    return _get_force_config('late_game_life_force', 12)
+
+def get_critical_life_force() -> int:
+    return _get_force_config('critical_life_force', 6)
 
 # Force activation limits
-MAX_FORCE_PILE = 25  # Never have more than this in force pile (increased from 20 for bigger plays)
-RESERVE_FOR_DESTINY_CONTESTED = 4  # Cards to keep when locations are contested (increased from 2)
-RESERVE_FOR_DESTINY_SAFE = 1  # Cards to keep when no contested locations
+def get_max_force_pile() -> int:
+    return _get_force_config('max_force_pile', 25)
+
+def get_reserve_for_destiny_contested() -> int:
+    return _get_force_config('reserve_for_destiny_contested', 4)
+
+def get_reserve_for_destiny_safe() -> int:
+    return _get_force_config('reserve_for_destiny_safe', 1)
 
 
 class ForceActivationEvaluator(ActionEvaluator):
@@ -67,6 +85,12 @@ class ForceActivationEvaluator(ActionEvaluator):
             # Fallback: use default from XML if available
             max_val = context.extra.get('defaultValue', 1)
             logger.warning(f"No max value found, using fallback: {max_val}")
+
+        # Log config values being used for this decision
+        logger.info(f"📊 FORCE CONFIG: max_force_pile={get_max_force_pile()}, "
+                   f"reserve_contested={get_reserve_for_destiny_contested()}, "
+                   f"reserve_safe={get_reserve_for_destiny_safe()}, "
+                   f"critical_life={get_critical_life_force()}")
 
         # Special case: "allow opponent to activate" - just let them activate max
         if 'allow opponent to activate' in text_lower or 'opponent to activate' in text_lower:
@@ -171,10 +195,10 @@ class ForceActivationEvaluator(ActionEvaluator):
         # Reserve more if there are contested locations (potential battles)
         has_contested = self._has_contested_locations(bs)
         if has_contested:
-            reserve_needed = RESERVE_FOR_DESTINY_CONTESTED
+            reserve_needed = get_reserve_for_destiny_contested()
             logger.debug(f"🎲 Contested locations found - reserving {reserve_needed} cards")
         else:
-            reserve_needed = RESERVE_FOR_DESTINY_SAFE
+            reserve_needed = get_reserve_for_destiny_safe()
             logger.debug(f"🎲 No contested locations - reserving {reserve_needed} card")
 
         # Calculate max we can activate while keeping reserve
@@ -184,15 +208,15 @@ class ForceActivationEvaluator(ActionEvaluator):
             amount = max_from_reserve
 
         # === RULE 2: CAP FORCE PILE AT MAX ===
-        # Never have more than MAX_FORCE_PILE in force pile
-        force_room = MAX_FORCE_PILE - current_force
+        # Never have more than get_max_force_pile() in force pile
+        force_room = get_max_force_pile() - current_force
         if force_room < amount:
-            logger.info(f"🎲 Capping force pile at {MAX_FORCE_PILE}. Current: {current_force}, limiting activation from {amount} to {force_room}")
+            logger.info(f"🎲 Capping force pile at {get_max_force_pile()}. Current: {current_force}, limiting activation from {amount} to {force_room}")
             amount = max(0, force_room)
 
         # === RULE 3: LATE GAME PRESERVATION ===
         # When life force is critically low, minimize activation to preserve destiny draws
-        if life_force < CRITICAL_LIFE_FORCE:
+        if life_force < get_critical_life_force():
             # Only activate enough to do ONE action, preserve rest for destiny
             emergency_amount = min(amount, max(1, 6 - current_force))
             if emergency_amount < amount:

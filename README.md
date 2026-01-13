@@ -138,11 +138,72 @@ new_rando/
 └── logs/                   # Log files (gitignored)
 ```
 
+## Production Deployment
+
+For running the bot on a production server (e.g., gemp.starwarsccg.org):
+
+### Startup
+
+```bash
+cd new_rando
+source venv/bin/activate
+
+# Set credentials (or use credentials.py file)
+export GEMP_USERNAME="rando_cal"
+export GEMP_PASSWORD="your_password"
+export GEMP_SERVER_URL="https://gemp.starwarsccg.org/gemp-swccg-server/"
+
+# Start the bot
+python app.py
+```
+
+The bot will:
+- Load strategy configuration from `configs/production.json` (default)
+- Apply rate limiting to stay under GEMP's 40 req/min limit
+- Serve admin UI at http://127.0.0.1:5001
+
+### Important: Do NOT set LOCAL_FAST_MODE
+
+The `LOCAL_FAST_MODE` environment variable disables rate limiting and delays. **Never set this on the production server** - it's only for local bot-vs-bot testing.
+
+```bash
+# WRONG - will get rate limited/banned:
+LOCAL_FAST_MODE=true python app.py
+
+# CORRECT - uses production delays:
+python app.py
+```
+
+### Strategy Configuration
+
+The bot loads AI parameters from `configs/production.json` by default. This includes:
+- GamePlan multi-turn strategic planning
+- Deploy, battle, and move strategy weights
+- Force management parameters
+
+To use a different config:
+```bash
+STRATEGY_CONFIG=/path/to/config.json python app.py
+```
+
+### Admin UI
+
+Access the admin dashboard at http://127.0.0.1:5001 to:
+- Start/stop the bot
+- View current game state
+- Monitor statistics
+- See strategy configuration (read-only)
+
+Use the Start Bot button or enable "Auto-Start" to have the bot start automatically.
+
 ## Development
 
 ```bash
 # Run with debug mode
 FLASK_DEBUG=True python app.py
+
+# Run with fast mode for local testing (bot-vs-bot)
+LOCAL_FAST_MODE=true python app.py
 
 # Run tests
 pytest

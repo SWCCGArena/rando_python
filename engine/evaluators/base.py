@@ -286,14 +286,20 @@ class PassEvaluator(ActionEvaluator):
             pass_multiplier = profile.pass_multiplier
 
             # Apply strategy-based adjustment
+            # Track if in CRUSHING mode to cap resource bonuses later
+            is_crushing = profile.mode == StrategyMode.CRUSHING
+
             if profile.mode == StrategyMode.DESPERATION:
-                action.add_reasoning("DESPERATION: Must act, not pass!", -8.0)
+                # Increased penalty: -15 instead of -8 to overcome small bonuses
+                action.add_reasoning("DESPERATION: Must act, not pass!", -15.0)
             elif profile.mode == StrategyMode.AGGRESSIVE:
                 action.add_reasoning("AGGRESSIVE: Push harder, less passing", -4.0)
             elif profile.mode == StrategyMode.DEFENSIVE:
                 action.add_reasoning("DEFENSIVE: Ahead, can afford to pass", +3.0)
-            elif profile.mode == StrategyMode.CRUSHING:
-                action.add_reasoning("CRUSHING: Way ahead, play safe", +5.0)
+            elif is_crushing:
+                # CRUSHING gets reduced bonus - being ahead is good but shouldn't encourage
+                # too much passivity. Changed from +5 to +2 to be less passive.
+                action.add_reasoning("CRUSHING: Way ahead, play safe", +2.0)
 
             # EARLY GAME AGGRESSION: Turns 1-3, halve all pass bonuses to encourage action
             # This prevents the bot from being too passive when it needs to establish board presence
@@ -307,11 +313,13 @@ class PassEvaluator(ActionEvaluator):
             # - ACTIVATE: Costs nothing, just moves cards from reserve to force pile
             # - DRAW: Drawing IS what we want to do
             # - BATTLE: We just deployed, we WANT to battle! Don't discourage it.
+            # - CONTROL: Force drains are OFFENSIVE - they damage opponent, not us!
             # - FOLLOW-THROUGH: "Choose where to move/deploy" - we already committed!
             decision_text_lower = (context.decision_text or "").lower()
             phase_lower = (context.phase or "").lower()
             is_activate_decision = "activate" in decision_text_lower
             is_draw_decision = "draw" in decision_text_lower and "action" in decision_text_lower
+            is_control_decision = "control" in phase_lower and "control action" in decision_text_lower
             # Detect battle-related decisions:
             # - "Initiate battle" = explicit battle initiation
             # - "Battle action" during Battle phase = also battle initiation (GEMP phrasing varies)
@@ -338,12 +346,19 @@ class PassEvaluator(ActionEvaluator):
                 action.add_reasoning("Already committed to action - follow through", -15.0)
                 return [action]  # Don't add resource-based bonuses
 
-            if bs.force_pile < 3 and not is_activate_decision and not is_draw_decision:
-                bonus = 2.0 * combined_multiplier
+            # When in CRUSHING mode, halve resource bonuses to avoid excessive passivity
+            # We're ahead - don't need to conserve as much
+            crushing_modifier = 0.5 if is_crushing else 1.0
+
+            if bs.force_pile < 3 and not is_activate_decision and not is_draw_decision and not is_control_decision:
+                bonus = 2.0 * combined_multiplier * crushing_modifier
                 action.add_reasoning("Low on Force - prefer to pass", bonus)
 
-            if bs.reserve_deck_low():
-                bonus = 3.0 * combined_multiplier
+            # Don't give "conserve cards" bonus during Control phase!
+            # Force drains are OFFENSIVE - they damage the opponent, not us.
+            # Passing on drains when we could apply pressure is terrible.
+            if bs.reserve_deck_low() and not is_control_decision:
+                bonus = 3.0 * combined_multiplier * crushing_modifier
                 action.add_reasoning("Reserve deck low - conserve cards", bonus)
 
             # Hand management: If hand is small, save force for drawing
@@ -352,17 +367,17 @@ class PassEvaluator(ActionEvaluator):
             if not is_activate_decision and not is_draw_decision:
                 if hand_size < 5:
                     # Small hand - prefer passing to save force for draw phase
-                    bonus = 8.0 * combined_multiplier
+                    bonus = 8.0 * combined_multiplier * crushing_modifier
                     action.add_reasoning(f"Small hand ({hand_size}) - save force for drawing", bonus)
                 elif hand_size < 7:
                     # Below target hand size - slightly prefer passing
-                    bonus = 4.0 * combined_multiplier
+                    bonus = 4.0 * combined_multiplier * crushing_modifier
                     action.add_reasoning(f"Hand below target ({hand_size}/7) - conserve force", bonus)
 
             # During Move phase, be more conservative to save force for drawing
             phase_lower = (context.phase or "").lower()
             if "move" in phase_lower and bs.force_pile <= 4 and hand_size < 7:
-                bonus = 10.0 * combined_multiplier
+                bonus = 10.0 * combined_multiplier * crushing_modifier
                 action.add_reasoning("Move phase + low force + small hand - pass to draw", bonus)
 
         return [action]

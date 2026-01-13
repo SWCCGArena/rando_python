@@ -19,31 +19,87 @@ from typing import List, Optional
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 from ..game_strategy import GameStrategy, HAND_SOFT_CAP, HAND_HARD_CAP
 from ..strategy_profile import get_current_profile, StrategyMode
+from ..strategy_config import get_config
 
 logger = logging.getLogger(__name__)
 
-# Rank deltas (from C# BotAIHelper) - normalized for better decision nuance
-VERY_GOOD_DELTA = 150.0  # Reduced from 999 - strongly prefer but allows comparison
-GOOD_DELTA = 10.0
-BAD_DELTA = -10.0
-VERY_BAD_DELTA = -150.0  # Reduced from -999 - strongly avoid but allows override
+# =============================================================================
+# CONFIG-DRIVEN PARAMETERS
+# =============================================================================
 
-# Draw thresholds (from C# AICACHandler)
-TARGET_HAND_SIZE = 7  # Target hand size before extra draw penalties
-MAX_HAND_SIZE = HAND_HARD_CAP  # Hard cap on hand size (from GameStrategy)
-LOW_RESERVE_THRESHOLD = 6  # Stop drawing when reserve is low
-SMALL_HAND_THRESHOLD = 5  # Hand size to consider drawing
-AGGRESSIVE_FORCE_THRESHOLD = 10  # Force pile for aggressive draw
+def _get_draw_config(key: str, default):
+    """Get draw strategy config value."""
+    return get_config().get('draw_strategy', key, default)
 
-# Dynamic hand size thresholds
-DECK_SIZE_FOR_FULL_HAND = 12  # Below this combined deck size, reduce max hand
-FORCE_RESERVE_TURN_THRESHOLD = 4  # Start reserving force after this turn
-SMALL_HAND_FOR_RESERVE = 6  # Hand size threshold for force reservation
+def _get_weight(key: str, default: float) -> float:
+    """Get evaluator weight."""
+    return get_config().get_weight('draw', key, default)
 
-# Late-game thresholds
-LATE_GAME_LIFE_FORCE = 12  # Below this, be more strategic about draws
-CRITICAL_LIFE_FORCE = 6  # Below this, minimize draws
-EXPENSIVE_CARD_THRESHOLD = 8  # Cards costing this much need force saving
+# Rank deltas
+def get_very_good_delta() -> float:
+    return _get_weight('very_good_delta', 150.0)
+
+def get_good_delta() -> float:
+    return _get_weight('good_delta', 10.0)
+
+def get_bad_delta() -> float:
+    return _get_weight('bad_delta', -10.0)
+
+def get_very_bad_delta() -> float:
+    return _get_weight('very_bad_delta', -150.0)
+
+# Draw thresholds
+def get_target_hand_size() -> int:
+    return _get_draw_config('target_hand_size', 7)
+
+def get_low_reserve_threshold() -> int:
+    return _get_draw_config('low_reserve_threshold', 6)
+
+def get_small_hand_threshold() -> int:
+    return _get_draw_config('small_hand_threshold', 5)
+
+def get_aggressive_force_threshold() -> int:
+    return _get_draw_config('aggressive_force_threshold', 10)
+
+def get_deck_size_for_full_hand() -> int:
+    return _get_draw_config('deck_size_for_full_hand', 12)
+
+def get_force_reserve_turn_threshold() -> int:
+    return _get_draw_config('force_reserve_turn_threshold', 4)
+
+def get_small_hand_for_reserve() -> int:
+    return _get_draw_config('small_hand_for_reserve', 6)
+
+def get_late_game_life_force() -> int:
+    return _get_draw_config('late_game_life_force', 12)
+
+def get_critical_life_force() -> int:
+    return _get_draw_config('critical_life_force', 6)
+
+def get_expensive_card_threshold() -> int:
+    return _get_draw_config('expensive_card_threshold', 8)
+
+# Inline thresholds
+def get_hold_back_draw_force_threshold() -> int:
+    return _get_draw_config('hold_back_draw_force_threshold', 6)
+
+def get_hold_back_draw_life_threshold() -> int:
+    return _get_draw_config('hold_back_draw_life_threshold', 10)
+
+def get_hold_back_draw_force_floor() -> int:
+    return _get_draw_config('hold_back_draw_force_floor', 6)
+
+def get_force_starved_activation() -> int:
+    return _get_draw_config('force_starved_activation', 8)
+
+def get_force_starved_power_threshold() -> int:
+    return _get_draw_config('force_starved_power_threshold', 6)
+
+def get_force_starved_max_hand() -> int:
+    return _get_draw_config('force_starved_max_hand', 8)
+
+# Keep MAX_HAND_SIZE as it comes from GameStrategy
+MAX_HAND_SIZE = HAND_HARD_CAP
 
 
 class DrawEvaluator(ActionEvaluator):
@@ -176,6 +232,37 @@ class DrawEvaluator(ActionEvaluator):
         elif profile.mode == StrategyMode.CRUSHING:
             action.add_reasoning("CRUSHING: Draw for better destiny", 12.0)
 
+        # === STRATEGIC STATE DRAW MODE ===
+        # When strategic state detects we're missing critical card types or
+        # losing the drain war, MAJOR boost to drawing to find answers.
+        # This is a categorical change, not a marginal adjustment.
+        strategic_state = getattr(board_state, 'strategic_state', None)
+        if strategic_state and strategic_state.enabled:
+            # FORCE DRAW MODE: Missing critical card types
+            if strategic_state.force_draw_mode:
+                missing_type = strategic_state.inventory.missing_critical_type
+                if missing_type:
+                    # Major boost - overwhelms most penalties except life force critical
+                    draw_boost = 100.0
+                    action.add_reasoning(
+                        f"STRATEGIC DRAW: Missing {missing_type} - must find options!",
+                        draw_boost
+                    )
+                    logger.info(f"STRATEGIC DRAW MODE: +{draw_boost} (missing {missing_type})")
+
+            # DRAIN CRISIS: Losing drain war and getting worse
+            trajectory = strategic_state.trajectory
+            if (trajectory.drain_gap_trend == "worsening" and
+                trajectory.turns_at_negative >= 2):
+                # We're losing and it's getting worse - draw for answers!
+                urgency_boost = 50.0 + (trajectory.turns_at_negative * 15)
+                action.add_reasoning(
+                    f"DRAIN CRISIS: Gap {trajectory.current_drain_gap:+d}, "
+                    f"worsening for {trajectory.turns_at_negative} turns - draw for answers!",
+                    urgency_boost
+                )
+                logger.info(f"DRAIN CRISIS DRAW: +{urgency_boost} "
+                           f"(gap {trajectory.current_drain_gap:+d})")
         hand_size = board_state.hand_size if hasattr(board_state, 'hand_size') else 7
         reserve_deck = board_state.reserve_deck if hasattr(board_state, 'reserve_deck') else 20
         used_pile = board_state.used_pile if hasattr(board_state, 'used_pile') else 0
@@ -200,22 +287,22 @@ class DrawEvaluator(ActionEvaluator):
 
         # === LATE GAME LIFE FORCE PRESERVATION ===
         # When life force is critically low, be very conservative
-        if remaining_life_force < CRITICAL_LIFE_FORCE:
+        if remaining_life_force < get_critical_life_force():
             action.add_reasoning(
                 f"CRITICAL life force ({remaining_life_force}) - minimize draws",
-                VERY_BAD_DELTA * 0.8  # Strong penalty but not absolute
+                get_very_bad_delta() * 0.8  # Strong penalty but not absolute
             )
             # Still allow draws if hand is truly empty
             if hand_size >= 2:
                 return
 
         # Late game - be more strategic
-        if remaining_life_force < LATE_GAME_LIFE_FORCE:
+        if remaining_life_force < get_late_game_life_force():
             # Penalty scales with how low life force is
-            penalty_scale = (LATE_GAME_LIFE_FORCE - remaining_life_force) / LATE_GAME_LIFE_FORCE
+            penalty_scale = (get_late_game_life_force() - remaining_life_force) / get_late_game_life_force()
             action.add_reasoning(
                 f"Late game ({remaining_life_force} life force) - draw carefully",
-                BAD_DELTA * 2 * penalty_scale
+                get_bad_delta() * 2 * penalty_scale
             )
 
         # When remaining life force drops below MAX_HAND_SIZE (16),
@@ -227,7 +314,7 @@ class DrawEvaluator(ActionEvaluator):
 
         # If hand already exceeds effective max, STRONGLY penalize drawing
         if hand_size >= effective_max_hand:
-            penalty = VERY_BAD_DELTA  # -999 to strongly discourage
+            penalty = get_very_bad_delta()  # -999 to strongly discourage
             action.add_reasoning(
                 f"CRITICAL: Hand {hand_size} >= life force limit {effective_max_hand} (only {remaining_life_force} cards left!)",
                 penalty
@@ -245,9 +332,9 @@ class DrawEvaluator(ActionEvaluator):
         # 2. Force pile is decent (>6) - we have resources to spare
         # 3. Life force is decent (>10) - not in survival mode
         # 4. Hand is below hard cap
-        HOLD_BACK_DRAW_FORCE_THRESHOLD = 6
-        HOLD_BACK_DRAW_LIFE_THRESHOLD = 10
-        HOLD_BACK_DRAW_FORCE_FLOOR = 6  # Stop drawing when force pile reaches this
+        hold_back_force_threshold = get_hold_back_draw_force_threshold()
+        hold_back_life_threshold = get_hold_back_draw_life_threshold()
+        hold_back_force_floor = get_hold_back_draw_force_floor()
 
         if hasattr(board_state, 'deploy_planner') and board_state.deploy_planner:
             planner = board_state.deploy_planner
@@ -262,19 +349,19 @@ class DrawEvaluator(ActionEvaluator):
 
                 if not is_strategic_hold:
                     # This is a "couldn't deploy" hold - check if we should draw
-                    if (force_pile > HOLD_BACK_DRAW_FORCE_THRESHOLD and
-                        remaining_life_force > HOLD_BACK_DRAW_LIFE_THRESHOLD and
+                    if (force_pile > hold_back_force_threshold and
+                        remaining_life_force > hold_back_life_threshold and
                         hand_size < MAX_HAND_SIZE):
 
                         # Calculate how many draws we can afford while keeping force floor
-                        draws_affordable = force_pile - HOLD_BACK_DRAW_FORCE_FLOOR
+                        draws_affordable = force_pile - hold_back_force_floor
 
                         if draws_affordable > 0:
                             # Boost drawing significantly - we need new options!
                             draw_boost = 50.0 + (draws_affordable * 5)  # Strong base + bonus per affordable draw
                             action.add_reasoning(
                                 f"HOLD-BACK DRAW: Couldn't deploy ({hold_reason[:50]}...), "
-                                f"force {force_pile} > {HOLD_BACK_DRAW_FORCE_THRESHOLD}, "
+                                f"force {force_pile} > {hold_back_force_threshold}, "
                                 f"drawing to find options (up to {draws_affordable} draws)",
                                 draw_boost
                             )
@@ -296,7 +383,7 @@ class DrawEvaluator(ActionEvaluator):
                 action.add_reasoning(
                     f"SAVING FOR NEXT-TURN CRUSH: Need {crush_plan.force_needed} force for "
                     f"{', '.join(crush_plan.card_names)} → {crush_plan.target_location_name}",
-                    VERY_BAD_DELTA * 0.9  # Strong penalty but allow if hand is truly empty
+                    get_very_bad_delta() * 0.9  # Strong penalty but allow if hand is truly empty
                 )
                 if hand_size >= 3:  # If we have at least 3 cards, definitely don't draw
                     return
@@ -304,7 +391,7 @@ class DrawEvaluator(ActionEvaluator):
                 # Can afford some drawing, but penalize to encourage saving
                 action.add_reasoning(
                     f"Next-turn crush: can spend up to {max_draw_force} on draws",
-                    BAD_DELTA  # Moderate penalty - encourage saving but don't block
+                    get_bad_delta()  # Moderate penalty - encourage saving but don't block
                 )
 
         # === FUTURE TURN PLANNING: EXPENSIVE CARDS ===
@@ -320,7 +407,7 @@ class DrawEvaluator(ActionEvaluator):
                     if metadata and metadata.deploy_value:
                         deploy_cost = metadata.deploy_value
                         max_deployable_cost = max(max_deployable_cost, deploy_cost)
-                        if deploy_cost >= EXPENSIVE_CARD_THRESHOLD:
+                        if deploy_cost >= get_expensive_card_threshold():
                             expensive_card_in_hand = True
                         if force_pile >= deploy_cost:
                             affordable_cards_count += 1
@@ -335,14 +422,14 @@ class DrawEvaluator(ActionEvaluator):
             if turns_to_save <= 3 and remaining_life_force >= max_deployable_cost:
                 action.add_reasoning(
                     f"Saving for expensive card (cost {max_deployable_cost}, need {force_deficit} more, ~{turns_to_save} turns)",
-                    BAD_DELTA * 2
+                    get_bad_delta() * 2
                 )
 
         # If we have stuff to deploy but couldn't afford it, save force
         if affordable_cards_count == 0 and hand_size > 3 and force_pile < 6:
             action.add_reasoning(
                 f"No affordable cards (hand {hand_size}, force {force_pile}) - save force for next turn",
-                BAD_DELTA * 1.5
+                get_bad_delta() * 1.5
             )
 
         # === FORCE-STARVED STRATEGY ===
@@ -353,11 +440,11 @@ class DrawEvaluator(ActionEvaluator):
         # Key insight: Forward-looking planning
         # - Calculate: next_turn_force = current_force + activation
         # - If next_turn_force < deploy_cost_for_6_power + 2, stop drawing!
-        FORCE_STARVED_ACTIVATION = 8  # Below this, we're force-starved
-        FORCE_STARVED_POWER_THRESHOLD = 6  # Need this much power to be "ready to deploy"
-        FORCE_STARVED_MAX_HAND = 8  # Don't exceed this hand size when force-starved
+        force_starved_activation = get_force_starved_activation()
+        force_starved_power_threshold = get_force_starved_power_threshold()
+        force_starved_max_hand = get_force_starved_max_hand()
 
-        if force_generation < FORCE_STARVED_ACTIVATION:
+        if force_generation < force_starved_activation:
             # We're force-starved! Check if we have enough deployable power
             deployable_power = 0
             min_cost_for_threshold_power = 999
@@ -384,12 +471,12 @@ class DrawEvaluator(ActionEvaluator):
                 for power, cost in power_cost_pairs:
                     cumulative_power += power
                     cumulative_cost += cost
-                    if cumulative_power >= FORCE_STARVED_POWER_THRESHOLD:
+                    if cumulative_power >= force_starved_power_threshold:
                         min_cost_for_threshold_power = cumulative_cost
                         break
 
             # If we have 6+ deployable power, apply force-starved logic
-            if deployable_power >= FORCE_STARVED_POWER_THRESHOLD:
+            if deployable_power >= force_starved_power_threshold:
                 # Forward-looking: can we afford to deploy next turn?
                 next_turn_force = force_pile + force_generation
                 force_needed = min_cost_for_threshold_power + 2  # +2 buffer for reactions
@@ -404,7 +491,7 @@ class DrawEvaluator(ActionEvaluator):
                     action.add_reasoning(
                         f"FORCE-STARVED: Save force! ({deployable_power}p ready, need {force_needed} force, "
                         f"will have {next_turn_force} → short {shortfall})",
-                        VERY_BAD_DELTA * 0.6  # Strong penalty but not absolute
+                        get_very_bad_delta() * 0.6  # Strong penalty but not absolute
                     )
                     logger.warning(f"🎴 FORCE-STARVED: Stopping draw to save force for deployment")
 
@@ -412,15 +499,15 @@ class DrawEvaluator(ActionEvaluator):
                     if hand_size >= 6:
                         action.add_reasoning(
                             f"Already have {hand_size} cards - more won't help without force",
-                            BAD_DELTA * 2
+                            get_bad_delta() * 2
                         )
                         return  # Exit early - definitely don't draw
 
                 # Even if we CAN afford next turn, don't over-draw when force-starved
-                if hand_size >= FORCE_STARVED_MAX_HAND:
+                if hand_size >= force_starved_max_hand:
                     action.add_reasoning(
                         f"Force-starved ({force_generation}/turn): hand {hand_size} is enough",
-                        BAD_DELTA * 3
+                        get_bad_delta() * 3
                     )
 
         # Determine if we have deployable cards (for dynamic soft cap)
@@ -447,7 +534,7 @@ class DrawEvaluator(ActionEvaluator):
             if not has_deployable_cards:
                 effective_soft_cap += 2
 
-        if hand_size < effective_soft_cap and remaining_life_force >= LATE_GAME_LIFE_FORCE:
+        if hand_size < effective_soft_cap and remaining_life_force >= get_late_game_life_force():
             # Bonus scales with how far below cap we are
             cards_below_cap = effective_soft_cap - hand_size
             # Use exponential scaling: smaller hands get MUCH stronger bonus
@@ -464,7 +551,7 @@ class DrawEvaluator(ActionEvaluator):
         # === FORCE RESERVATION FOR OPPONENT'S TURN ===
         # After turn 4, keep some force for reactions/battles
         # Also check if we have cards on contested locations
-        force_to_reserve = 1 if hand_size < SMALL_HAND_FOR_RESERVE else 2
+        force_to_reserve = 1 if hand_size < get_small_hand_for_reserve() else 2
 
         # Reserve more force if we have presence at contested locations
         if hasattr(board_state, 'locations') and board_state.locations:
@@ -475,35 +562,35 @@ class DrawEvaluator(ActionEvaluator):
             if contested_locations > 0:
                 force_to_reserve = max(force_to_reserve, 2 + contested_locations)
 
-        if turn_number >= FORCE_RESERVE_TURN_THRESHOLD:
+        if turn_number >= get_force_reserve_turn_threshold():
             if force_pile <= force_to_reserve:
                 action.add_reasoning(
                     f"Turn {turn_number}: reserve {force_to_reserve} force for reactions/battles",
-                    BAD_DELTA * 1.5
+                    get_bad_delta() * 1.5
                 )
 
         # C# Logic 1: Don't draw if low reserve (avoid decking)
-        if reserve <= LOW_RESERVE_THRESHOLD:
-            penalty = BAD_DELTA * (LOW_RESERVE_THRESHOLD - reserve)
+        if reserve <= get_low_reserve_threshold():
+            penalty = get_bad_delta() * (get_low_reserve_threshold() - reserve)
             action.add_reasoning(f"Low reserve ({reserve}) - avoid drawing", penalty)
 
         # C# Logic 2: Draw if hand is smaller than target and enough reserve
         # But only if we're not in late game conservation mode
-        if hand_size < TARGET_HAND_SIZE and reserve > 10 and force_pile > 1:
-            if remaining_life_force >= LATE_GAME_LIFE_FORCE:
-                action.add_reasoning(f"Hand size {hand_size} < {TARGET_HAND_SIZE} - draw to fill", GOOD_DELTA)
+        if hand_size < get_target_hand_size() and reserve > 10 and force_pile > 1:
+            if remaining_life_force >= get_late_game_life_force():
+                action.add_reasoning(f"Hand size {hand_size} < {get_target_hand_size()} - draw to fill", get_good_delta())
 
         # C# Logic 3: Draw if hand is very small (even in late game, need options)
-        if hand_size <= SMALL_HAND_THRESHOLD and reserve > 4 and force_pile > 1:
-            action.add_reasoning(f"Small hand ({hand_size}) - draw cards", GOOD_DELTA)
+        if hand_size <= get_small_hand_threshold() and reserve > 4 and force_pile > 1:
+            action.add_reasoning(f"Small hand ({hand_size}) - draw cards", get_good_delta())
 
         # C# Logic 4: Aggressive draw only if we have good life force
-        if force_pile > AGGRESSIVE_FORCE_THRESHOLD and remaining_life_force >= LATE_GAME_LIFE_FORCE:
-            action.add_reasoning(f"High force pile ({force_pile}) - YOLO draw", GOOD_DELTA)
+        if force_pile > get_aggressive_force_threshold() and remaining_life_force >= get_late_game_life_force():
+            action.add_reasoning(f"High force pile ({force_pile}) - YOLO draw", get_good_delta())
 
         # C# Logic 5: On Hold strategy but hand is weak, still draw
         if force_pile > 5 and hand_size <= 4:
-            action.add_reasoning("Weak hand - draw even on hold", GOOD_DELTA)
+            action.add_reasoning("Weak hand - draw even on hold", get_good_delta())
 
         # Strategic hand size management (dynamic soft cap based on game phase)
         if game_strategy:
@@ -514,18 +601,18 @@ class DrawEvaluator(ActionEvaluator):
 
             # Force generation deficit - draw to find locations
             # But only if we're not critically low on life force
-            if remaining_life_force >= LATE_GAME_LIFE_FORCE:
+            if remaining_life_force >= get_late_game_life_force():
                 if game_strategy.should_prioritize_drawing_for_locations(hand_size):
-                    action.add_reasoning(f"Low force gen ({game_strategy.my_force_generation}) - draw for locations", GOOD_DELTA)
+                    action.add_reasoning(f"Low force gen ({game_strategy.my_force_generation}) - draw for locations", get_good_delta())
         else:
             # Fallback: Use local effective_soft_cap calculation
             if hand_size >= effective_max_hand:
                 overflow = hand_size - effective_max_hand
-                action.add_reasoning(f"Hand full ({hand_size}/{effective_max_hand}) - avoid drawing", BAD_DELTA * overflow)
+                action.add_reasoning(f"Hand full ({hand_size}/{effective_max_hand}) - avoid drawing", get_bad_delta() * overflow)
             elif hand_size >= effective_soft_cap:
                 overflow = hand_size - effective_soft_cap
-                action.add_reasoning(f"Hand above {phase_note}-game cap ({hand_size}/{effective_soft_cap})", BAD_DELTA * overflow * 0.5)
+                action.add_reasoning(f"Hand above {phase_note}-game cap ({hand_size}/{effective_soft_cap})", get_bad_delta() * overflow * 0.5)
 
         # C# Logic 7: Save last force
         if force_pile == 1:
-            action.add_reasoning("Last force - save it", BAD_DELTA)
+            action.add_reasoning("Last force - save it", get_bad_delta())

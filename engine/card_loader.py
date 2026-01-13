@@ -7,9 +7,13 @@ Provides lookup by blueprint ID (gempId) for card information.
 
 import json
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Import gametext parser (lazy to avoid circular imports)
+if TYPE_CHECKING:
+    from .gametext_parser import ParsedGametext
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,8 @@ class Card:
     matching: list = field(default_factory=list)  # Matching pilot/ship names (bidirectional preference)
     counterpart: Optional[str] = None
     matching_weapon: list = field(default_factory=list)  # Characters this weapon deploys on (or weapons for characters)
+    pulled_by: list = field(default_factory=list)  # Cards that can tutor/fetch this card
+    combo_cards: list = field(default_factory=list)  # Suggested synergy cards from designers
 
     # Rarity and set info
     rarity: Optional[str] = None
@@ -67,6 +73,48 @@ class Card:
     # Special flags
     is_unique: bool = False             # Title starts with "•"
     is_defensive_shield: bool = False   # "Defensive Shield" in gametext
+
+    # Parsed gametext abilities (populated by gametext_parser)
+    _parsed_gametext: Optional['ParsedGametext'] = field(default=None, repr=False)
+
+    @property
+    def parsed(self) -> 'ParsedGametext':
+        """Get parsed gametext abilities (lazy-loaded)."""
+        if self._parsed_gametext is None:
+            from .gametext_parser import parse_gametext, ParsedGametext
+            self._parsed_gametext = parse_gametext(self.gametext)
+        return self._parsed_gametext
+
+    # Quick access to common parsed abilities
+    @property
+    def immune_attrition_threshold(self) -> int:
+        """Get attrition immunity threshold (0 if not immune)."""
+        return self.parsed.immune_attrition
+
+    @property
+    def has_attrition_immunity(self) -> bool:
+        """Check if card has any attrition immunity."""
+        return self.parsed.immune_attrition > 0
+
+    @property
+    def draws_extra_destiny(self) -> int:
+        """Number of extra destiny draws in battle."""
+        return self.parsed.draws_extra_destiny
+
+    @property
+    def has_targeting_immunity(self) -> bool:
+        """Check if card may not be targeted."""
+        return self.parsed.may_not_be_targeted
+
+    @property
+    def is_immune_to_sense(self) -> bool:
+        """Check if interrupt is immune to Sense."""
+        return self.parsed.immune_to_sense
+
+    @property
+    def is_immune_to_alter(self) -> bool:
+        """Check if effect is immune to Alter."""
+        return self.parsed.immune_to_alter
 
     # Parsed numeric values (for easy access)
     @property
@@ -100,6 +148,16 @@ class Card:
             return int(self.forfeit) if self.forfeit and self.forfeit.isdigit() else 0
         except (ValueError, AttributeError):
             return 0
+
+    @property
+    def is_tutorable(self) -> bool:
+        """Check if this card can be fetched/tutored by other cards."""
+        return len(self.pulled_by) > 0
+
+    @property
+    def has_combos(self) -> bool:
+        """Check if this card has known synergies with other cards."""
+        return len(self.combo_cards) > 0
 
     @property
     def pilot_adds_power(self) -> int:
@@ -333,6 +391,49 @@ class Card:
         return self.is_character and self.sub_type and 'droid' in self.sub_type.lower()
 
     @property
+    def is_alien(self) -> bool:
+        """Check if card is an alien (Character with Alien subtype)"""
+        return self.is_character and self.sub_type and 'alien' in self.sub_type.lower()
+
+    @property
+    def is_jedi(self) -> bool:
+        """Check if card is a Jedi (has Jedi in subtype or characteristics)"""
+        if not self.is_character:
+            return False
+        if self.sub_type and 'jedi' in self.sub_type.lower():
+            return True
+        return any('jedi' in str(c).lower() for c in self.characteristics)
+
+    @property
+    def is_sith(self) -> bool:
+        """Check if card is a Sith (has Sith in subtype or characteristics)"""
+        if not self.is_character:
+            return False
+        if self.sub_type and 'sith' in self.sub_type.lower():
+            return True
+        return any('sith' in str(c).lower() for c in self.characteristics)
+
+    @property
+    def is_leader(self) -> bool:
+        """Check if card has leader characteristic"""
+        return any('leader' in str(c).lower() for c in self.characteristics)
+
+    @property
+    def is_bounty_hunter(self) -> bool:
+        """Check if card has bounty hunter characteristic"""
+        return any('bounty hunter' in str(c).lower() for c in self.characteristics)
+
+    @property
+    def is_spy(self) -> bool:
+        """Check if card has spy characteristic"""
+        return any('spy' in str(c).lower() for c in self.characteristics)
+
+    @property
+    def is_smuggler(self) -> bool:
+        """Check if card has smuggler characteristic"""
+        return any('smuggler' in str(c).lower() for c in self.characteristics)
+
+    @property
     def provides_presence(self) -> bool:
         """
         Check if this card provides 'presence' at a location.
@@ -545,7 +646,11 @@ class CardDatabase:
     Loads and provides access to card metadata.
     """
 
-    def __init__(self, card_json_dir: str = "/opt/gemp/rando_cal_working/swccg-card-json"):
+    def __init__(self, card_json_dir: str | None = None):
+        # Use config path if not provided
+        if card_json_dir is None:
+            from config import config
+            card_json_dir = config.CARD_JSON_DIR
         self.card_json_dir = Path(card_json_dir)
         self.cards: Dict[str, Card] = {}  # Keyed by blueprint_id (gempId)
         self._loaded = False
@@ -663,6 +768,8 @@ class CardDatabase:
                 matching=card_data.get('matching') or [],
                 counterpart=card_data.get('counterpart'),
                 matching_weapon=card_data.get('matchingWeapon', []),
+                pulled_by=card_data.get('pulledBy', []),
+                combo_cards=card_data.get('combo', []),
 
                 # Metadata
                 rarity=card_data.get('rarity'),

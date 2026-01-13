@@ -23,17 +23,37 @@ from enum import Enum
 from typing import List, Optional, Dict, Tuple, Set
 
 from engine.card_loader import get_card, is_matching_pilot_ship
+from engine.strategy_config import get_config
+from engine.monte_carlo import MonteCarloSimulator, SimulationResult, ExpectedValue
+# NOTE: GoalType was removed - hold penalty testing showed it hurt performance
 
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# CONFIG-DRIVEN PARAMETERS
+# All values loaded from JSON config with hardcoded fallback defaults
+# =============================================================================
+
+def _get_deploy_config(key: str, default):
+    """Get deploy strategy config value."""
+    return get_config().get('deploy_strategy', key, default)
+
+def _get_battle_config(key: str, default):
+    """Get battle strategy config value."""
+    return get_config().get('battle_strategy', key, default)
+
+def _get_contest_config(key: str, default):
+    """Get contest strategy config value."""
+    return get_config().get('contest_strategy', key, default)
+
 # Battle threshold - power advantage needed to feel comfortable battling
-BATTLE_FAVORABLE_THRESHOLD = 4
+def get_battle_favorable_threshold() -> int:
+    return _get_battle_config('favorable_threshold', 4)
 
 # Minimum power advantage required to contest a location
-# This prevents risky marginal fights like 5 vs 4 or 4 vs 2
-# We also require meeting DEPLOY_THRESHOLD, so contesting 4 enemy needs 6 power (not 6)
-# NOTE: This is the DEFAULT value - actual value may be reduced when life is low
-MIN_CONTEST_ADVANTAGE = 2
+def get_min_contest_advantage() -> int:
+    return _get_contest_config('min_contest_advantage', 2)
 
 
 def get_contest_advantage(life_force: int) -> int:
@@ -48,37 +68,77 @@ def get_contest_advantage(life_force: int) -> int:
 
     Returns the required advantage (0-2).
     """
+    base_advantage = get_min_contest_advantage()
     if life_force >= 30:
-        return 2  # Full advantage required
+        return base_advantage  # Full advantage required
     elif life_force >= 20:
-        return 1  # Accept narrow wins
+        return max(0, base_advantage - 1)  # Accept narrow wins
     else:
         return 0  # Accept ties (desperate)
 
-# Thresholds for battle/flee decisions (from battle_evaluator.py)
-RETREAT_THRESHOLD = -6  # Power diff <= this = should flee, don't reinforce
-DANGEROUS_THRESHOLD = -2  # Power diff <= this = dangerous, need serious reinforcement
+# Thresholds for battle/flee decisions
+def get_retreat_threshold() -> int:
+    return _get_battle_config('retreat_threshold', -6)
+
+def get_dangerous_threshold() -> int:
+    return _get_battle_config('dangerous_threshold', -2)
+
+# Minimum total power before deploying characters
+def get_deploy_threshold() -> int:
+    return _get_deploy_config('deploy_threshold', 4)
 
 # Power advantage where we stop reinforcing (overkill prevention)
-DEPLOY_OVERKILL_THRESHOLD = 8
+def get_deploy_overkill_threshold() -> int:
+    return _get_deploy_config('deploy_overkill_threshold', 8)
 
 # Enemy power buildup that prevents threshold relaxation (react/move threat)
-# If opponent has this much power anywhere, they can react/move to crush weak deploys
-REACT_THREAT_THRESHOLD = 8
+def get_react_threat_threshold() -> int:
+    return _get_battle_config('react_threat_threshold', 8)
 
 # Early game hold-back: minimum score to deploy in turns 1-3
 # Prevents weak "establish" plays that waste cards; bot waits for better opportunity
-# Reduced from 110 to 80 to allow more early game plays (was filtering 47%)
-DEPLOY_EARLY_GAME_THRESHOLD = 80
-DEPLOY_EARLY_GAME_TURNS = 3  # How many turns count as "early game"
+def get_early_game_threshold() -> int:
+    return _get_deploy_config('early_game_threshold', 80)
 
-# Mid-late game reinforcement: target power level to reinforce friendly locations to
-# After turn 3, prioritize reinforcing our locations to this power before establishing elsewhere
-# Prevents early weak positions from getting crushed when opponent builds up
-REINFORCE_TARGET_POWER = 10
+def get_early_game_turns() -> int:
+    return _get_deploy_config('early_game_turns', 3)
 
-# Bonus score for matching pilot/ship combos (soft preference, not requirement)
-MATCHING_PILOT_BONUS = 10
+# Mid-late game reinforcement: target power level
+def get_reinforce_target_power() -> int:
+    return _get_deploy_config('reinforce_target_power', 10)
+
+# Bonus score for matching pilot/ship combos
+def get_matching_pilot_bonus() -> int:
+    return _get_deploy_config('matching_pilot_bonus', 10)
+
+# Additional deploy strategy parameters
+def get_low_enemy_threshold() -> int:
+    return _get_deploy_config('low_enemy_threshold', 4)
+
+def get_max_establish_locations() -> int:
+    return _get_deploy_config('max_establish_locations', 2)
+
+def get_uncontested_fortified_threshold() -> int:
+    return _get_deploy_config('uncontested_fortified_threshold', 10)
+
+def get_reinforce_force_threshold() -> int:
+    return _get_deploy_config('reinforce_force_threshold', 4)
+
+def get_min_force_for_weapons() -> int:
+    return _get_deploy_config('min_force_for_weapons', 2)
+
+# Minimum power threshold for establishing at a new location
+# This is a FLOOR that dynamic thresholds cannot go below
+def get_min_establish_power() -> int:
+    return _get_deploy_config('min_establish_power', 4)
+
+# Whether weak characters require a "buddy" (another character deployed with them)
+def get_weak_char_buddy_required() -> bool:
+    return _get_deploy_config('weak_char_buddy_required', True)
+
+# Power threshold below which a character is considered "weak"
+def get_weak_character_power() -> int:
+    return _get_deploy_config('weak_character_power', 2)
 
 
 def _pilot_score_for_ship(pilot_dict: Dict, ship_dict: Dict) -> int:
@@ -103,7 +163,7 @@ def _pilot_score_for_ship(pilot_dict: Dict, ship_dict: Dict) -> int:
     ship_card = get_card(ship_dict.get('blueprint_id', ''))
 
     if pilot_card and ship_card and is_matching_pilot_ship(pilot_card, ship_card):
-        base_score += MATCHING_PILOT_BONUS
+        base_score += get_matching_pilot_bonus()
         logger.debug(f"   ⭐ Matching pilot bonus: {pilot_dict.get('name', '?')} + {ship_dict.get('name', '?')}")
 
     return base_score
@@ -236,6 +296,9 @@ class LocationAnalysis:
     is_interior: bool = False
     is_exterior: bool = True  # Default to exterior
 
+    # Site vs System (characters can only deploy to sites, not systems)
+    is_site: bool = False  # True if this is a site (ground location with : in name)
+
     @property
     def power_differential(self) -> int:
         """Positive = I'm ahead, negative = they're ahead"""
@@ -253,6 +316,7 @@ class DeploymentInstruction:
     reason: str
     power_contribution: int = 0
     deploy_cost: int = 0
+    ability_contribution: int = 0  # For battle destiny eligibility (need 4+ total)
     # Backup target if primary is unavailable (e.g., blocked by game rules)
     backup_location_id: Optional[str] = None
     backup_location_name: Optional[str] = None
@@ -571,6 +635,60 @@ class NextTurnCrushPlan:
         return max(0, max_draw - 1)
 
 
+@dataclass
+class ExpensiveCardBudget:
+    """
+    System 1: Tracks force we're saving for an expensive card.
+
+    When we have a high-value expensive card (e.g., Finalizer at 13 cost)
+    but can't afford it this turn, create a budget to save force across turns.
+
+    This prevents the bot from spending all force on cheap deployments
+    when saving would let us deploy a powerful card next turn.
+    """
+    target_blueprint_id: str  # Blueprint ID of card we're saving for
+    target_name: str          # Human-readable name
+    target_cost: int          # Deploy cost of the card
+    target_power: int         # Power value of the card
+    save_per_turn: int        # How much to save each turn
+    turns_remaining: int      # Estimated turns until we can afford it
+    is_starship: bool = False  # True if saving for a ship (space emergency relevance)
+
+    def update_turn(self, current_force: int, force_generation: int) -> bool:
+        """
+        Update budget at turn start. Returns True if we can now afford the card.
+
+        Args:
+            current_force: Force we have right now
+            force_generation: How much force we'll generate
+
+        Returns:
+            True if we should now be able to deploy the card
+        """
+        self.turns_remaining -= 1
+        expected_force = current_force + force_generation
+        can_afford = expected_force >= self.target_cost
+        if can_afford:
+            logger.info(f"💰 BUDGET COMPLETE: Can now afford {self.target_name} "
+                       f"(have {current_force} + {force_generation} gen = {expected_force}, need {self.target_cost})")
+        else:
+            logger.info(f"💰 Budget update: {self.target_name} - {self.turns_remaining} turns left "
+                       f"(have {current_force}, need {self.target_cost})")
+        return can_afford
+
+    def get_force_to_reserve(self, current_force: int) -> int:
+        """
+        Get how much force we should reserve this turn.
+
+        Returns minimum of:
+        - save_per_turn (our target savings rate)
+        - Half of current force (never save more than half)
+        """
+        max_reserve = current_force // 2
+        reserve = min(self.save_per_turn, max_reserve)
+        return max(0, reserve)
+
+
 class DeployPhasePlanner:
     """
     Creates comprehensive deployment plans for the entire phase.
@@ -588,6 +706,18 @@ class DeployPhasePlanner:
         self._last_phase: str = ""
         self._last_turn: int = -1
         self._current_turn: int = 1  # Current turn for scoring (set in create_plan)
+        self._board_state = None  # Current board state (set in create_plan)
+
+        # Monte Carlo simulation for plan stress-testing
+        mc_config = get_config().get_section('monte_carlo')
+        self.monte_carlo_enabled = mc_config.get('enabled', False)
+        self.monte_carlo_top_n = mc_config.get('simulate_top_n', 5)
+        if self.monte_carlo_enabled:
+            self.monte_carlo = MonteCarloSimulator(mc_config)
+            logger.info(f"🎲 Monte Carlo simulation ENABLED (n={self.monte_carlo.n_simulations}, "
+                       f"barrier_prob={self.monte_carlo.barrier_prob})")
+        else:
+            self.monte_carlo = None
 
     def reset(self):
         """Reset planner state for a new game. Call this when game starts."""
@@ -596,23 +726,39 @@ class DeployPhasePlanner:
         self._last_phase = ""
         self._last_turn = -1
         self._current_turn = 1
+        self._board_state = None
 
-    def _estimate_force_generation(self, locations: List[LocationAnalysis]) -> int:
+    def _estimate_force_generation(self, locations: List[LocationAnalysis], board_state=None) -> int:
         """
         Estimate our force generation for next turn.
 
-        Force generation = sum of my_icons at locations we control (have presence).
-        For simplicity, we count all locations where my_power > 0 or my_icons > 0.
+        Uses the actual GEMP-reported force generation value when available.
+        Falls back to counting icons at controlled locations only.
+
+        Args:
+            locations: Analyzed locations (for fallback calculation)
+            board_state: Board state with GEMP's activation value
+
+        Returns:
+            Estimated force generation for next turn
         """
+        # Use actual GEMP value if available (most accurate)
+        if board_state and hasattr(board_state, 'activation') and board_state.activation > 0:
+            return board_state.activation
+
+        # Fallback: only count icons at locations we CONTROL (have presence)
+        # This is more conservative than the buggy "count all icons" approach
         total_icons = 0
         for loc in locations:
-            # Count icons at locations where we have presence or can activate
-            if loc.my_icons > 0:
+            # Only count icons at locations where we have presence (control)
+            if loc.my_icons > 0 and loc.my_power > 0:
                 total_icons += loc.my_icons
-        return total_icons
+
+        # Ensure at least 1 (starting force generation)
+        return max(1, total_icons)
 
     def _estimate_next_turn_force(self, current_force: int, locations: List[LocationAnalysis],
-                                   force_spent_this_turn: int = 0) -> int:
+                                   force_spent_this_turn: int = 0, board_state=None) -> int:
         """
         Estimate how much force we'll have available next turn.
 
@@ -620,12 +766,13 @@ class DeployPhasePlanner:
             current_force: Current force pile
             locations: Analyzed locations for icon counting
             force_spent_this_turn: Force we're planning to spend this turn
+            board_state: Board state with GEMP's activation value
 
         Returns:
             Estimated force available next turn
         """
         force_remaining = current_force - force_spent_this_turn
-        force_generation = self._estimate_force_generation(locations)
+        force_generation = self._estimate_force_generation(locations, board_state)
         return force_remaining + force_generation
 
     def _find_next_turn_crush_opportunities(
@@ -654,10 +801,30 @@ class DeployPhasePlanner:
             return None
 
         # Calculate next turn's expected force (if we spend 0 this turn)
-        force_generation = self._estimate_force_generation(locations)
-        next_turn_force = current_force + force_generation
+        # Must account for:
+        # 1. Reserve deck limits activation (can't activate more than reserve size)
+        # 2. Drains will deplete reserve before next activate phase
+        force_generation = self._estimate_force_generation(locations, board_state)
+        reserve_deck = getattr(board_state, 'reserve_deck', 0) or 0
 
-        logger.debug(f"🔮 Next-turn analysis: current={current_force}, gen={force_generation}, next={next_turn_force}")
+        # Get drain gap from strategic state if available
+        drain_gap = 0
+        strategic_state = getattr(board_state, 'strategic_state', None)
+        if strategic_state and strategic_state.enabled:
+            drain_gap = strategic_state.trajectory.current_drain_gap
+
+        # If drain gap is negative, we'll lose that much reserve to drains before next activate
+        expected_drain_loss = abs(drain_gap) if drain_gap < 0 else 0
+        effective_reserve = max(0, reserve_deck - expected_drain_loss)
+
+        # Can only activate up to effective reserve (minus a small buffer for destiny draws)
+        destiny_buffer = 2  # Keep some cards for destiny draws
+        max_activation = max(0, min(force_generation, effective_reserve - destiny_buffer))
+        next_turn_force = current_force + max_activation
+
+        logger.debug(f"🔮 Next-turn analysis: current={current_force}, gen={force_generation}, "
+                    f"reserve={reserve_deck}, drain_gap={drain_gap}, effective_reserve={effective_reserve}, "
+                    f"max_activation={max_activation}, next={next_turn_force}")
 
         # Find enemy-held locations we could potentially crush
         enemy_held = [
@@ -685,8 +852,8 @@ class DeployPhasePlanner:
         # Check each enemy-held location
         for loc in enemy_held:
             enemy_power = loc.their_power
-            # Need BATTLE_FAVORABLE_THRESHOLD advantage for CRUSH
-            power_needed_for_crush = enemy_power + BATTLE_FAVORABLE_THRESHOLD
+            # Need favorable threshold advantage for CRUSH
+            power_needed_for_crush = enemy_power + get_battle_favorable_threshold()
 
             logger.debug(f"🔮 Checking {loc.name}: enemy={enemy_power}, need {power_needed_for_crush} for crush")
 
@@ -826,10 +993,28 @@ class DeployPhasePlanner:
             return None
 
         # Calculate next turn's expected force (if we spend 0 this turn)
-        force_generation = self._estimate_force_generation(locations)
-        next_turn_force = current_force + force_generation
+        # Must account for reserve deck limits and drain losses
+        force_generation = self._estimate_force_generation(locations, board_state)
+        reserve_deck = getattr(board_state, 'reserve_deck', 0) or 0
 
-        logger.debug(f"🩸🔮 Next-turn bleed analysis: current={current_force}, gen={force_generation}, next={next_turn_force}")
+        # Get drain gap from strategic state if available
+        drain_gap = 0
+        strategic_state = getattr(board_state, 'strategic_state', None)
+        if strategic_state and strategic_state.enabled:
+            drain_gap = strategic_state.trajectory.current_drain_gap
+
+        # If drain gap is negative, we'll lose that much reserve to drains before next activate
+        expected_drain_loss = abs(drain_gap) if drain_gap < 0 else 0
+        effective_reserve = max(0, reserve_deck - expected_drain_loss)
+
+        # Can only activate up to effective reserve (minus buffer for destiny draws)
+        destiny_buffer = 2
+        max_activation = max(0, min(force_generation, effective_reserve - destiny_buffer))
+        next_turn_force = current_force + max_activation
+
+        logger.debug(f"🩸🔮 Next-turn bleed analysis: current={current_force}, gen={force_generation}, "
+                    f"reserve={reserve_deck}, drain_gap={drain_gap}, effective_reserve={effective_reserve}, "
+                    f"max_activation={max_activation}, next={next_turn_force}")
 
         # Get all cards (including expensive ones we can't afford now)
         all_characters = [c for c in all_cards_in_hand if c.get('is_character')]
@@ -1202,11 +1387,11 @@ class DeployPhasePlanner:
                 has_react_threat = False
                 for loc in locations:
                     # Check enemy power in the relevant domain
-                    if is_space and loc.is_space and loc.their_power >= REACT_THREAT_THRESHOLD:
+                    if is_space and loc.is_space and loc.their_power >= get_react_threat_threshold():
                         has_react_threat = True
                         logger.debug(f"   ⚠️ React threat in space: {loc.name} has {loc.their_power} enemy power")
                         break
-                    elif not is_space and loc.is_ground and loc.their_power >= REACT_THREAT_THRESHOLD:
+                    elif not is_space and loc.is_ground and loc.their_power >= get_react_threat_threshold():
                         has_react_threat = True
                         logger.debug(f"   ⚠️ React threat on ground: {loc.name} has {loc.their_power} enemy power")
                         break
@@ -1216,27 +1401,27 @@ class DeployPhasePlanner:
                     logger.debug(f"   📊 No threshold relaxation ({domain}): react threat exists")
                 else:
                     # Safe to relax - no large enemy buildups to threaten weak deploys
-                    # Ground: Lower threshold by 3 to allow 3-power characters to establish
-                    # presence at locations with opponent icons (enables force drains early).
-                    # Space: Keep the standard -2 reduction (starships usually have higher power).
-                    # With threshold=6: ground -> max(2, 6-3) = 3, space -> max(3, 6-2) = 4
+                    # Use config-driven minimum floor to prevent deploying weak characters alone
+                    min_floor = get_min_establish_power()
                     if is_space:
-                        threshold = max(3, threshold - 2)
+                        threshold = max(min_floor, threshold - 2)
                     else:
-                        threshold = max(2, threshold - 3)
+                        threshold = max(min_floor, threshold - 2)  # Ground uses same floor now
                     early_game_relaxed = True
 
         # LATE GAME LIFE FORCE DECAY: Lower threshold when losing badly
+        # Only allow threshold to drop below min_establish_power when truly desperate
+        min_floor = get_min_establish_power()
         life_force_decay = 0
         if life_force < 10:
-            life_force_decay = 3  # Desperate: deploy anything with power >= 1
+            life_force_decay = 2  # Desperate: can go slightly below floor
+            threshold = max(min_floor - 1, threshold - life_force_decay)
         elif life_force < 20:
-            life_force_decay = 2  # Critical: deploy anything with power >= 2
+            life_force_decay = 1  # Critical: stay at floor minimum
+            threshold = max(min_floor, threshold - life_force_decay)
         elif life_force < 30:
-            life_force_decay = 1  # Urgent: slightly more aggressive
-
-        if life_force_decay > 0:
-            threshold = max(1, threshold - life_force_decay)
+            life_force_decay = 1  # Urgent: slightly more aggressive but respect floor
+            threshold = max(min_floor, threshold - life_force_decay)
 
         # Build log message
         adjustments = []
@@ -1297,7 +1482,7 @@ class DeployPhasePlanner:
 
         # Threshold for "low enemy power" - below this, presence-only makes sense
         # Above this, we should use normal threshold logic to contest
-        LOW_ENEMY_THRESHOLD = 4
+        low_enemy_threshold = get_low_enemy_threshold()
 
         for loc in locations:
             # Opponent drains us: they have presence, we don't
@@ -1306,7 +1491,7 @@ class DeployPhasePlanner:
                 their_drain += loc.my_icons
                 # Add to bleed_locations if enemy power is LOW enough for presence-only
                 # Works for both ground (characters) and space (starships)
-                if loc.their_power <= LOW_ENEMY_THRESHOLD:
+                if loc.their_power <= low_enemy_threshold:
                     bleed_locations.append(loc)
                     domain = "space" if loc.is_space else "ground"
                     logger.debug(f"   🩸 BLEED ({domain}, contestable): {loc.name} - opponent drains {loc.my_icons} icons, enemy power {loc.their_power}")
@@ -1328,6 +1513,140 @@ class DeployPhasePlanner:
 
         return their_drain, our_drain, drain_gap, bleed_locations
 
+    def _evaluate_hold_for_bleeding(
+        self,
+        domain: str,  # "ground" or "space"
+        bleeding_locations: List['LocationAnalysis'],
+        deployable_power: int,
+        force_pile: int,
+        reserve_deck: int,
+        current_turn: int,
+        board_state: 'BoardState'
+    ) -> Tuple[bool, str, float]:
+        """
+        Evaluate whether to HOLD and draw cards instead of skipping/deploying sub-optimally
+        when we can't meaningfully contest a bleeding location.
+
+        This is better than deploying to an unrelated space location when we're bleeding
+        on ground (or vice versa).
+
+        Args:
+            domain: "ground" or "space" - what type of cards we need
+            bleeding_locations: Locations where we're being drained
+            deployable_power: Total power we can currently deploy
+            force_pile: Cards in force pile (available to draw)
+            reserve_deck: Cards remaining in reserve deck
+            current_turn: Current game turn
+            board_state: Current board state
+
+        Returns:
+            (should_hold, reason, expected_value)
+        """
+        from engine.deck_tracker import get_deck_tracker
+
+        # Don't hold if we can't draw anything
+        if force_pile < 1:
+            return False, "No force pile to draw from", 0.0
+
+        # Don't hold too late in game - few cards remaining means low probability
+        total_cards_remaining = force_pile + reserve_deck
+        if total_cards_remaining < 8:
+            return False, f"Late game - only {total_cards_remaining} cards remaining", 0.0
+
+        # Don't hold too many turns in a row
+        consecutive_holds = getattr(board_state, 'consecutive_hold_turns', 0)
+        if consecutive_holds >= 2:
+            return False, f"Already held {consecutive_holds} turns - must act", 0.0
+
+        tracker = get_deck_tracker()
+        if not tracker.deck_loaded:
+            return False, "Deck tracker not loaded", 0.0
+
+        # Calculate total bleeding per turn
+        total_bleed = sum(loc.my_icons for loc in bleeding_locations if loc.their_power > 0)
+        if total_bleed == 0:
+            return False, "Not actually bleeding", 0.0
+
+        # Calculate worst location power deficit
+        worst_deficit = 0
+        worst_location = None
+        for loc in bleeding_locations:
+            if loc.their_power > 0:
+                deficit = loc.their_power - deployable_power
+                if deficit > worst_deficit:
+                    worst_deficit = deficit
+                    worst_location = loc
+
+        # Determine what card types we need
+        if domain == "ground":
+            needed_types = ["Character", "Vehicle"]
+            p_draw_needed = tracker.probability_draw_type("Character") + tracker.probability_draw_type("Vehicle")
+        else:  # space
+            needed_types = ["Starship"]
+            p_draw_needed = tracker.probability_draw_type("Starship")
+
+        # Calculate expected power from drawing
+        remaining = tracker.get_remaining_in_reserve()
+        total_needed_power = 0
+        needed_count = 0
+        for bp_id, count in remaining.items():
+            stats = tracker._card_stats.get(bp_id)
+            if stats and stats.card_type in needed_types:
+                total_needed_power += stats.power * count
+                needed_count += count
+
+        avg_power_if_draw = total_needed_power / needed_count if needed_count > 0 else 0
+
+        # Calculate expected draws this turn (force pile size, up to 6)
+        max_draws = min(force_pile, 6)
+
+        # Probability of drawing at least one needed card in max_draws attempts
+        # P(at least 1) = 1 - P(none)^draws
+        p_at_least_one = 1.0 - ((1.0 - p_draw_needed) ** max_draws) if p_draw_needed > 0 else 0.0
+
+        # Expected power gain from holding
+        expected_power_gain = p_at_least_one * avg_power_if_draw
+
+        # Calculate value of holding vs not holding
+        # Value of stopping bleed = icons_saved * expected_turns_to_recover
+        # If we hold, we lose 1 turn of bleed but might gain enough power to contest
+        turns_to_recover = 2  # Assume 2 turns to set up after drawing
+        bleed_cost = total_bleed  # 1 turn of bleeding
+
+        # Can we realistically contest next turn with the expected power?
+        expected_total_power = deployable_power + expected_power_gain
+        can_contest_next_turn = expected_total_power >= worst_deficit * 0.7  # Within 70% of deficit
+
+        # Decision criteria:
+        # 1. High probability of drawing what we need (>30%)
+        # 2. Expected power gain would let us contest
+        # 3. Bleeding is significant (2+ icons)
+        should_hold = (
+            p_at_least_one >= 0.30 and
+            can_contest_next_turn and
+            total_bleed >= 2
+        )
+
+        if should_hold:
+            reason = (f"HOLD FOR {domain.upper()} DRAW: P(draw needed)={p_at_least_one:.0%} in {max_draws} draws, "
+                     f"E[power]={expected_power_gain:.1f}, can contest {worst_location.name if worst_location else 'location'} next turn "
+                     f"(bleed={total_bleed}/turn)")
+            expected_value = expected_power_gain - bleed_cost
+        else:
+            reasons = []
+            if p_at_least_one < 0.30:
+                reasons.append(f"low P(draw)={p_at_least_one:.0%}")
+            if not can_contest_next_turn:
+                reasons.append(f"can't contest (need {worst_deficit}, expect {expected_total_power:.0f})")
+            if total_bleed < 2:
+                reasons.append(f"minor bleed ({total_bleed})")
+            reason = f"Not holding: {', '.join(reasons)}"
+            expected_value = 0.0
+
+        logger.info(f"   🎰 Hold evaluation ({domain}): {reason}")
+
+        return should_hold, reason, expected_value
+
     def _generate_presence_only_plans(
         self,
         characters: List[Dict],
@@ -1341,14 +1660,18 @@ class DeployPhasePlanner:
         """
         Generate "STOP THE BLEEDING" plans that deploy ANY presence to high-drain locations.
 
-        These plans have REDUCED power threshold - card must beat enemy power.
+        These plans have REDUCED power threshold - we deploy even when outpowered.
         The goal is to stop force drains, not win battles.
+        Rationale: Presence stops drains even if we can't win a battle.
+        Even if enemy attacks and wins, we saved icons for at least 1 turn.
+
+        Only skips true suicide missions (<40% of enemy power).
 
         Handles both:
         - Ground bleed: characters/vehicles to ground locations
         - Space bleed: starships to space locations
 
-        Scoring: Based primarily on icons saved per turn, not raw power.
+        Scoring: Based primarily on icons saved per turn, with penalty for risky deploys.
         """
         plans = []
 
@@ -1441,22 +1764,28 @@ class DeployPhasePlanner:
                 continue
 
             # Generate a plan for EACH affordable card
-            # The key difference from normal plans: REDUCED threshold (but still need to beat enemy)
+            # The key difference from normal plans: REDUCED threshold
+            # For STOP_THE_BLEEDING, we deploy presence to stop drains even when outpowered
+            # Rationale: Even if enemy attacks and wins, we saved icons for at least 1 turn
             for card in location_deployables:
                 if card['cost'] > force_budget:
                     continue
 
                 card_power = card['power']
 
-                # Still require BEATING the enemy (at least +1 advantage)
-                # Presence-only makes sense for stopping drains, but not suicide missions
-                if target_loc.their_power > 0 and card_power <= target_loc.their_power:
-                    logger.debug(f"      🩸 Skipping {card['name']} - {card_power}p doesn't beat enemy {target_loc.their_power}p")
-                    continue
+                # Only skip true suicide missions: less than 40% of enemy power
+                # e.g. 1p vs 10p is suicide (10%), 3p vs 4p is valid contestation (75%)
+                if target_loc.their_power > 0:
+                    power_ratio = card_power / target_loc.their_power
+                    if power_ratio < 0.4:
+                        logger.debug(f"      🩸 Skipping {card['name']} - {card_power}p is suicide vs enemy {target_loc.their_power}p ({power_ratio:.0%})")
+                        continue
 
                 # Create "STOP BLEEDING" instruction
                 domain = "space" if target_loc.is_space else "ground"
-                reason = f"STOP BLEEDING ({domain}): {target_loc.name} (save {icons_at_stake} drain/turn with {card_power}p)"
+                is_risky = target_loc.their_power > card_power
+                risk_note = " (risky)" if is_risky else ""
+                reason = f"STOP BLEEDING ({domain}): {target_loc.name} (save {icons_at_stake} drain/turn with {card_power}p{risk_note})"
 
                 instructions = [DeploymentInstruction(
                     card_blueprint_id=card['blueprint_id'],
@@ -1480,10 +1809,17 @@ class DeployPhasePlanner:
                 power_value = card_power * 2
                 score = icons_saved_value + drain_potential + power_value
 
+                # Penalty for risky deploys (enemy stronger than us)
+                # We still want to do them to stop bleeding, but prefer safer options
+                if is_risky:
+                    power_deficit = target_loc.their_power - card_power
+                    risk_penalty = power_deficit * 3  # -3 per power we're behind
+                    score -= risk_penalty
+
                 plans.append((instructions, force_remaining, score))
 
                 logger.debug(f"      🩸 PRESENCE ({domain}) plan: {card['name']} → {target_loc.name} "
-                           f"(save {icons_at_stake}, power {card_power}, score={score:.0f})")
+                           f"(save {icons_at_stake}, power {card_power}{', risky -' + str(risk_penalty) if is_risky else ''}, score={score:.0f})")
 
         if plans:
             logger.info(f"   🩸 Generated {len(plans)} STOP BLEEDING plans")
@@ -1556,7 +1892,8 @@ class DeployPhasePlanner:
         cards: List[Dict],
         budget: int,
         power_goal: int,
-        must_exceed: bool = False
+        must_exceed: bool = False,
+        require_ability: bool = True
     ) -> Tuple[List[Dict], int, int]:
         """
         Find the optimal combination of cards to deploy within budget.
@@ -1564,11 +1901,19 @@ class DeployPhasePlanner:
         Uses efficiency-based selection: prioritize cards that give the most
         power per Force spent, while still achieving the power goal.
 
+        ABILITY AWARENESS (require_ability=True):
+        - Prefers combinations with total ability >= 4 (can draw battle destiny)
+        - If we can't get ability >= 4, requires EXTRA power to compensate
+          (opponent can draw destiny, so we need margin)
+        - This prevents deploying e.g. two 2-power/1-ability chars (4 power, 2 ability)
+          that lose to one 4-power/4-ability char
+
         Args:
-            cards: List of card dicts with 'power', 'cost', 'name', etc.
+            cards: List of card dicts with 'power', 'cost', 'name', 'ability', etc.
             budget: Maximum Force we can spend
             power_goal: Power we're trying to reach
             must_exceed: If True, we need power > goal (for beating opponent)
+            require_ability: If True, prefer combos with ability >= 4
 
         Returns:
             (selected_cards, total_power, total_cost)
@@ -1584,30 +1929,44 @@ class DeployPhasePlanner:
         # For small card counts, try all combinations to find optimal
         # This is O(2^n) but n is typically < 10 for hand size
         if len(affordable) <= 8:
-            return self._find_optimal_brute_force(affordable, budget, power_goal, must_exceed)
+            return self._find_optimal_brute_force(affordable, budget, power_goal, must_exceed, require_ability)
 
         # For larger hands, use greedy efficiency-based approach
-        return self._find_optimal_greedy(affordable, budget, power_goal, must_exceed)
+        return self._find_optimal_greedy(affordable, budget, power_goal, must_exceed, require_ability)
 
     def _find_optimal_brute_force(
         self,
         cards: List[Dict],
         budget: int,
         power_goal: int,
-        must_exceed: bool
+        must_exceed: bool,
+        require_ability: bool = True
     ) -> Tuple[List[Dict], int, int]:
         """
         Try all combinations to find the best one.
 
         Best = achieves power goal with maximum power within budget.
         Once goal is achieved, prefer higher power (for scoring) over cheaper cost.
+
+        ABILITY AWARENESS:
+        When require_ability=True, we track whether combo has ability >= 4 (battle destiny).
+        - Prefer combos with ability >= 4 over those without
+        - If no combo has ability >= 4, prefer combos with MORE power (compensate for no destiny)
+        - The ABILITY_POWER_BONUS effectively adds 3-4 power to ability-enabled combos in comparison
         """
         from itertools import combinations
+
+        ABILITY_THRESHOLD = 4  # Need 4+ ability to draw battle destiny
+        # When comparing combos without ability, we need this much extra power
+        # to compensate for opponent potentially drawing destiny
+        ABILITY_POWER_COMPENSATION = 3
 
         best_combo = []
         best_power = 0
         best_cost = float('inf')
+        best_ability = 0
         best_achieves_goal = False
+        best_has_ability = False  # Does best combo have ability >= 4?
 
         # Try all possible subset sizes
         for size in range(1, len(cards) + 1):
@@ -1617,43 +1976,80 @@ class DeployPhasePlanner:
                     continue
 
                 total_power = sum(c['power'] for c in combo)
+                total_ability = sum(c.get('ability', 0) for c in combo) if require_ability else 0
+                has_ability = total_ability >= ABILITY_THRESHOLD
 
                 # Check if this achieves the goal
-                if must_exceed:
-                    achieves_goal = total_power > power_goal
-                else:
-                    achieves_goal = total_power >= power_goal
+                # ABILITY COMPENSATION: Only in battle scenarios (must_exceed=True)
+                # where we need to actually beat enemy power and destiny draws matter.
+                # For threshold scenarios (establish), we just need presence.
+                effective_goal = power_goal
+                if require_ability and not has_ability and must_exceed:
+                    # In a battle, we need extra power to compensate for opponent's destiny draw
+                    effective_goal = power_goal + ABILITY_POWER_COMPENSATION
 
-                # Selection priority depends on goal type:
-                # - must_exceed=True (battles): want to WIN, so prefer more power
-                # - must_exceed=False (thresholds): just need to reach goal, prefer cheaper
-                if achieves_goal and not best_achieves_goal:
-                    # First combo to achieve goal
+                if must_exceed:
+                    achieves_goal = total_power > effective_goal
+                else:
+                    achieves_goal = total_power >= effective_goal
+
+                # Selection priority (highest to lowest):
+                # 1. Achieves goal (power threshold met)
+                # 2. Has ability >= 4 (can draw battle destiny)
+                # 3. Higher power (for battle scenarios) OR cheaper cost (for threshold scenarios)
+                def is_better_combo():
+                    nonlocal best_achieves_goal, best_has_ability, best_power, best_cost, best_ability
+
+                    # Goal achievement is highest priority
+                    if achieves_goal and not best_achieves_goal:
+                        return True
+                    if not achieves_goal and best_achieves_goal:
+                        return False
+
+                    # Both achieve goal OR both don't - compare ability
+                    if require_ability:
+                        if has_ability and not best_has_ability:
+                            return True  # Ability-enabled wins
+                        if not has_ability and best_has_ability:
+                            return False  # Can't beat ability-enabled
+
+                    # Same ability status - compare by power/cost
+                    if achieves_goal:
+                        if must_exceed:
+                            # Battle: prefer more power, then cheaper
+                            if total_power > best_power:
+                                return True
+                            if total_power == best_power and total_cost < best_cost:
+                                return True
+                        else:
+                            # Threshold: prefer ability first, then cheaper
+                            if require_ability and total_ability > best_ability:
+                                return True  # More ability is better even after threshold
+                            if total_cost < best_cost:
+                                return True
+                            if total_cost == best_cost and total_power < best_power:
+                                return True
+                    else:
+                        # Neither achieves goal - prefer more power
+                        if total_power > best_power:
+                            return True
+
+                    return False
+
+                if is_better_combo():
                     best_combo = list(combo)
                     best_power = total_power
                     best_cost = total_cost
-                    best_achieves_goal = True
-                elif achieves_goal and best_achieves_goal:
-                    if must_exceed:
-                        # Battle scenario - prefer MORE POWER for safety margin
-                        # If same power, prefer cheaper
-                        if total_power > best_power or (total_power == best_power and total_cost < best_cost):
-                            best_combo = list(combo)
-                            best_power = total_power
-                            best_cost = total_cost
-                    else:
-                        # Threshold scenario - prefer CHEAPER (efficient, don't overkill)
-                        # If same cost, prefer less power (save cards for other locations)
-                        if total_cost < best_cost or (total_cost == best_cost and total_power < best_power):
-                            best_combo = list(combo)
-                            best_power = total_power
-                            best_cost = total_cost
-                elif not achieves_goal and not best_achieves_goal:
-                    # Neither achieves goal - prefer more power
-                    if total_power > best_power:
-                        best_combo = list(combo)
-                        best_power = total_power
-                        best_cost = total_cost
+                    best_ability = total_ability
+                    best_achieves_goal = achieves_goal
+                    best_has_ability = has_ability
+
+        # Log ability awareness decision
+        if require_ability and best_combo:
+            if best_has_ability:
+                logger.debug(f"   🎯 Selected combo with ability {best_ability} (can draw destiny)")
+            else:
+                logger.debug(f"   ⚠️ Selected combo with ability {best_ability} (NO destiny draw, compensated with power)")
 
         return (best_combo, best_power, int(best_cost) if best_cost != float('inf') else 0)
 
@@ -1662,21 +2058,36 @@ class DeployPhasePlanner:
         cards: List[Dict],
         budget: int,
         power_goal: int,
-        must_exceed: bool
+        must_exceed: bool,
+        require_ability: bool = True
     ) -> Tuple[List[Dict], int, int]:
         """
         Greedy approach for larger hands: sort by efficiency (power/cost).
+
+        ABILITY AWARENESS:
+        - Prefers high-ability cards to reach ability >= 4 threshold
+        - If ability goal not met, continues adding cards to get more power
+        - Sort key includes ability as tiebreaker
         """
-        # Sort by efficiency (power per cost), with cost=0 cards first
-        sorted_cards = sorted(
-            cards,
-            key=lambda c: (c['power'] / c['cost']) if c['cost'] > 0 else float('inf'),
-            reverse=True
-        )
+        ABILITY_THRESHOLD = 4  # Need 4+ ability to draw battle destiny
+        ABILITY_POWER_COMPENSATION = 3  # Extra power needed without destiny
+
+        # Sort by composite score: efficiency + ability bonus
+        # High-ability cards get a boost to be selected first
+        def card_score(c):
+            efficiency = (c['power'] / c['cost']) if c['cost'] > 0 else float('inf')
+            ability_bonus = 0
+            if require_ability and c.get('ability', 0) >= 3:
+                # Cards with 3+ ability get a significant boost
+                ability_bonus = c.get('ability', 0) * 0.5
+            return efficiency + ability_bonus
+
+        sorted_cards = sorted(cards, key=card_score, reverse=True)
 
         selected = []
         total_power = 0
         total_cost = 0
+        total_ability = 0
         remaining_budget = budget
 
         for card in sorted_cards:
@@ -1684,13 +2095,30 @@ class DeployPhasePlanner:
                 selected.append(card)
                 total_power += card['power']
                 total_cost += card['cost']
+                total_ability += card.get('ability', 0)
                 remaining_budget -= card['cost']
 
-                # Stop if we've achieved the goal
-                if must_exceed and total_power > power_goal:
+                # Calculate effective power goal based on ability
+                # ABILITY COMPENSATION: Only in battle scenarios (must_exceed=True)
+                has_ability = total_ability >= ABILITY_THRESHOLD
+                effective_goal = power_goal
+                if require_ability and not has_ability and must_exceed:
+                    # In a battle, need extra power to compensate for opponent destiny
+                    effective_goal = power_goal + ABILITY_POWER_COMPENSATION
+
+                # Stop if we've achieved both goals
+                if must_exceed and total_power > effective_goal and (has_ability or not require_ability):
                     break
-                elif not must_exceed and total_power >= power_goal:
+                elif not must_exceed and total_power >= effective_goal and (has_ability or not require_ability):
                     break
+
+        # Log ability awareness decision
+        if require_ability and selected:
+            has_ability = total_ability >= ABILITY_THRESHOLD
+            if has_ability:
+                logger.debug(f"   🎯 Greedy selected {len(selected)} cards with ability {total_ability} (can draw destiny)")
+            else:
+                logger.debug(f"   ⚠️ Greedy selected {len(selected)} cards with ability {total_ability} (NO destiny, need extra power)")
 
         return (selected, total_power, total_cost)
 
@@ -1713,10 +2141,13 @@ class DeployPhasePlanner:
         if not instructions:
             return 0.0
 
+        ABILITY_THRESHOLD = 4  # Need 4+ ability to draw battle destiny
+
         score = 0.0
         target_loc_ids = set()
         power_by_location = {}  # Track power going to each location
         cards_by_location = {}  # Track card count per location for Barrier awareness
+        ability_by_location = {}  # Track ability for battle destiny eligibility
 
         for inst in instructions:
             # Find the target location
@@ -1737,6 +2168,14 @@ class DeployPhasePlanner:
                 if inst.target_location_id not in cards_by_location:
                     cards_by_location[inst.target_location_id] = 0
                 cards_by_location[inst.target_location_id] += 1
+
+                # Track ability by location for battle destiny eligibility
+                if inst.target_location_id not in ability_by_location:
+                    ability_by_location[inst.target_location_id] = 0
+                # Get ability from card data (more reliable than instruction field)
+                card_meta = get_card(inst.card_blueprint_id)
+                if card_meta:
+                    ability_by_location[inst.target_location_id] += card_meta.ability_value or 0
 
             # Power contribution (base value)
             score += inst.power_contribution * 2
@@ -1774,7 +2213,7 @@ class DeployPhasePlanner:
                     logger.debug(f"   🎯 WIN CONTROL at {target_loc.name}: +{win_control_bonus} "
                                f"(will drain {target_loc.their_icons} icons)")
 
-                if power_advantage >= BATTLE_FAVORABLE_THRESHOLD:
+                if power_advantage >= get_battle_favorable_threshold():
                     # FAVORABLE FIGHT: We have solid advantage (+4 or more)
                     # This is a true "crush" - give big bonus
                     crush_bonus = 50 + (power_advantage * 10) + deny_drain_bonus + win_control_bonus
@@ -1824,14 +2263,36 @@ class DeployPhasePlanner:
                     # This makes concentrated attacks more attractive than spreading thin
                     # Scale with power advantage - stronger crushes get more bonus
                     # =================================================================
-                    if power_advantage >= BATTLE_FAVORABLE_THRESHOLD:
+                    if power_advantage >= get_battle_favorable_threshold():
                         # Scale: +10 per extra card for each point of advantage beyond threshold
                         # +4 advantage: 10 per card, +5: 20 per card, +6: 30 per card, etc.
-                        advantage_factor = power_advantage - BATTLE_FAVORABLE_THRESHOLD + 1
+                        advantage_factor = power_advantage - get_battle_favorable_threshold() + 1
                         commitment_bonus = advantage_factor * 10.0 * (cards_here - 1)
                         score += commitment_bonus
                         logger.debug(f"   ⚔️ BATTLE COMMITMENT at {target_loc.name}: +{commitment_bonus} "
                                    f"({cards_here} cards, +{power_advantage} advantage)")
+
+                # =================================================================
+                # ABILITY AWARENESS FOR CONTESTED LOCATIONS
+                # If we can't draw battle destiny (ability < 4), we're vulnerable
+                # to opponent destiny draws swinging the battle against us.
+                # Apply penalty for low-ability deployments to contested locations.
+                # =================================================================
+                our_ability = ability_by_location.get(loc_id, 0)
+                if our_ability >= ABILITY_THRESHOLD:
+                    # Can draw destiny - bonus for battle advantage
+                    ability_bonus = 25.0
+                    score += ability_bonus
+                    logger.debug(f"   🎯 CAN DRAW DESTINY at {target_loc.name}: +{ability_bonus} "
+                               f"(ability {our_ability} >= {ABILITY_THRESHOLD})")
+                else:
+                    # Can't draw destiny - penalty proportional to our power investment
+                    # Higher penalty for bigger deployments since we're committing
+                    # resources that can't defend themselves via destiny
+                    ability_penalty = -20.0 - (our_power * 2)
+                    score += ability_penalty
+                    logger.debug(f"   ⚠️ NO DESTINY at {target_loc.name}: {ability_penalty} "
+                               f"(ability {our_ability} < {ABILITY_THRESHOLD}, vulnerable!)")
 
             else:
                 # === EMPTY LOCATION WITH OUR PRESENCE ===
@@ -1868,20 +2329,84 @@ class DeployPhasePlanner:
                            f"({our_power} power, {target_loc.their_icons} their icons, {target_loc.my_icons} our icons)")
 
                 # =================================================================
+                # ABILITY AWARENESS FOR ESTABLISH LOCATIONS
+                # Weak establish (3-4 power, no ability) is a STRATEGIC TRAP:
+                # - Bot gets 1-2 drains before opponent counter-deploys
+                # - Opponent deploys single strong character with ability
+                # - Opponent wins battle (can draw destiny, bot can't)
+                # - Bot loses more life from battle than gained from drains
+                #
+                # Safe establish requires EITHER:
+                # - High power (5+): hard for opponent to counter in one deploy
+                # - Moderate power (4): borderline safe, opponent needs strong counter
+                # - Ability >= 4: can draw destiny if challenged
+                #
+                # Truly weak (1-3 power, no ability) = TRAP - opponent easily counters
+                # =================================================================
+                our_ability = ability_by_location.get(loc_id, 0)
+                has_ability = our_ability >= ABILITY_THRESHOLD
+                has_strong_power = our_power >= 5  # Hard to counter-deploy against
+                has_moderate_power = our_power >= 4  # Borderline - opponent needs 5+ to beat us
+
+                if has_ability and has_strong_power:
+                    # Ideal: both power and ability
+                    ability_bonus = 25.0
+                    score += ability_bonus
+                    logger.info(f"   🎯 STRONG DEFENSIBLE ESTABLISH at {target_loc.name}: +{ability_bonus} "
+                               f"({our_power} power + ability {our_ability} = very safe)")
+                elif has_ability:
+                    # Good: can draw destiny if challenged
+                    ability_bonus = 15.0
+                    score += ability_bonus
+                    logger.info(f"   🎯 DEFENSIBLE ESTABLISH at {target_loc.name}: +{ability_bonus} "
+                               f"(ability {our_ability} >= {ABILITY_THRESHOLD}, can draw destiny)")
+                elif has_strong_power:
+                    # Moderate risk: 5+ power without ability >= 4
+                    # Harder to counter than 4 power, but still risky:
+                    # - Opponent needs 6+ power to beat us outright
+                    # - But if they do counter with ability 4, they draw destiny and we don't
+                    # Small penalty - not ideal but more defensible than 4 power
+                    ability_penalty = -20.0
+                    score += ability_penalty
+                    logger.info(f"   ⚡ MODERATE ESTABLISH at {target_loc.name}: {ability_penalty} "
+                               f"({our_power} power but ability {our_ability} < 4 - risky if countered)")
+                elif has_moderate_power:
+                    # RISKY: 4 power without ability >= 4 = NO ATTRITION DESTINY
+                    # Even with 4 power, opponent can easily counter:
+                    # - They deploy 5-7 power with ability 4
+                    # - They win battle and DRAW attrition destiny (we can't!)
+                    # - We lose character + extra damage from their destiny draw
+                    #
+                    # This is NOT "borderline safe" - it's a trap that looks ok
+                    # Significant penalty to discourage weak ability establishes
+                    ability_penalty = -60.0
+                    score += ability_penalty
+                    logger.info(f"   ⚠️ RISKY ESTABLISH at {target_loc.name}: {ability_penalty} "
+                               f"({our_power} power, ability {our_ability} < 4 - opponent will crush with destiny!)")
+                else:
+                    # TRAP: weak power (1-3) + no ability = easy crush target
+                    # Opponent can deploy almost anything and destroy us
+                    # Penalty scales with power invested (more waste when crushed)
+                    ability_penalty = -30.0 - (our_power * 10)
+                    score += ability_penalty
+                    logger.info(f"   ⚠️ VULNERABLE ESTABLISH TRAP at {target_loc.name}: {ability_penalty} "
+                               f"({our_power} power, ability {our_ability} - easy counter-deploy target!)")
+
+                # =================================================================
                 # MID-LATE GAME REINFORCEMENT BONUS
                 # After early game (turn > 3), prioritize reinforcing existing weak
-                # positions to REINFORCE_TARGET_POWER (10) before establishing elsewhere.
+                # positions to get_reinforce_target_power() (10) before establishing elsewhere.
                 # This prevents our early positions from being easy crush targets.
                 # =================================================================
-                if turn_number > DEPLOY_EARLY_GAME_TURNS:
+                if turn_number > get_early_game_turns():
                     # Check if this is a REINFORCE (we have existing presence) vs ESTABLISH (new location)
                     existing_power = target_loc.my_power
-                    if existing_power > 0 and existing_power < REINFORCE_TARGET_POWER:
+                    if existing_power > 0 and existing_power < get_reinforce_target_power():
                         # This is reinforcing a weak position
                         # Bonus scales with:
                         # 1. How far below target we are (more urgent = higher bonus)
                         # 2. Value of the location (icons)
-                        power_deficit = REINFORCE_TARGET_POWER - existing_power
+                        power_deficit = get_reinforce_target_power() - existing_power
                         new_total_power = existing_power + our_power
 
                         # Base bonus: 30 (higher than establish base of 40, but establish gets icon bonuses)
@@ -1890,7 +2415,7 @@ class DeployPhasePlanner:
                         reinforce_bonus = 30 + (power_deficit * 10)
 
                         # Extra bonus if this reinforcement reaches target
-                        if new_total_power >= REINFORCE_TARGET_POWER:
+                        if new_total_power >= get_reinforce_target_power():
                             reinforce_bonus += 20  # Reached safety target!
 
                         # Scale with location value (icons we're protecting)
@@ -1900,7 +2425,7 @@ class DeployPhasePlanner:
                         score += reinforce_bonus
                         logger.debug(f"   🏰 MID-LATE REINFORCE at {target_loc.name}: +{reinforce_bonus} "
                                    f"(turn {turn_number}, {existing_power} -> {new_total_power} power, "
-                                   f"target {REINFORCE_TARGET_POWER})")
+                                   f"target {get_reinforce_target_power()})")
 
         # Icons at target locations (additional value for multi-location plans)
         for loc_id in target_loc_ids:
@@ -1945,7 +2470,226 @@ class DeployPhasePlanner:
             logger.debug(f"   💰 EFFICIENCY: {total_efficiency_adjustment:+.1f} "
                        f"(cost penalty: {cost_penalty}, ratio bonus: +{efficiency_bonus:.1f})")
 
+        # === STRATEGIC DOMAIN BONUS ===
+        # Apply bonuses based on deck archetype's domain preference
+        # (e.g., space_control deck gets bonus for space locations)
+        from engine.strategy_profile import get_deck_strategy
+        deck_strategy = get_deck_strategy()
+        if deck_strategy:
+            strategic_bonus = 0
+            for loc_id in target_loc_ids:
+                for loc in locations:
+                    if loc.card_id == loc_id:
+                        # Use the location's is_space flag
+                        if loc.is_space:
+                            strategic_bonus += deck_strategy.space_location_bonus
+                        else:
+                            strategic_bonus += deck_strategy.ground_location_bonus
+                        break
+
+            if strategic_bonus > 0:
+                score += strategic_bonus
+                logger.debug(f"   🎯 STRATEGIC: +{strategic_bonus} ({deck_strategy.archetype.value} "
+                           f"domain={deck_strategy.primary_domain})")
+
+        # === GOAL-BASED SCORING ===
+        # Apply bonuses based on GamePlan goals (if enabled)
+        if self._board_state and hasattr(self._board_state, 'game_plan') and self._board_state.game_plan:
+            game_plan = self._board_state.game_plan
+            if game_plan.enabled and game_plan.current_goals:
+                goal_bonus = 0
+                goal_reasons = []
+                for inst in instructions:
+                    if inst.target_location_id:
+                        bonus, reason = game_plan.get_deployment_score_bonus(
+                            target_location_id=inst.target_location_id,
+                            card_blueprint_id=inst.card_blueprint_id,
+                        )
+                        if bonus != 0:
+                            goal_bonus += bonus
+                            if reason:
+                                goal_reasons.append(reason)
+
+                if goal_bonus != 0:
+                    score += goal_bonus
+                    reason_str = "; ".join(goal_reasons[:2])  # Limit logged reasons
+                    logger.debug(f"   🎯 GOALS: {goal_bonus:+d} ({reason_str})")
+
+                # NOTE: "Hold for better hand" penalty was tested and found to HURT performance.
+                # A -200 blanket penalty blocked ALL deploys when bleeding, even good ones.
+                # Better approach: let the tactical evaluators decide on a case-by-case basis.
+
+        # === STRATEGIC ATTACK MODE SCORING ===
+        # When strategic state indicates we're losing the drain war and have
+        # contestable bleeds, provide MAJOR bonuses for contesting and
+        # penalties for establishing at low-value locations.
+        # This makes the bot prioritize ATTACKING opponent drains over
+        # establishing new presence when we're behind.
+        strategic_state = getattr(self._board_state, 'strategic_state', None) if self._board_state else None
+        if strategic_state and strategic_state.enabled and strategic_state.force_attack_mode:
+            attack_mode_adjustment = 0
+
+            for loc_id, our_power in power_by_location.items():
+                target_loc = None
+                for loc in locations:
+                    if loc.card_id == loc_id:
+                        target_loc = loc
+                        break
+
+                if not target_loc:
+                    continue
+
+                # CONTESTING A BLEED - massive priority boost
+                # This is a location where opponent has presence and we have icons (they drain us)
+                if target_loc.their_power > 0 and target_loc.my_icons > 0:
+                    icons_saved = target_loc.my_icons
+                    attack_bonus = 150 + (icons_saved * 40)  # 150 base + 40 per icon
+                    attack_mode_adjustment += attack_bonus
+                    logger.info(f"   🎯 ATTACK MODE: +{attack_bonus} for contesting {target_loc.name} "
+                               f"(stop {icons_saved} drain/turn)")
+
+                # PENALIZE establishing at 0-icon locations while bleeding
+                # If we're behind on drains, don't waste resources on locations with no drain value
+                elif target_loc.their_power == 0 and target_loc.my_icons == 0 and target_loc.their_icons == 0:
+                    drain_gap = strategic_state.trajectory.current_drain_gap
+                    if drain_gap < -2:
+                        establish_penalty = -100
+                        attack_mode_adjustment += establish_penalty
+                        logger.info(f"   ⚠️ ATTACK MODE: {establish_penalty} for establishing at {target_loc.name} "
+                                   f"(no drain value, drain gap {drain_gap:+d})")
+
+                # PENALIZE reinforcing UNCONTESTED locations while losing drain war
+                # If opponent has NO presence at this location but we're behind on drains,
+                # we should be establishing at bleed locations instead of stacking more power here
+                elif target_loc.their_power == 0 and target_loc.my_power > 0:
+                    drain_gap = strategic_state.trajectory.current_drain_gap
+                    if drain_gap < -1:
+                        # Already have power here, don't reinforce while losing drain war
+                        # Penalty scales with how much we're already ahead at this location
+                        existing_power = target_loc.my_power
+                        if existing_power >= 6:  # Already well-established
+                            reinforce_penalty = -80 - (existing_power * 5)  # Heavier penalty for overkill
+                            attack_mode_adjustment += reinforce_penalty
+                            logger.info(f"   ⚠️ ATTACK MODE: {reinforce_penalty} for reinforcing uncontested {target_loc.name} "
+                                       f"(already {existing_power}p, drain gap {drain_gap:+d} - go contest bleed locations!)")
+                        elif existing_power >= 3:  # Moderate presence
+                            reinforce_penalty = -40
+                            attack_mode_adjustment += reinforce_penalty
+                            logger.info(f"   ⚠️ ATTACK MODE: {reinforce_penalty} for reinforcing uncontested {target_loc.name} "
+                                       f"({existing_power}p, drain gap {drain_gap:+d})")
+
+            if attack_mode_adjustment != 0:
+                score += attack_mode_adjustment
+                logger.info(f"   ⚔️ ATTACK MODE TOTAL: {attack_mode_adjustment:+d}")
+
         return score
+
+    def _apply_monte_carlo_simulation(
+        self,
+        valid_plans: List[Tuple],
+        locations: List['LocationAnalysis'],
+        hand_cards: List[Dict],
+        board_state
+    ) -> List[Tuple]:
+        """
+        Apply Monte Carlo simulation to top N plans and re-rank by expected value.
+
+        This stress-tests each plan against randomized opponent counterplays:
+        - Opponent deploys power to counter (weighted by location importance)
+        - Opponent may play Barrier (~8% chance)
+        - Opponent may initiate battle if favorable
+
+        Args:
+            valid_plans: List of (plan_type, instructions, force_left, score, reserve)
+            locations: Analyzed locations
+            hand_cards: Cards in hand as dicts
+            board_state: Current board state
+
+        Returns:
+            Re-sorted list of plans with expected values
+        """
+        if not self.monte_carlo:
+            return valid_plans
+
+        top_n = min(self.monte_carlo_top_n, len(valid_plans))
+        top_plans = valid_plans[:top_n]
+        rest_plans = valid_plans[top_n:]
+
+        logger.info(f"🎲 Monte Carlo: simulating top {top_n} plans")
+
+        mc_scored_plans = []
+        for plan_type, instructions, force_left, base_score, reserve in top_plans:
+            # Create a temporary DeploymentPlan for simulation
+            temp_plan = DeploymentPlan(
+                strategy=DeployStrategy.REINFORCE,  # Doesn't matter for simulation
+                reason="MC simulation",
+                instructions=list(instructions),
+            )
+
+            # Run simulation
+            sim_result = self.monte_carlo.simulate_plan(
+                temp_plan, locations, hand_cards, board_state
+            )
+            expected = self.monte_carlo.calculate_expected_value(base_score, sim_result)
+
+            # Log simulation results
+            self._log_monte_carlo_result(plan_type, instructions, base_score, expected, sim_result)
+
+            # Use expected value as new score
+            mc_scored_plans.append((
+                plan_type, instructions, force_left, expected.final_score, reserve, expected
+            ))
+
+        # Sort by expected value (final_score)
+        mc_scored_plans.sort(key=lambda x: x[3], reverse=True)
+
+        # If ranking changed, log it
+        if mc_scored_plans[0][0] != top_plans[0][0]:
+            old_best = top_plans[0][0]
+            new_best = mc_scored_plans[0][0]
+            logger.info(f"🎲 Monte Carlo RERANKED: {old_best} → {new_best}")
+
+        # Convert back to original format (drop the ExpectedValue object)
+        result = [(t, i, f, s, r) for t, i, f, s, r, _ in mc_scored_plans]
+        result.extend(rest_plans)
+
+        return result
+
+    def _log_monte_carlo_result(
+        self,
+        plan_type: str,
+        instructions: List['DeploymentInstruction'],
+        base_score: float,
+        expected: 'ExpectedValue',
+        sim_result: 'SimulationResult'
+    ):
+        """Log Monte Carlo simulation results for a plan."""
+        if not instructions:
+            return
+
+        target = instructions[0].target_location_name if instructions else "?"
+        card_summary = ", ".join(inst.card_name for inst in instructions[:2])
+        if len(instructions) > 2:
+            card_summary += f", +{len(instructions)-2}"
+
+        logger.info(f"🎲 MC: {plan_type} at {target}")
+        logger.info(f"   Cards: {card_summary}")
+        logger.info(f"   Win rate: {sim_result.win_rate*100:.0f}% ({int(sim_result.win_rate*20)}/20)")
+        logger.info(f"   Margin: {sim_result.worst_case:+d} to {sim_result.best_case:+d} "
+                   f"(avg {sim_result.avg_power_margin:+.1f}, p10={sim_result.percentile_10_margin:+d})")
+
+        if sim_result.opponent_battled_count > 0:
+            logger.info(f"   Opponent battled T1: {sim_result.opponent_battled_count}/20")
+        if sim_result.barrier_losses > 0:
+            logger.info(f"   Barrier losses: {sim_result.barrier_losses}/20")
+
+        # Format histogram
+        histogram_str = MonteCarloSimulator.format_histogram(sim_result.histogram)
+        logger.info(f"   Histogram: {histogram_str}")
+
+        # Show score adjustment
+        ratio = expected.final_score / base_score if base_score > 0 else 0
+        logger.info(f"   Score: {base_score:.0f} → {expected.final_score:.0f} ({ratio:.2f}x)")
 
     def _generate_ground_plan_for_card(self, card: Dict, other_chars: List[Dict],
                                         ground_targets: List[LocationAnalysis],
@@ -2130,7 +2874,7 @@ class DeployPhasePlanner:
             ground_threshold: Dynamic threshold for establishing ground presence.
                               Uses self.deploy_threshold if not specified.
             contest_advantage: Power advantage required over enemy to contest.
-                              Defaults to MIN_CONTEST_ADVANTAGE (2) if not specified.
+                              Defaults to get_min_contest_advantage() (2) if not specified.
                               When life is low, this may be reduced to accept ties.
 
         Returns list of (instructions, force_remaining, score) tuples.
@@ -2164,7 +2908,7 @@ class DeployPhasePlanner:
         MIN_ESTABLISH_POWER = ground_threshold if ground_threshold is not None else self.deploy_threshold
 
         # Use dynamic contest advantage if provided, otherwise fall back to default
-        required_advantage = contest_advantage if contest_advantage is not None else MIN_CONTEST_ADVANTAGE
+        required_advantage = contest_advantage if contest_advantage is not None else get_min_contest_advantage()
 
         # === GENERATE PLANS FOR EACH CARD × LOCATION COMBINATION ===
         # For multi-location establishment to work, we need separate plans
@@ -2258,10 +3002,20 @@ class DeployPhasePlanner:
                 elif card_power < MIN_ESTABLISH_POWER:
                     continue
 
+                # BUDDY SYSTEM: Don't deploy weak characters alone to establish new presence
+                # This prevents enemy from moving in and crushing our lone weak character
+                if get_weak_char_buddy_required():
+                    weak_threshold = get_weak_character_power()
+                    is_establishing = (existing_power == 0)
+                    is_weak_char = (card['power'] <= weak_threshold)
+                    if is_establishing and is_weak_char:
+                        logger.debug(f"   ⏭️ BUDDY: {card['name']} (power {card['power']}) needs buddy to establish at {target_loc.name}")
+                        continue  # Skip single-card plan, multi-card plans still considered below
+
                 # Create a single-card plan
                 if target_loc.their_power > 0:
                     power_advantage = card_power - target_loc.their_power
-                    if power_advantage >= BATTLE_FAVORABLE_THRESHOLD:
+                    if power_advantage >= get_battle_favorable_threshold():
                         reason = f"Ground: Crush {target_loc.name} ({card_power} vs {target_loc.their_power})"
                     else:
                         reason = f"Ground: Reinforce {target_loc.name} ({card_power} vs {target_loc.their_power}, +{power_advantage})"
@@ -2312,7 +3066,7 @@ class DeployPhasePlanner:
             for card in cards_for_loc:
                 if target_loc.their_power > 0:
                     power_advantage = total_power - target_loc.their_power
-                    if power_advantage >= BATTLE_FAVORABLE_THRESHOLD:
+                    if power_advantage >= get_battle_favorable_threshold():
                         reason = f"Ground: Crush {target_loc.name} ({total_power} vs {target_loc.their_power})"
                     else:
                         reason = f"Ground: Reinforce {target_loc.name} ({total_power} vs {target_loc.their_power}, +{power_advantage})"
@@ -2410,7 +3164,7 @@ class DeployPhasePlanner:
                     # Build vehicle + pilot combo plan
                     if target_loc.their_power > 0:
                         power_advantage = total_power - target_loc.their_power
-                        if power_advantage >= BATTLE_FAVORABLE_THRESHOLD:
+                        if power_advantage >= get_battle_favorable_threshold():
                             reason = f"Ground: Crush {target_loc.name} with vehicle ({total_power} vs {target_loc.their_power})"
                         else:
                             reason = f"Ground: Reinforce {target_loc.name} with vehicle ({total_power} vs {target_loc.their_power})"
@@ -2882,7 +3636,7 @@ class DeployPhasePlanner:
             space_threshold: Dynamic threshold for establishing space presence.
                              Uses self.deploy_threshold if not specified.
             contest_advantage: Power advantage required over enemy to contest.
-                              Defaults to MIN_CONTEST_ADVANTAGE (2) if not specified.
+                              Defaults to get_min_contest_advantage() (2) if not specified.
 
         Returns list of (instructions, force_remaining, score) tuples.
         """
@@ -2953,17 +3707,59 @@ class DeployPhasePlanner:
                             logger.info(f"   ⚠️ Space: ship+pilot combos exceed budget "
                                        f"(cheapest: {cheapest_combo[0]}+{cheapest_combo[1]}={cheapest_combo[2]}, have {force_budget})")
                 else:
-                    # Ships exist but none affordable
+                    # Ships exist but none affordable - try to find cheaper alternative
                     cheapest = min(starships, key=lambda s: s['cost'])
                     logger.info(f"   ⚠️ Space: starship(s) too expensive "
                                f"(cheapest: {cheapest['name']} costs {cheapest['cost']}, have {force_budget})")
-            return plans
+
+                    # System 3: Try to find ANY affordable starship as alternative
+                    # This looks at the full hand, not just pre-filtered list
+                    if self._board_state:
+                        already_in_plan = {s['blueprint_id'] for s in starships}
+                        alternative = self._find_cheaper_alternative(
+                            self._board_state,
+                            card_type="starship",
+                            max_cost=force_budget,
+                            exclude_blueprints=already_in_plan
+                        )
+                        if alternative:
+                            # Found a cheaper alternative! Add it to deployables
+                            if alternative.get('has_permanent_pilot', False):
+                                affordable_piloted_ships = [alternative]
+                                logger.info(f"   🔄 Using alternative ship: {alternative['name']}")
+                            else:
+                                affordable_unpiloted_ships = [alternative]
+                                # Rebuild combos with this ship
+                                ship_pilot_combos = []
+                                for pilot in affordable_pilots:
+                                    combined_cost = alternative['cost'] + pilot['cost']
+                                    if combined_cost <= force_budget:
+                                        ship_base_power = alternative.get('base_power', 0)
+                                        combined_power = ship_base_power + pilot['power']
+                                        ship_pilot_combos.append({
+                                            'blueprint_id': alternative['blueprint_id'],
+                                            'name': alternative['name'],
+                                            'power': combined_power,
+                                            'base_power': combined_power,
+                                            'cost': combined_cost,
+                                            'is_combo': True,
+                                            'ship': alternative,
+                                            'pilot': pilot,
+                                        })
+                                        break
+                                logger.info(f"   🔄 Using alternative ship: {alternative['name']} (needs pilot)")
+
+                            # Rebuild all_deployable_space with the alternative
+                            all_deployable_space = affordable_piloted_ships + ship_pilot_combos
+                            # Continue with normal plan generation below
+            if not all_deployable_space:
+                return plans
 
         # Use dynamic threshold if provided, otherwise fall back to default
         MIN_ESTABLISH_POWER = space_threshold if space_threshold is not None else self.deploy_threshold
 
         # Use dynamic contest advantage if provided, otherwise fall back to default
-        required_advantage = contest_advantage if contest_advantage is not None else MIN_CONTEST_ADVANTAGE
+        required_advantage = contest_advantage if contest_advantage is not None else get_min_contest_advantage()
 
         # === GENERATE A PLAN FOR EACH TARGET LOCATION ===
         # This is the key change: try each location independently
@@ -3050,7 +3846,7 @@ class DeployPhasePlanner:
             for ship_entry in ships_for_loc:
                 if target_loc.their_power > 0:
                     power_advantage = total_power - target_loc.their_power
-                    if power_advantage >= BATTLE_FAVORABLE_THRESHOLD:
+                    if power_advantage >= get_battle_favorable_threshold():
                         reason = f"Space: Crush {target_loc.name} ({total_power} vs {target_loc.their_power})"
                     else:
                         reason = f"Space: Contest {target_loc.name} ({total_power} vs {target_loc.their_power}, +{power_advantage})"
@@ -3150,6 +3946,7 @@ class DeployPhasePlanner:
         current_phase = getattr(board_state, 'current_phase', '')
         current_turn = getattr(board_state, 'turn_number', 0)
         self._current_turn = current_turn  # Store for use in helper methods
+        self._board_state = board_state  # Store for goal scoring in _score_plan
         is_my_turn = board_state.is_my_turn() if hasattr(board_state, 'is_my_turn') else True
 
         # === CRITICAL: Don't plan during opponent's turn! ===
@@ -3189,6 +3986,58 @@ class DeployPhasePlanner:
 
         logger.info("📋 Creating comprehensive deployment plan...")
 
+        # === UPDATE STRATEGIC STATE ===
+        # Update strategic state at deploy phase start for accurate mode flags
+        strategic_state = getattr(board_state, 'strategic_state', None)
+        if strategic_state and strategic_state.enabled:
+            strategic_state.on_deploy_phase_start(board_state)
+
+        # Log config values being used for this decision
+        logger.info(f"📊 DEPLOY CONFIG: early_game_threshold={get_early_game_threshold()}, "
+                   f"early_game_turns={get_early_game_turns()}, deploy_threshold={get_deploy_threshold()}, "
+                   f"overkill_threshold={get_deploy_overkill_threshold()}, contest_advantage={get_min_contest_advantage()}")
+
+        # =================================================================
+        # FAILED HOLD CHECK
+        # If we held last turn for a specific reason, check if it worked out.
+        # If the hold didn't pay off (enemy countered, didn't draw cards),
+        # mark the hold as failed so we're more aggressive this turn.
+        # =================================================================
+        if hasattr(board_state, 'next_turn_crush_plan') and board_state.next_turn_crush_plan:
+            crush_plan = board_state.next_turn_crush_plan
+            # Check if we can still execute the crush
+            target_loc = None
+            for loc in board_state.locations:
+                if loc.name == crush_plan.target_location_name:
+                    target_loc = loc
+                    break
+
+            if target_loc:
+                # Check if enemy power changed significantly (they counter-deployed)
+                current_enemy_power = target_loc.their_power
+                planned_enemy_power = crush_plan.target_enemy_power
+                enemy_reinforced = current_enemy_power > planned_enemy_power + 2
+
+                # Check if we have enough force for the crush
+                force_available = board_state.force_pile
+                force_needed = crush_plan.force_needed
+                insufficient_force = force_available < force_needed
+
+                if enemy_reinforced or insufficient_force:
+                    board_state.hold_failed_last_turn = True
+                    board_state.last_hold_reason = f"Crush at {crush_plan.target_location_name}"
+                    if enemy_reinforced:
+                        logger.warning(f"⚠️ HOLD FAILED: Enemy reinforced {crush_plan.target_location_name} "
+                                      f"({planned_enemy_power} → {current_enemy_power})")
+                    if insufficient_force:
+                        logger.warning(f"⚠️ HOLD FAILED: Insufficient force ({force_available}/{force_needed})")
+                    logger.info(f"   Will be more aggressive this turn - no more speculative holds")
+                else:
+                    logger.info(f"✅ Previous hold valid: Can still crush {crush_plan.target_location_name}")
+
+            # Clear the old crush plan regardless
+            board_state.next_turn_crush_plan = None
+
         # Log side detection for debugging
         my_side = getattr(board_state, 'my_side', 'unknown')
         logger.info(f"   🎭 My side: {my_side}")
@@ -3214,9 +4063,153 @@ class DeployPhasePlanner:
         # - +1 if deploying to contested location (need to initiate battle)
         # - +1 per card that needs to flee (movement costs)
         base_reserve = self.battle_force_reserve
+
+        # CRITICAL: When life force is low AND force is scarce, don't reserve anything!
+        # Deploying SOMETHING is more important than saving 1 force for reactions
+        life_force = getattr(board_state, 'life_force', 30)
+        critical_life_threshold = 12  # Same as strategy config critical threshold
+        low_force_threshold = 4  # If we have 4 or less, every force matters
+        hand_size = len(board_state.cards_in_hand) if board_state.cards_in_hand else 0
+        small_hand_threshold = 5  # If hand is below this, save force for drawing
+
+        if life_force <= critical_life_threshold and total_force <= low_force_threshold:
+            base_reserve = 0
+            logger.warning(f"   ⚠️ CRITICAL: Life={life_force}, Force={total_force} - NO RESERVE, use everything!")
+
         force_to_spend = max(0, total_force - base_reserve)
 
         logger.info(f"   Force: {total_force} total, {force_to_spend} for deploying (base reserve {base_reserve}, dynamic per-plan)")
+
+        # =================================================================
+        # SYSTEM 1: EXPENSIVE CARD BUDGET
+        # Check if we should save force for expensive high-value cards
+        # =================================================================
+        budget_reserve = 0
+        expensive_budget = getattr(board_state, 'expensive_card_budget', None)
+
+        # First, check if existing budget is complete (can now afford the card)
+        budget_just_completed = False
+        if expensive_budget:
+            force_gen = self._estimate_force_generation([], board_state)
+            if expensive_budget.update_turn(total_force, force_gen):
+                # Can now afford! Clear the budget so we deploy normally
+                target_name = expensive_budget.target_name
+                board_state.expensive_card_budget = None
+                expensive_budget = None
+                budget_just_completed = True  # Don't create new budget this turn
+                logger.info(f"💰 Budget cleared - deploying {target_name} this turn!")
+
+        # If no active budget AND we didn't just complete one, check if we should create one
+        if not expensive_budget and not budget_just_completed and life_force > critical_life_threshold:
+            # Look for expensive high-value cards we can't afford
+            expensive_threshold = 10  # Cards costing 10+ are "expensive"
+            force_gen = self._estimate_force_generation([], board_state)
+
+            raw_hand = getattr(board_state, 'cards_in_hand', [])
+            high_value_expensive = []
+
+            for card in raw_hand:
+                if not card.blueprint_id:
+                    continue
+                card_meta = get_card(card.blueprint_id)
+                if not card_meta:
+                    continue
+
+                deploy_cost = card_meta.deploy_value or 0
+                power = card_meta.power_value or 0
+
+                # Check if expensive and unaffordable
+                if deploy_cost >= expensive_threshold and deploy_cost > force_to_spend:
+                    # Check if it's high-value (starship with power >= 8, or main character)
+                    is_valuable = False
+                    is_starship = card_meta.is_starship
+
+                    if is_starship and power >= 8:
+                        is_valuable = True
+                    elif card_meta.is_character and (
+                        getattr(card_meta, 'is_main_character', False) or
+                        getattr(card_meta, 'ability_value', 0) >= 5
+                    ):
+                        is_valuable = True
+
+                    if is_valuable:
+                        # Calculate turns to afford
+                        force_deficit = deploy_cost - force_to_spend
+                        turns_needed = max(1, (force_deficit + force_gen - 1) // force_gen) if force_gen > 0 else 99
+                        value_score = power + (20 if is_starship else 0)
+
+                        high_value_expensive.append({
+                            'blueprint_id': card.blueprint_id,
+                            'name': card_meta.title,
+                            'cost': deploy_cost,
+                            'power': power,
+                            'is_starship': is_starship,
+                            'turns_needed': turns_needed,
+                            'value_score': value_score,
+                        })
+
+            # Pick the best target for budgeting (highest value / fewest turns)
+            if high_value_expensive:
+                # Sort by value per turn
+                high_value_expensive.sort(key=lambda x: x['value_score'] / x['turns_needed'], reverse=True)
+                best = high_value_expensive[0]
+
+                # Only budget if achievable in 2 turns
+                if best['turns_needed'] <= 2:
+                    save_per_turn = (best['cost'] - force_to_spend + force_gen - 1) // best['turns_needed']
+                    save_per_turn = min(save_per_turn, force_to_spend // 2)  # Never save more than half
+
+                    if save_per_turn >= 2:  # Only worth budgeting if saving at least 2
+                        expensive_budget = ExpensiveCardBudget(
+                            target_blueprint_id=best['blueprint_id'],
+                            target_name=best['name'],
+                            target_cost=best['cost'],
+                            target_power=best['power'],
+                            save_per_turn=save_per_turn,
+                            turns_remaining=best['turns_needed'],
+                            is_starship=best['is_starship'],
+                        )
+                        board_state.expensive_card_budget = expensive_budget
+                        logger.info(f"💰 BUDGET: Saving for {best['name']} "
+                                   f"(cost {best['cost']}, power {best['power']}, {best['turns_needed']} turns)")
+
+        # Apply budget reserve if active
+        # BUT: Check if we have a space emergency with affordable ships that budget would block
+        budget_suspended = False
+        if expensive_budget:
+            budget_reserve = expensive_budget.get_force_to_reserve(force_to_spend)
+
+            # Check for space emergency: are we bleeding in space with no presence?
+            has_space_emergency = False
+            affordable_ship_blocked = False
+            if hasattr(board_state, 'strategic_state') and board_state.strategic_state:
+                ss = board_state.strategic_state
+                has_space_emergency = getattr(ss, 'space_emergency', False)
+
+                if has_space_emergency:
+                    # Check if we have an affordable ship that budget would block
+                    raw_hand = getattr(board_state, 'cards_in_hand', [])
+                    for card in raw_hand:
+                        if not card.blueprint_id:
+                            continue
+                        card_meta = get_card(card.blueprint_id)
+                        if not card_meta or not card_meta.is_starship:
+                            continue
+                        ship_cost = card_meta.deploy_value or 0
+                        # Check if affordable now but not with budget
+                        if ship_cost <= force_to_spend and ship_cost > (force_to_spend - budget_reserve):
+                            affordable_ship_blocked = True
+                            break
+
+            if has_space_emergency and affordable_ship_blocked:
+                # Suspend budget - deploying ship to stop bleed is more important
+                logger.warning(f"💰⚠️ BUDGET SUSPENDED: Space emergency! "
+                              f"Affordable ship blocked by budget - prioritizing immediate deploy")
+                budget_suspended = True
+            else:
+                force_to_spend = max(2, force_to_spend - budget_reserve)  # Keep minimum 2 for emergencies
+                logger.info(f"💰 Reserving {budget_reserve} force for {expensive_budget.target_name}, "
+                           f"{force_to_spend} remaining for this turn")
 
         # Initialize the plan
         plan = DeploymentPlan(
@@ -3239,10 +4232,26 @@ class DeployPhasePlanner:
                 logger.debug(f"      - {c['name']}: is_char={c['is_character']}, is_ship={c['is_starship']}")
 
         locations_in_hand = [c for c in all_cards if c['is_location']]
-        characters = [c for c in all_cards if c['is_character'] and not c['is_location']]
+
+        # Check if GamePlan wants us to save any cards
+        saved_cards = set()
+        if hasattr(board_state, 'game_plan') and board_state.game_plan:
+            saved_cards = set(board_state.game_plan.cards_to_save or [])
+            if saved_cards:
+                logger.info(f"   🎯 GamePlan says SAVE these cards: {saved_cards}")
+
+        # Filter out saved cards from deployment consideration
+        def should_deploy(card):
+            bp_id = card.get('blueprint_id', '')
+            if bp_id in saved_cards:
+                logger.info(f"   ⏸️ EXCLUDING {card['name']} from deploy (marked for saving)")
+                return False
+            return True
+
+        characters = [c for c in all_cards if c['is_character'] and not c['is_location'] and should_deploy(c)]
         # IMPORTANT: Separate starships (space) from vehicles (ground)
-        starships = [c for c in all_cards if c['is_starship'] and not c['is_vehicle']]
-        vehicles = [c for c in all_cards if c['is_vehicle']]
+        starships = [c for c in all_cards if c['is_starship'] and not c['is_vehicle'] and should_deploy(c)]
+        vehicles = [c for c in all_cards if c['is_vehicle'] and should_deploy(c)]
         weapons = [c for c in all_cards if c.get('is_weapon') or c.get('is_device')]
         # Pilots can go aboard unpiloted vehicles/starships
         pilots = [c for c in characters if c['is_pilot']]
@@ -3304,7 +4313,7 @@ class DeployPhasePlanner:
         # Calculate dynamic contest advantage based on life force
         # When life is low, accept riskier battles (ties instead of requiring +2 advantage)
         contest_advantage = get_contest_advantage(life_force)
-        if contest_advantage < MIN_CONTEST_ADVANTAGE:
+        if contest_advantage < get_min_contest_advantage():
             logger.info(f"   📊 Dynamic thresholds: ground={ground_threshold}, space={space_threshold} (turn {current_turn}, life={life_force})")
             logger.info(f"   ⚔️ Low life ({life_force}): accepting {'+' + str(contest_advantage) if contest_advantage > 0 else 'ties'} instead of +2 advantage")
         else:
@@ -3365,6 +4374,7 @@ class DeployPhasePlanner:
                             name=loc_card['name'],
                             is_ground=is_ground,
                             is_space=is_space,
+                            is_site=is_ground,  # Sites are ground locations
                             my_power=0,
                             their_power=0,
                             my_icons=my_icons,
@@ -3498,6 +4508,29 @@ class DeployPhasePlanner:
         if attackable_space:
             logger.info(f"   ⚔️ Attackable space: {[(loc.name, loc.their_power, loc.my_icons) for loc in attackable_space]}")
 
+        # =================================================================
+        # ATTACKABLE GROUND: STOP_BLEEDING locations with enemy presence
+        # Key difference from contested_ground: we have NO presence (my_power=0)
+        # but we have icons (my_icons > 0) so opponent drains us!
+        # This is the MISSING category that caused strategic failures - the bot
+        # was ignoring high-threat bleed locations because:
+        # - Not in bleed_locations (enemy power > low_enemy_threshold)
+        # - Not in contested_ground (requires my_power > 0)
+        # - Not in uncontested_ground (requires their_power == 0)
+        # =================================================================
+        attackable_ground = [
+            loc for loc in locations
+            if loc.is_ground
+            and loc.my_power == 0  # We're not there yet
+            and loc.their_power > 0  # Enemy HAS presence there
+            and loc.my_icons > 0  # We have icons - we're BLEEDING!
+            and not loc.should_flee  # Don't attack if we can't win
+            and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
+            and not (whap_restriction and is_interior_naboo_site(loc.name, loc.is_interior))  # Skip interior Naboo if WHAP active
+        ]
+        if attackable_ground:
+            logger.info(f"   🩸 Attackable ground (STOP_BLEEDING): {[(loc.name, loc.their_power, loc.my_icons) for loc in attackable_ground]}")
+
         # Sort by icons (most valuable first)
         # Primary: opponent icons (deny their force drain)
         # Secondary: our icons (maximize our force generation) - tiebreaker
@@ -3505,13 +4538,16 @@ class DeployPhasePlanner:
         uncontested_space.sort(key=lambda x: (x.their_icons, x.my_icons), reverse=True)
         # Sort attackable by enemy power (easier targets first for quick wins)
         attackable_space.sort(key=lambda x: x.their_power)
+        # Sort attackable ground by our icons (highest drain/bleed priority first)
+        # These are STOP_BLEEDING locations - stopping 2-icon drain is more valuable than 1-icon
+        attackable_ground.sort(key=lambda x: (-x.my_icons, x.their_power))
 
         # CONCENTRATION STRATEGY: Don't spread thin!
         # Pick at most 1-2 locations to establish at, and deploy meaningful force there
         # Instead of 3 power to 4 locations, do 6+ power to 2 locations
-        MAX_ESTABLISH_LOCATIONS = 2
-        uncontested_ground = uncontested_ground[:MAX_ESTABLISH_LOCATIONS]
-        uncontested_space = uncontested_space[:MAX_ESTABLISH_LOCATIONS]
+        max_establish = get_max_establish_locations()
+        uncontested_ground = uncontested_ground[:max_establish]
+        uncontested_space = uncontested_space[:max_establish]
 
         if uncontested_ground:
             logger.info(f"   🎯 Ground targets (chars): {[loc.name for loc in uncontested_ground]}")
@@ -3527,12 +4563,84 @@ class DeployPhasePlanner:
         their_drain, our_drain, drain_gap, bleed_locations = self._calculate_force_drain_gap(locations)
 
         # =================================================================
+        # MERGE ATTACKABLE_GROUND INTO CONTESTED LIST
+        # These are STOP_BLEEDING locations where we have NO presence but
+        # opponent does. They should be processed in STEP 4 with HIGH priority
+        # because stopping 2-icon drains is critical to winning.
+        # Add them AFTER contested (where we already have presence) because
+        # maintaining existing presence is slightly higher priority than
+        # establishing new presence at enemy-controlled locations.
+        # =================================================================
+        if attackable_ground:
+            # Add to contested list for STEP 4 processing
+            contested = contested + attackable_ground
+            contested_ground = contested_ground + attackable_ground
+            logger.info(f"   🩸 Added {len(attackable_ground)} STOP_BLEEDING targets to contested list")
+
+        # =================================================================
         # STEP 4: ALLOCATE CHARACTERS TO CONTESTED/WEAK LOCATIONS
         # Priority: Reinforce locations where we're losing OR below threshold
         # Goal: Reach power advantage (contested) or threshold (weak presence)
         # Uses optimal combination finding to maximize power within budget
         # =================================================================
         available_chars = characters.copy()
+
+        max_deployable_char_power = sum(c['power'] for c in available_chars)
+
+        # =================================================================
+        # PRE-CHECK: HOLD FOR DRAW IF WE CAN'T CONTEST BLEEDING LOCATIONS
+        # Before iterating through contested locations, check if we're in a
+        # situation where we're bleeding but can't meaningfully contest.
+        # In this case, it may be better to HOLD and draw cards rather than
+        # deploy sub-optimally to space or other unrelated locations.
+        #
+        # EXCEPTION: When GamePlan is active, skip this hold-for-draw check
+        # in early game - we need to establish presence and be aggressive.
+        # =================================================================
+        gameplan_active = False
+        if board_state and hasattr(board_state, 'game_plan') and board_state.game_plan:
+            gameplan_active = getattr(board_state.game_plan, 'enabled', False)
+        skip_hold_for_draw = gameplan_active and current_turn <= 2
+        if skip_hold_for_draw:
+            logger.info(f"   🎯 GamePlan active - skipping hold-for-draw check (turn {current_turn})")
+
+        if attackable_ground and drain_gap < 0 and not skip_hold_for_draw:
+            # Check if we can meaningfully contest ANY bleeding location
+            can_contest_any = False
+            total_char_power = sum(c['power'] for c in available_chars)
+            destiny_margin = 4  # Average destiny draw advantage
+
+            for loc in attackable_ground:
+                # Can we beat this location's enemy power?
+                if total_char_power + destiny_margin >= loc.their_power:
+                    can_contest_any = True
+                    break
+
+            if not can_contest_any and attackable_ground:
+                # We're bleeding and can't meaningfully contest ANY location
+                # Evaluate whether holding for draw is better than sub-optimal deploy
+                force_pile = getattr(board_state, 'force_pile', 0) or 0
+                reserve_deck = getattr(board_state, 'reserve_deck', 0) or 0
+
+                should_hold, hold_reason, expected_value = self._evaluate_hold_for_bleeding(
+                    domain="ground",
+                    bleeding_locations=attackable_ground,
+                    deployable_power=total_char_power,
+                    force_pile=force_pile,
+                    reserve_deck=reserve_deck,
+                    current_turn=current_turn,
+                    board_state=board_state
+                )
+
+                if should_hold:
+                    logger.info(f"   🎰 HOLD FOR GROUND DRAW: {hold_reason}")
+                    plan.instructions.clear()
+                    plan.strategy = DeployStrategy.HOLD_BACK
+                    plan.reason = hold_reason
+                    board_state.consecutive_hold_turns = getattr(board_state, 'consecutive_hold_turns', 0) + 1
+                    plan.phase_started = True
+                    self.current_plan = plan
+                    return plan
 
         for loc in contested:
             if not available_chars or force_remaining <= 0:
@@ -3578,16 +4686,38 @@ class DeployPhasePlanner:
             else:
                 # Contested: need to beat enemy
                 deficit = abs(loc.power_differential)
-                power_needed = deficit + BATTLE_FAVORABLE_THRESHOLD  # Want to reach favorable
+                power_needed = deficit + get_battle_favorable_threshold()  # Want to reach favorable
                 log_tag = "BATTLE OPP" if loc.is_battle_opportunity else "Contested"
                 logger.info(f"   ⚔️ {log_tag}: {loc.name} ({loc.my_power} vs {loc.their_power}, need +{power_needed})")
+
+                # === UNREACHABLE TARGET CHECK ===
+                # Skip STOP_BLEEDING locations where we can't possibly win
+                # Allow +4 margin for destiny draws, but if we need +15 and only have 8 power, skip
+                # EXCEPTION: On early turns (1-2), still try to establish presence even at hard locations
+                # This prevents giving up strategic locations too easily
+                location_char_power = sum(c['power'] for c in location_chars)
+                destiny_margin = 4  # Average destiny draw advantage
+                current_turn = getattr(board_state, 'current_turn', 1)
+                is_early_game_establish = current_turn <= 2 and loc.their_power > 0
+
+                if loc.my_power == 0 and power_needed > location_char_power + destiny_margin:
+                    if is_early_game_establish:
+                        # Early game: still try to establish presence, but note the disadvantage
+                        logger.info(f"   ⚠️ HARD TARGET: {loc.name} needs +{power_needed} but only {location_char_power} deployable - will try anyway (early game)")
+                        # Reduce power_needed to just establish presence, not win immediately
+                        power_needed = max(4, location_char_power)  # Deploy what we can
+                    else:
+                        logger.info(f"   ⏭️ UNREACHABLE: {loc.name} needs +{power_needed} but only {location_char_power} deployable (+{destiny_margin} destiny) - skipping")
+                        continue
 
             # Find OPTIMAL combination of cards within budget
             # For weak presence: just reach threshold efficiently (prefer cheaper)
             # For contested: want to WIN decisively (prefer more power)
+            location_budget = force_remaining
+
             cards_for_location, power_allocated, cost_used = self._find_optimal_combination(
                 location_chars,  # Use filtered chars that can deploy to this location
-                force_remaining,
+                location_budget,
                 power_needed,
                 must_exceed=not is_weak_presence  # Contested: want to beat enemy decisively
             )
@@ -3595,6 +4725,48 @@ class DeployPhasePlanner:
             if not cards_for_location:
                 logger.info(f"   ⏭️ No affordable cards for {loc.name}")
                 continue
+
+            # CRITICAL: For NEW attacks (attackable_ground where my_power=0), verify we can actually WIN
+            # The optimization functions may return partial results even when we can't
+            # achieve the goal. If we can't beat the enemy, don't waste cards!
+            # BUT: For existing presence (my_power > 0), we should reinforce even if risky
+            # EXCEPTION: If we MATCH power and can draw destiny (ability >= 4, reserve deck > 0),
+            # we have ~50% chance to win - acceptable for high-icon bleeding locations
+            is_presence_deploy = False  # Track if this is a desperate presence deploy
+            if not is_weak_presence and loc.my_power == 0:
+                # This is an ATTACK on enemy-controlled location (STOP_BLEEDING case)
+                new_total_power = power_allocated  # No existing power
+                if new_total_power < loc.their_power:
+                    # We can't beat the enemy - but should we deploy anyway to STOP DRAIN?
+                    # When severely bleeding (drain_gap <= -2) AND life is low, presence stops the drain
+                    # which may be more valuable than saving characters for a battle we'll lose
+                    # Only do desperate presence deploys when life is low (< 25) - otherwise wait for better opportunity
+                    if drain_gap <= -2 and loc.my_icons >= 2 and life_force < 25:
+                        # Severe drain deficit at high-value location AND low life - deploy anyway!
+                        # Even losing a battle saves (icons × turns) life force from drains
+                        icons_to_save = loc.my_icons
+                        logger.info(f"   🩸 PRESENCE DEPLOY: Can't beat {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"but drain_gap={drain_gap}, life={life_force}, saving {icons_to_save} drain/turn - worth it!")
+                        is_presence_deploy = True  # Mark as presence deploy
+                    else:
+                        # Not desperate enough or low-value location - skip
+                        logger.info(f"   ⏭️ Can't beat {loc.name}: {new_total_power} vs {loc.their_power}, skipping")
+                        continue
+                elif new_total_power == loc.their_power:
+                    # We can MATCH but not beat - check if we can draw destiny
+                    total_ability = sum(c.get('ability', 0) for c in cards_for_location)
+                    reserve_deck_cards = getattr(board_state, 'reserve_deck', 0) or 0
+                    can_draw_destiny = total_ability >= 4 and reserve_deck_cards > 0
+
+                    if not can_draw_destiny:
+                        # Can't draw destiny - matching power is a losing bet
+                        logger.info(f"   ⏭️ Can only tie {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"can't draw destiny (ability={total_ability}, reserve={reserve_deck_cards}), skipping")
+                        continue
+                    else:
+                        # Can draw destiny - ~50% chance to win, worth it for high-icon locations
+                        logger.info(f"   ⚔️ Will TIE at {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"but CAN draw destiny (ability={total_ability}) - worth the gamble!")
 
             # Log the selected combination
             card_names = [c['name'] for c in cards_for_location]
@@ -3608,7 +4780,10 @@ class DeployPhasePlanner:
 
             # Create instructions for these deployments
             for char in cards_for_location:
-                if loc.is_battle_opportunity:
+                if is_presence_deploy:
+                    reason = f"PRESENCE at {loc.name} to STOP {loc.my_icons} drain/turn (desperate: drain_gap={drain_gap})"
+                    priority = 1
+                elif loc.is_battle_opportunity:
                     reason = f"BATTLE OPP at {loc.name} (deploy +{char['power']}, then fight!)"
                     priority = 1  # Same as reinforce but flagged for battle
                 elif is_weak_presence:
@@ -3638,6 +4813,47 @@ class DeployPhasePlanner:
         # =================================================================
         available_ships = starships.copy()
 
+        # =================================================================
+        # PRE-CHECK: HOLD FOR DRAW IF WE CAN'T CONTEST SPACE BLEEDING
+        # Same logic as ground - if we're bleeding in space and can't contest,
+        # consider holding to draw ships instead of deploying ground sub-optimally.
+        # =================================================================
+        if attackable_space and drain_gap < 0:
+            # Check if we can meaningfully contest ANY space bleeding location
+            can_contest_any_space = False
+            total_ship_power = sum(s['power'] for s in available_ships)
+            destiny_margin = 4
+
+            for loc in attackable_space:
+                if total_ship_power + destiny_margin >= loc.their_power:
+                    can_contest_any_space = True
+                    break
+
+            if not can_contest_any_space and attackable_space:
+                # We're bleeding in space and can't contest
+                force_pile = getattr(board_state, 'force_pile', 0) or 0
+                reserve_deck = getattr(board_state, 'reserve_deck', 0) or 0
+
+                should_hold, hold_reason, expected_value = self._evaluate_hold_for_bleeding(
+                    domain="space",
+                    bleeding_locations=attackable_space,
+                    deployable_power=total_ship_power,
+                    force_pile=force_pile,
+                    reserve_deck=reserve_deck,
+                    current_turn=current_turn,
+                    board_state=board_state
+                )
+
+                if should_hold:
+                    logger.info(f"   🎰 HOLD FOR SPACE DRAW: {hold_reason}")
+                    plan.instructions.clear()
+                    plan.strategy = DeployStrategy.HOLD_BACK
+                    plan.reason = hold_reason
+                    board_state.consecutive_hold_turns = getattr(board_state, 'consecutive_hold_turns', 0) + 1
+                    plan.phase_started = True
+                    self.current_plan = plan
+                    return plan
+
         for loc in contested_space:
             if not available_ships or force_remaining <= 0:
                 break
@@ -3655,16 +4871,26 @@ class DeployPhasePlanner:
             else:
                 # Contested: need to beat enemy
                 deficit = abs(loc.power_differential)
-                power_needed = deficit + BATTLE_FAVORABLE_THRESHOLD  # Want to reach favorable
+                power_needed = deficit + get_battle_favorable_threshold()  # Want to reach favorable
                 log_tag = "BATTLE OPP" if loc.is_battle_opportunity else "Contested"
                 logger.info(f"   🚀 {log_tag}: {loc.name} ({loc.my_power} vs {loc.their_power}, need +{power_needed})")
+
+                # === UNREACHABLE TARGET CHECK (SPACE) ===
+                # Skip STOP_BLEEDING locations where we can't possibly win
+                available_ship_power = sum(s['power'] for s in available_ships)
+                destiny_margin = 4  # Average destiny draw advantage
+                if loc.my_power == 0 and power_needed > available_ship_power + destiny_margin:
+                    logger.info(f"   ⏭️ UNREACHABLE SPACE: {loc.name} needs +{power_needed} but only {available_ship_power} deployable (+{destiny_margin} destiny) - skipping")
+                    continue
 
             # Find OPTIMAL combination of starships within budget
             # For weak presence: just reach threshold efficiently (prefer cheaper)
             # For contested: want to WIN decisively (prefer more power)
+            location_budget = force_remaining
+
             ships_for_location, power_allocated, cost_used = self._find_optimal_combination(
                 available_ships,
-                force_remaining,
+                location_budget,
                 power_needed,
                 must_exceed=not is_weak_presence  # Contested: want to beat enemy decisively
             )
@@ -3672,6 +4898,43 @@ class DeployPhasePlanner:
             if not ships_for_location:
                 logger.info(f"   ⏭️ No affordable starships for {loc.name}")
                 continue
+
+            # CRITICAL: For NEW attacks (attackable_space where my_power=0), verify we can actually WIN
+            # Same logic as STEP 4 for characters
+            # EXCEPTION: If we MATCH power and can draw destiny (ability >= 4, reserve deck > 0),
+            # we have ~50% chance to win - acceptable for high-icon bleeding locations
+            is_presence_deploy = False  # Track if this is a desperate presence deploy
+            if not is_weak_presence and loc.my_power == 0:
+                new_total_power = power_allocated  # No existing power
+                if new_total_power < loc.their_power:
+                    # We can't beat the enemy - but should we deploy anyway to STOP DRAIN?
+                    # Same logic as ground: severe drain deficit at high-value location AND low life
+                    if drain_gap <= -2 and loc.my_icons >= 2 and life_force < 25:
+                        # Severe drain deficit at high-value location AND low life - deploy anyway!
+                        icons_to_save = loc.my_icons
+                        logger.info(f"   🩸 PRESENCE DEPLOY: Can't beat {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"but drain_gap={drain_gap}, life={life_force}, saving {icons_to_save} drain/turn - worth it!")
+                        is_presence_deploy = True  # Mark as presence deploy
+                    else:
+                        # Not desperate enough or low-value location - skip
+                        logger.info(f"   ⏭️ Can't beat {loc.name}: {new_total_power} vs {loc.their_power}, skipping")
+                        continue
+                elif new_total_power == loc.their_power:
+                    # We can MATCH but not beat - check if we can draw destiny
+                    # For starships, ability comes from permanent pilots
+                    total_ability = sum(s.get('ability', 0) for s in ships_for_location)
+                    reserve_deck_cards = getattr(board_state, 'reserve_deck', 0) or 0
+                    can_draw_destiny = total_ability >= 4 and reserve_deck_cards > 0
+
+                    if not can_draw_destiny:
+                        # Can't draw destiny - matching power is a losing bet
+                        logger.info(f"   ⏭️ Can only tie {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"can't draw destiny (ability={total_ability}, reserve={reserve_deck_cards}), skipping")
+                        continue
+                    else:
+                        # Can draw destiny - ~50% chance to win, worth it for high-icon locations
+                        logger.info(f"   ⚔️ Will TIE at {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"but CAN draw destiny (ability={total_ability}) - worth the gamble!")
 
             # Log the selected combination
             ship_names = [s['name'] for s in ships_for_location]
@@ -3685,7 +4948,10 @@ class DeployPhasePlanner:
 
             # Create instructions for these deployments
             for ship in ships_for_location:
-                if is_weak_presence:
+                if is_presence_deploy:
+                    reason = f"PRESENCE at {loc.name} to STOP {loc.my_icons} drain/turn (desperate: drain_gap={drain_gap})"
+                    priority = 1
+                elif is_weak_presence:
                     reason = f"Reinforce {loc.name} (had {loc.my_power}, adding {ship['power']} to reach threshold)"
                     priority = 1  # Same priority as contested reinforce
                 else:
@@ -3727,6 +4993,7 @@ class DeployPhasePlanner:
         char_ground_targets = [
             loc for loc in locations
             if loc.is_ground
+            and loc.is_site  # CRITICAL: Characters can only deploy to sites, not systems
             and (loc.their_power > 0 or loc.their_icons > 0 or loc.my_icons >= 2)  # Offensive OR defensive value
             and loc.my_power == 0  # We don't have presence yet
             and loc.my_icons > 0  # MUST have our force icons to deploy there
@@ -3758,14 +5025,38 @@ class DeployPhasePlanner:
 
         # Add newly deployed ground locations as targets (uncontested, enemy icons)
         for new_loc in newly_deployed_locations:
-            if new_loc.is_ground and new_loc.their_icons > 0:
+            if new_loc.is_ground and new_loc.is_site and new_loc.their_icons > 0:
                 char_ground_targets.append(new_loc)
                 logger.info(f"   📍 Added newly deployed location as target: {new_loc.name}")
+
+        # GAMEPLAN INTEGRATION: Ensure priority locations from goals are included
+        # This connects GamePlan strategic goals to target selection
+        priority_location_ids = []
+        if board_state and hasattr(board_state, 'game_plan'):
+            game_plan = board_state.game_plan
+            if game_plan and getattr(game_plan, 'enabled', False):
+                if hasattr(game_plan, 'get_priority_location_ids'):
+                    priority_location_ids = game_plan.get_priority_location_ids()
+                    if priority_location_ids:
+                        logger.info(f"   🎯 GamePlan priority locations: {priority_location_ids}")
+
+        # Add priority locations that aren't already in targets
+        existing_target_ids = {loc.card_id for loc in char_ground_targets}
+        for loc in locations:
+            if loc.card_id in priority_location_ids and loc.card_id not in existing_target_ids:
+                if loc.is_ground and loc.is_site and loc.my_icons > 0:
+                    char_ground_targets.insert(0, loc)  # High priority - add at front
+                    logger.info(f"   🎯 Added GamePlan priority target: {loc.name}")
 
         # Log why locations were excluded
         excluded_space = [loc.name for loc in locations if loc.is_space and not loc.is_ground]
         if excluded_space:
             logger.info(f"   ⏭️ Space locations (chars can't go): {excluded_space}")
+
+        # Log systems excluded (ground but not site - would cause deployment failures)
+        excluded_systems = [loc.name for loc in locations if loc.is_ground and not loc.is_site]
+        if excluded_systems:
+            logger.info(f"   ⏭️ System locations (chars need sites): {excluded_systems}")
 
         if char_ground_targets:
             # Log with both offensive (their_icons) and defensive (my_icons) values
@@ -3774,14 +5065,15 @@ class DeployPhasePlanner:
         # Include contested/crushable ground locations for character reinforcement
         # These have our presence AND enemy presence - we can deploy to CRUSH them!
         # CRITICAL: This includes locations where we're WINNING but can crush further
-        # EXCEPT: Don't add if we're already winning by DEPLOY_OVERKILL_THRESHOLD (overkill)
+        # EXCEPT: Don't add if we're already winning by get_deploy_overkill_threshold() (overkill)
         crushable_ground = [
             loc for loc in locations
             if loc.my_power > 0  # We have presence
             and loc.their_power > 0  # Enemy has presence (contested)
             and loc.is_ground  # Ground location
+            and loc.is_site  # Must be a site, not a system (characters can't deploy to systems)
             and not loc.should_flee  # Don't reinforce if fleeing
-            and (loc.my_power - loc.their_power) < DEPLOY_OVERKILL_THRESHOLD  # Not overkill
+            and (loc.my_power - loc.their_power) < get_deploy_overkill_threshold()  # Not overkill
             and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         for loc in crushable_ground:
@@ -3796,15 +5088,16 @@ class DeployPhasePlanner:
         # Lower priority than contested/crushable, but still valid deployment targets
         # IMPORTANT: Require my_icons > 0 so this is "our" location, not just presence-based
         # IMPORTANT: Don't reinforce if already well-fortified (10+ power) - save cards for future!
-        UNCONTESTED_FORTIFIED_THRESHOLD = 10  # Don't pile on if already this much power
+        fortified_threshold = get_uncontested_fortified_threshold()
         reinforceable_ground = [
             loc for loc in locations
             if loc.my_power > 0  # We have presence
             and loc.their_power == 0  # Enemy has NO presence (uncontested by us)
             and loc.is_ground  # Ground location
+            and loc.is_site  # Must be a site, not a system (characters can't deploy to systems)
             and loc.their_icons > 0  # Has enemy icons (strategically valuable)
             and loc.my_icons > 0  # Has our icons (it's "our" location, not just presence)
-            and loc.my_power < UNCONTESTED_FORTIFIED_THRESHOLD  # Not already fortified
+            and loc.my_power < fortified_threshold  # Not already fortified
             and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         for loc in reinforceable_ground:
@@ -3815,14 +5108,14 @@ class DeployPhasePlanner:
         # Include contested/crushable space locations for starship reinforcement
         # These have our presence (can deploy via presence rule even without icons)
         # CRITICAL: This includes locations where we're WINNING but can crush further
-        # EXCEPT: Don't add if we're already winning by DEPLOY_OVERKILL_THRESHOLD (overkill)
+        # EXCEPT: Don't add if we're already winning by get_deploy_overkill_threshold() (overkill)
         crushable_space = [
             loc for loc in locations
             if loc.my_power > 0  # We have presence
             and loc.their_power > 0  # Enemy has presence (contested)
             and loc.is_space  # Space location
             and not loc.should_flee  # Don't reinforce if fleeing
-            and (loc.my_power - loc.their_power) < DEPLOY_OVERKILL_THRESHOLD  # Not overkill
+            and (loc.my_power - loc.their_power) < get_deploy_overkill_threshold()  # Not overkill
             and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         space_targets = uncontested_space.copy()
@@ -3850,7 +5143,7 @@ class DeployPhasePlanner:
             and loc.is_space  # Space location
             and loc.their_icons > 0  # Has enemy icons (strategically valuable - they could deploy)
             and loc.my_icons > 0  # Has our icons (it's "our" location)
-            and loc.my_power < UNCONTESTED_FORTIFIED_THRESHOLD  # Not already fortified (10+ power)
+            and loc.my_power < fortified_threshold  # Not already fortified (10+ power)
             and not is_restricted_deployment_location(loc.name)  # Skip Dagobah/Ahch-To
         ]
         for loc in reinforceable_space:
@@ -4110,6 +5403,8 @@ class DeployPhasePlanner:
             if instructions and instructions[0].reason:
                 if "Crush" in instructions[0].reason:
                     reason_type = "CRUSH"
+                elif "Contest" in instructions[0].reason:
+                    reason_type = "CONTEST"
                 elif "Reinforce" in instructions[0].reason:
                     reason_type = "reinforce"
             logger.info(f"      SPACE {i+1}: {cards} → {target} ({reason_type}) score={score:.0f}, cost={cost}")
@@ -4365,6 +5660,17 @@ class DeployPhasePlanner:
             else:
                 # Sort by score descending, pick the best
                 valid_plans.sort(key=lambda x: x[3], reverse=True)
+
+                # =================================================================
+                # MONTE CARLO SIMULATION (optional)
+                # If enabled, stress-test top N plans against adversarial scenarios
+                # and re-rank by expected value after opponent counterplay.
+                # =================================================================
+                if self.monte_carlo_enabled and self.monte_carlo and len(valid_plans) > 1:
+                    valid_plans = self._apply_monte_carlo_simulation(
+                        valid_plans, locations, all_cards, board_state
+                    )
+
                 best_type, best_instructions, best_force_left, best_score, best_reserve = valid_plans[0]
 
                 # === LOG ALL CANDIDATE PLANS FOR ANALYSIS ===
@@ -4401,24 +5707,95 @@ class DeployPhasePlanner:
 
                 # Early game hold-back: in turns 1-3, don't deploy weak establish plans
                 # EXCEPT when life is low (need to be aggressive)
-                is_early_game = current_turn <= DEPLOY_EARLY_GAME_TURNS
-                is_weak_plan = best_score < DEPLOY_EARLY_GAME_THRESHOLD
+                # EXCEPT when GamePlan says we're on WINNING trajectory
+                is_early_game = current_turn <= get_early_game_turns()
+                is_weak_plan = best_score < get_early_game_threshold()
                 is_low_life = life_force < 20  # Critical/desperate life force
+
+                # Check if GamePlan says we're on WINNING trajectory
+                # If winning, don't hold back - maintain momentum
+                # If NOT winning but GamePlan is active, also don't hold back - need to act!
+                has_winning_trajectory = False
+                gameplan_active = False
+                if board_state and hasattr(board_state, 'game_plan'):
+                    game_plan = board_state.game_plan
+                    if game_plan and getattr(game_plan, 'enabled', False):
+                        gameplan_active = True
+                        projections = getattr(game_plan, 'projections', None)
+                        if projections and len(projections) > 0:
+                            has_winning_trajectory = getattr(projections[0], 'winning', False)
+                            if has_winning_trajectory:
+                                logger.info(f"🎯 GamePlan: WINNING trajectory - skip early hold-back")
+                            else:
+                                # Not winning with GamePlan = need to act aggressively
+                                logger.info(f"🎯 GamePlan: NOT winning - skip hold-back, deploy to change trajectory")
+
+                # When GamePlan is active, never hold back in early game:
+                # - If winning: maintain momentum
+                # - If not winning: need to act to change trajectory
+                skip_holdback_for_gameplan = gameplan_active
+
+                # =================================================================
+                # ABILITY SAFETY CHECK - Cannot be bypassed by GamePlan!
+                # Establishing alone with ability < 4 is a TRAP:
+                # - Opponent counters with ability 4+ characters
+                # - They draw attrition destiny, we don't
+                # - We lose character + extra damage from their destiny
+                #
+                # This check is SEPARATE from general hold-back and applies even
+                # when GamePlan wants presence - better to wait for good characters.
+                # =================================================================
+                is_risky_low_ability_establish = False
+                if (plan.instructions and
+                    plan.strategy in [DeployStrategy.ESTABLISH, DeployStrategy.OFFENSIVE] and
+                    is_early_game):
+                    # Check if ALL deployments in this plan have ability < 4
+                    all_low_ability = True
+                    for instr in plan.instructions:
+                        # Get the character's ability from our tracking
+                        card_name = instr.card_name
+                        card_ability = 0
+                        for card in self._get_all_hand_cards_as_dicts(board_state):
+                            if card.get('title') == card_name or card.get('card_name') == card_name:
+                                card_ability = card.get('ability', 0)
+                                break
+                        if card_ability >= 4:
+                            all_low_ability = False
+                            break
+
+                    if all_low_ability and not is_low_life:
+                        is_risky_low_ability_establish = True
+                        logger.info(f"⚠️ ABILITY SAFETY: Plan has only ability < 4 characters - risky establish!")
+
+                if is_risky_low_ability_establish:
+                    # Override even GamePlan - don't establish with ability < 4 alone
+                    logger.info(f"⛔ ABILITY SAFETY HOLD-BACK (turn {current_turn})")
+                    logger.info(f"   Establishing with ability < 4 is a trap - opponent will crush with destiny!")
+                    logger.info(f"   Holding for characters with ability >= 4")
+
+                    plan.instructions.clear()
+                    plan.strategy = DeployStrategy.HOLD_BACK
+                    plan.reason = "Ability safety: only low-ability characters available, holding for better options"
+                    plan.phase_started = True
+                    self.current_plan = plan
+                    return plan
 
                 if (is_early_game and
                     not best_is_counter and
                     is_weak_plan and
-                    not is_low_life):  # Don't hold back when life is critical
-                    # Early game + weak plan = hold back
+                    not is_low_life and
+                    not has_winning_trajectory and
+                    not skip_holdback_for_gameplan):  # Don't hold back when GamePlan active
+                    # Early game + weak plan + not winning + no GamePlan = hold back
                     logger.info(f"⏳ EARLY GAME HOLD-BACK (turn {current_turn})")
-                    logger.info(f"   Plan score {best_score:.0f} < threshold {DEPLOY_EARLY_GAME_THRESHOLD}")
+                    logger.info(f"   Plan score {best_score:.0f} < threshold {get_early_game_threshold()}")
                     logger.info(f"   Waiting for better deployment opportunity")
 
                     # Clear the plan and set HOLD_BACK
                     plan.instructions.clear()
                     plan.strategy = DeployStrategy.HOLD_BACK
                     plan.reason = (f"Early game (turn {current_turn}): score {best_score:.0f} below "
-                                  f"threshold {DEPLOY_EARLY_GAME_THRESHOLD}, holding for better play")
+                                  f"threshold {get_early_game_threshold()}, holding for better play")
 
                     # Mark phase as started so this plan gets cached properly
                     plan.phase_started = True
@@ -4431,6 +5808,10 @@ class DeployPhasePlanner:
                 # check if waiting one turn would allow a CRUSHING attack.
                 # Next-turn crush should beat "establish" plans but not counters.
                 # =================================================================
+
+                # Check hold duration limit (used by both crush and bleed stop checks)
+                max_consecutive_holds = 2
+                already_held_too_long = board_state.consecutive_hold_turns >= max_consecutive_holds
 
                 if not best_is_counter:
                     # Current plan is establish/other - check for next-turn crush opportunity
@@ -4463,17 +5844,77 @@ class DeployPhasePlanner:
                                           target_icons * 10)
 
                         # Prefer next-turn crush if:
-                        # 1. Has meaningful advantage (>= BATTLE_FAVORABLE_THRESHOLD)
+                        # 1. Has meaningful advantage (>= get_battle_favorable_threshold())
                         # 2. AND either:
                         #    a. Current plan is just "establish" (not a counter) - always prefer crush
                         #    b. Score comparison favors crush
                         #
                         # For establish plans, we use a lower threshold (0.5) because
                         # establishing only denies icons, while crushing removes cards.
+                        #
+                        # EXCEPTION: In early game (turns 1-2) with GamePlan active,
+                        # don't hold for next-turn crush - prioritize establishing presence.
+                        # Holding on turn 1 loses tempo that's hard to recover.
+
+                        is_early_game_with_gameplan = (
+                            current_turn <= 2 and
+                            gameplan_active
+                        )
+                        if is_early_game_with_gameplan:
+                            logger.info(f"🔮 Skipping next-turn crush check (GamePlan active, turn {current_turn})")
+
+                        # Check if a previous hold failed (enemy countered, etc.)
+                        hold_failed = getattr(board_state, 'hold_failed_last_turn', False)
+                        if hold_failed:
+                            logger.info(f"🔮 Skipping hold - previous hold failed, being aggressive")
+
                         should_hold_for_crush = (
-                            next_turn_crush.expected_advantage >= BATTLE_FAVORABLE_THRESHOLD and
+                            not already_held_too_long and
+                            not is_early_game_with_gameplan and  # Don't hold in early game with GamePlan
+                            not hold_failed and  # Don't hold if previous hold failed
+                            next_turn_crush.expected_advantage >= get_battle_favorable_threshold() and
                             next_turn_score > best_score * 0.5
                         )
+
+                        # FIX: When we've held too long, EXECUTE the crush NOW instead of skipping
+                        if already_held_too_long and next_turn_crush.expected_advantage >= get_battle_favorable_threshold():
+                            logger.info(f"🔮 EXECUTE CRUSH NOW - already held {board_state.consecutive_hold_turns} turns, deploying!")
+                            logger.info(f"   Crush target: {next_turn_crush.card_names} → {next_turn_crush.target_location_name}")
+                            logger.info(f"   Power: {next_turn_crush.total_power} vs {next_turn_crush.target_enemy_power} "
+                                       f"(+{next_turn_crush.expected_advantage})")
+
+                            # Clear any existing instructions and add crush cards
+                            plan.instructions.clear()
+                            plan.strategy = DeployStrategy.REINFORCE
+                            plan.reason = (f"EXECUTING CRUSH: {', '.join(next_turn_crush.card_names)} → "
+                                          f"{next_turn_crush.target_location_name} "
+                                          f"(+{next_turn_crush.expected_advantage} advantage)")
+
+                            # Create deployment instructions for each card in the crush plan
+                            for i, blueprint_id in enumerate(next_turn_crush.card_blueprint_ids):
+                                card_name = next_turn_crush.card_names[i] if i < len(next_turn_crush.card_names) else "Unknown"
+                                card_data = get_card(blueprint_id)
+                                deploy_cost = card_data.deploy_value if card_data else 4  # Default cost
+                                power = card_data.power_value if card_data else 3  # Default power
+
+                                plan.instructions.append(DeploymentInstruction(
+                                    card_blueprint_id=blueprint_id,
+                                    card_name=card_name,
+                                    target_location_id=next_turn_crush.target_location_id,
+                                    target_location_name=next_turn_crush.target_location_name,
+                                    priority=1,  # High priority - reinforce/crush
+                                    reason=f"CRUSH at {next_turn_crush.target_location_name} (+{next_turn_crush.expected_advantage})",
+                                    power_contribution=power,
+                                    deploy_cost=deploy_cost,
+                                ))
+
+                            # Reset the hold counter since we're executing now
+                            board_state.consecutive_hold_turns = 0
+                            logger.info(f"   Created {len(plan.instructions)} deployment instructions")
+
+                            plan.phase_started = True
+                            self.current_plan = plan
+                            return plan
 
                         if should_hold_for_crush:
                             logger.info(f"🔮 HOLD FOR NEXT-TURN CRUSH!")
@@ -4493,6 +5934,10 @@ class DeployPhasePlanner:
 
                             # Store the next-turn crush plan on board_state for other evaluators
                             board_state.next_turn_crush_plan = next_turn_crush
+
+                            # Increment consecutive hold counter
+                            board_state.consecutive_hold_turns += 1
+                            logger.info(f"   Consecutive holds: {board_state.consecutive_hold_turns}")
 
                             # Mark phase as started so this plan gets cached properly
                             plan.phase_started = True
@@ -4534,8 +5979,14 @@ class DeployPhasePlanner:
                             # Prefer next-turn bleed stop if:
                             # - Current plan is weak (score < 40) AND bleed is significant (icons >= 2)
                             # OR current plan is just marginally better
-                            if (best_score < 40 and icons_at_target >= 2) or next_turn_score > best_score * 0.9:
+                            # BUT NOT if we've already held for too many turns
+                            should_hold_for_bleed = (
+                                not already_held_too_long and
+                                not hold_failed and  # Don't hold if previous hold failed
+                                ((best_score < 40 and icons_at_target >= 2) or next_turn_score > best_score * 0.9)
+                            )
 
+                            if should_hold_for_bleed:
                                 logger.info(f"🩸🔮 HOLD FOR NEXT-TURN BLEED STOP!")
                                 logger.info(f"   Current plan: {best_type} score={best_score:.0f}")
                                 logger.info(f"   Next-turn stop: {next_turn_bleed_stop.card_names} → {next_turn_bleed_stop.target_location_name}")
@@ -4552,6 +6003,10 @@ class DeployPhasePlanner:
                                 # Store the plan on board_state for other evaluators
                                 board_state.next_turn_crush_plan = next_turn_bleed_stop
 
+                                # Increment consecutive hold counter
+                                board_state.consecutive_hold_turns += 1
+                                logger.info(f"   Consecutive holds: {board_state.consecutive_hold_turns}")
+
                                 # Mark phase as started so this plan gets cached properly
                                 plan.phase_started = True
                                 self.current_plan = plan
@@ -4559,6 +6014,83 @@ class DeployPhasePlanner:
                             else:
                                 logger.debug(f"🩸🔮 Next-turn bleed stop found but current plan is better: "
                                            f"bleed score ~{next_turn_score:.0f} vs current {best_score:.0f}")
+
+                # =================================================================
+                # HOLD FOR BETTER DRAWS CHECK
+                # If current plan is marginal (weak establish or low score) AND
+                # there's good probability of drawing better cards from force pile,
+                # consider holding back to turn a mediocre plan into a crushing one.
+                #
+                # Uses DeckTracker to estimate probability of drawing characters/ships.
+                # =================================================================
+                if (not already_held_too_long and
+                    best_score > 0 and best_score < 45 and  # Marginal plan
+                    best_type == 'ground' and  # Only for ground (space usually better)
+                    total_force >= 3):  # Have force to work with next turn
+
+                    from engine.deck_tracker import get_deck_tracker
+                    tracker = get_deck_tracker()
+
+                    if tracker.deck_loaded:
+                        # Calculate expected power improvement from drawing
+                        p_char = tracker.probability_draw_type("Character")
+                        p_ship = tracker.probability_draw_type("Starship")
+                        expected_destiny = tracker.expected_destiny()
+
+                        # Get average power of characters/ships in remaining deck
+                        remaining = tracker.get_remaining_in_reserve()
+                        total_char_power = 0
+                        char_count = 0
+                        for bp_id, count in remaining.items():
+                            stats = tracker._card_stats.get(bp_id)
+                            if stats and stats.card_type == "Character":
+                                total_char_power += stats.power * count
+                                char_count += count
+
+                        avg_char_power = total_char_power / char_count if char_count > 0 else 3.0
+
+                        # Estimate: if we draw and get a character with power > current plan's average
+                        current_avg_power = sum(
+                            inst.power_contribution for inst in best_instructions
+                        ) / len(best_instructions) if best_instructions else 3.0
+
+                        # Hold if:
+                        # 1. Good chance of drawing a character (>35%)
+                        # 2. Average remaining character is better than current plan
+                        # 3. Have enough force to draw (1) + deploy next turn
+                        can_afford_draw_then_deploy = (
+                            board_state.force_pile >= 1 and  # Can draw at least one
+                            total_force >= avg_char_power + 2  # Expected force next turn covers deploy
+                        )
+
+                        should_hold_for_draw = (
+                            p_char >= 0.35 and
+                            avg_char_power > current_avg_power + 1 and
+                            can_afford_draw_then_deploy and
+                            not hold_failed  # Don't hold if previous hold failed
+                        )
+
+                        if should_hold_for_draw:
+                            logger.info(f"🎰 HOLD FOR BETTER DRAW!")
+                            logger.info(f"   Current plan: {best_type} score={best_score:.0f}, avg power={current_avg_power:.1f}")
+                            logger.info(f"   P(Character)={p_char:.0%}, avg remaining char power={avg_char_power:.1f}")
+                            logger.info(f"   E[destiny]={expected_destiny:.1f}, force for draw+deploy: {total_force}")
+
+                            # Clear the plan and set HOLD_BACK
+                            plan.instructions.clear()
+                            plan.strategy = DeployStrategy.HOLD_BACK
+                            plan.reason = (f"Holding for better draw: P(char)={p_char:.0%}, "
+                                          f"avg power {avg_char_power:.1f} > current {current_avg_power:.1f}")
+
+                            # Increment consecutive hold counter
+                            board_state.consecutive_hold_turns += 1
+                            logger.info(f"   Consecutive holds: {board_state.consecutive_hold_turns}")
+
+                            plan.phase_started = True
+                            self.current_plan = plan
+                            return plan
+                        else:
+                            logger.debug(f"🎰 Draw hold check: P(char)={p_char:.0%}, avg={avg_char_power:.1f} vs current={current_avg_power:.1f}")
 
                 # CRITICAL: Filter out cards already in the plan from earlier steps
                 # (e.g., STEP 4 may have added cards for weak location reinforcement)
@@ -4754,7 +6286,7 @@ class DeployPhasePlanner:
         # CRITICAL: Must have our icons to deploy (or presence, but we filter my_power==0)
         ground_targets = [
             loc for loc in locations
-            if loc.is_ground and loc.is_exterior  # Vehicles need exterior
+            if loc.is_ground and loc.is_site and loc.is_exterior  # Vehicles need exterior sites (not systems)
             and (loc.their_power > 0 or loc.their_icons > 0)  # Has opponent presence or icons
             and loc.my_power == 0  # We're not there yet
             and loc.my_icons > 0  # MUST have our force icons to deploy there
@@ -4930,7 +6462,7 @@ class DeployPhasePlanner:
         # Only do this if we have substantial leftover force (> 4) to avoid
         # waste on marginal gains.
         # =================================================================
-        REINFORCE_THRESHOLD = 4  # Only reinforce if we have > 4 force left
+        reinforce_threshold = get_reinforce_force_threshold()
 
         # Find UNCONTESTED locations where we're establishing (their_power == 0)
         establish_locs = [
@@ -4939,7 +6471,7 @@ class DeployPhasePlanner:
             and loc.their_power == 0  # ONLY uncontested locations
         ]
 
-        if establish_locs and force_remaining > REINFORCE_THRESHOLD and available_chars:
+        if establish_locs and force_remaining > reinforce_threshold and available_chars:
             logger.info(f"   🛡️ REINFORCE ESTABLISHED: {force_remaining} force remaining, "
                        f"{len(establish_locs)} uncontested locations, {len(available_chars)} chars available")
 
@@ -4947,7 +6479,7 @@ class DeployPhasePlanner:
             establish_locs.sort(key=lambda x: x.their_icons, reverse=True)
 
             for loc in establish_locs:
-                if force_remaining <= REINFORCE_THRESHOLD:
+                if force_remaining <= reinforce_threshold:
                     break
 
                 # Calculate current planned power at this location
@@ -4968,7 +6500,7 @@ class DeployPhasePlanner:
                     # Filter characters that can deploy to this location
                     eligible_chars = self._filter_cards_for_location(available_chars, loc.name)
                     for char in eligible_chars[:]:
-                        if force_remaining <= REINFORCE_THRESHOLD:
+                        if force_remaining <= reinforce_threshold:
                             break
                         # NOTE: No battle_reserve needed here - these are UNCONTESTED locations
                         # (their_power == 0), so no battle will be initiated
@@ -4998,7 +6530,7 @@ class DeployPhasePlanner:
         # - Standalone weapons (automated, artillery) are NOT included here
         #   (they're handled as "extra actions" after planned deployments)
         # =================================================================
-        MIN_FORCE_FOR_WEAPONS = 2
+        min_force_weapons = get_min_force_for_weapons()
 
         # Filter to only TARGETED weapons (not standalone)
         targeted_weapons = [w for w in weapons if w.get('is_targeted_weapon')]
@@ -5007,7 +6539,7 @@ class DeployPhasePlanner:
         if standalone_weapons:
             logger.info(f"   🎯 {len(standalone_weapons)} standalone weapons (automated/artillery) - saved for extra actions")
 
-        if targeted_weapons and force_remaining >= MIN_FORCE_FOR_WEAPONS:
+        if targeted_weapons and force_remaining >= min_force_weapons:
             logger.info(f"   🗡️ Checking {len(targeted_weapons)} targeted weapons ({force_remaining} force remaining)")
 
             # Separate by weapon target type
@@ -5287,6 +6819,15 @@ class DeployPhasePlanner:
         # Assign backup targets for each instruction
         self._assign_backup_targets(plan, locations, board_state)
 
+        # Reset consecutive hold counter if we're actually deploying (not holding)
+        if plan.instructions and plan.strategy != DeployStrategy.HOLD_BACK:
+            if hasattr(board_state, 'consecutive_hold_turns') and board_state.consecutive_hold_turns > 0:
+                logger.info(f"📋 Resetting consecutive hold counter (was {board_state.consecutive_hold_turns})")
+                board_state.consecutive_hold_turns = 0
+            # Also reset hold_failed flag when we actually deploy
+            if hasattr(board_state, 'hold_failed_last_turn'):
+                board_state.hold_failed_last_turn = False
+
         self.current_plan = plan
         return plan
 
@@ -5420,11 +6961,18 @@ class DeployPhasePlanner:
             is_warrior = metadata.is_warrior if hasattr(metadata, 'is_warrior') else False
             is_unpiloted_craft = (metadata.is_starship or metadata.is_vehicle) and not has_permanent_pilot
 
+            # Get parsed gametext abilities for better evaluation
+            base_cost = metadata.deploy_value or 0
+            deploy_reduction = metadata.parsed.deploy_reduction if hasattr(metadata, 'parsed') else 0
+            effective_cost = max(0, base_cost - deploy_reduction)
+
             all_cards.append({
                 'blueprint_id': card.blueprint_id,
                 'name': metadata.title,
-                'cost': metadata.deploy_value or 0,
-                'deploy_value': metadata.deploy_value or 0,
+                'cost': effective_cost,  # Use effective cost (with reductions)
+                'base_cost': base_cost,  # Original cost for reference
+                'deploy_value': base_cost,
+                'deploy_reduction': deploy_reduction,
                 'power': 0 if is_unpiloted_craft else (metadata.power_value or 0),
                 'power_value': metadata.power_value or 0,
                 'base_power': metadata.power_value or 0,
@@ -5437,9 +6985,135 @@ class DeployPhasePlanner:
                 'has_permanent_pilot': has_permanent_pilot,
                 'needs_pilot': is_unpiloted_craft,
                 'pilot_adds_power': getattr(metadata, 'pilot_adds_power', 2) if metadata.is_pilot else 0,
+                'ability': metadata.ability_value or 0,  # For destiny draw eligibility
+                # Parsed gametext abilities
+                'has_attrition_immunity': metadata.has_attrition_immunity,
+                'immune_attrition_threshold': metadata.immune_attrition_threshold,
+                'draws_extra_destiny': metadata.draws_extra_destiny,
+                'force_drain_bonus': metadata.parsed.force_drain_bonus if hasattr(metadata, 'parsed') else 0,
             })
 
         return all_cards
+
+    def _find_cheaper_alternative(
+        self,
+        board_state,
+        card_type: str,  # "starship", "character", "vehicle"
+        max_cost: int,
+        exclude_blueprints: Set[str] = None
+    ) -> Optional[Dict]:
+        """
+        Find the cheapest alternative card of a given type that we can afford.
+
+        System 3: When a high-value card is unaffordable, find a cheaper alternative
+        that serves the same purpose (same type, same domain).
+
+        Args:
+            board_state: Current board state
+            card_type: Type of card to find ("starship", "character", "vehicle")
+            max_cost: Maximum deploy cost we can afford
+            exclude_blueprints: Blueprint IDs to exclude (already in plan)
+
+        Returns:
+            Card dict formatted for deployment, or None if no alternative exists.
+        """
+        from .card_loader import get_card
+
+        exclude_blueprints = exclude_blueprints or set()
+        alternatives = []
+
+        # Get ALL cards from hand (including ones we filtered for being expensive)
+        hand_list = list(board_state.cards_in_hand) if board_state.cards_in_hand else []
+
+        for card in hand_list:
+            if not card.blueprint_id:
+                continue
+            if card.blueprint_id in exclude_blueprints:
+                continue
+
+            metadata = get_card(card.blueprint_id)
+            if not metadata:
+                continue
+
+            # Check card type
+            is_match = False
+            if card_type == "starship" and metadata.is_starship:
+                is_match = True
+            elif card_type == "character" and metadata.is_character:
+                is_match = True
+            elif card_type == "vehicle" and metadata.is_vehicle:
+                is_match = True
+
+            if not is_match:
+                continue
+
+            # Calculate effective deploy cost
+            base_cost = metadata.deploy_value or 0
+            deploy_reduction = metadata.parsed.deploy_reduction if hasattr(metadata, 'parsed') else 0
+            effective_cost = max(0, base_cost - deploy_reduction)
+
+            # Check affordability
+            if effective_cost > max_cost:
+                continue
+
+            # Build card dict
+            has_permanent_pilot = getattr(metadata, 'has_permanent_pilot', False)
+            is_warrior = metadata.is_warrior if hasattr(metadata, 'is_warrior') else False
+            is_unpiloted_craft = (metadata.is_starship or metadata.is_vehicle) and not has_permanent_pilot
+
+            alternatives.append({
+                'card_id': card.card_id,
+                'blueprint_id': card.blueprint_id,
+                'name': metadata.title,
+                'power': 0 if is_unpiloted_craft else (metadata.power_value or 0),
+                'base_power': metadata.power_value or 0,
+                'cost': effective_cost,
+                'base_cost': base_cost,
+                'is_character': metadata.is_character,
+                'is_starship': metadata.is_starship,
+                'is_vehicle': metadata.is_vehicle,
+                'is_pilot': metadata.is_pilot,
+                'is_warrior': is_warrior,
+                'has_permanent_pilot': has_permanent_pilot,
+                'needs_pilot': is_unpiloted_craft,
+                'pilot_adds_power': getattr(metadata, 'pilot_adds_power', 2) if metadata.is_pilot else 0,
+            })
+
+        if not alternatives:
+            return None
+
+        # Score alternatives by value per cost (prefer higher power, lower cost)
+        def score_alternative(card):
+            power = card.get('base_power', 0) or 0
+            cost = max(1, card['cost'])
+            has_pilot = card.get('has_permanent_pilot', False)
+            # Higher power per cost is better; permanent pilot ships are more valuable
+            return (power / cost) + (5 if has_pilot else 0)
+
+        alternatives.sort(key=score_alternative, reverse=True)
+        best = alternatives[0]
+
+        # Find what we couldn't afford (for logging)
+        unaffordable_ships = []
+        for card in hand_list:
+            if not card.blueprint_id:
+                continue
+            metadata = get_card(card.blueprint_id)
+            if metadata and card_type == "starship" and metadata.is_starship:
+                base_cost = metadata.deploy_value or 0
+                deploy_reduction = metadata.parsed.deploy_reduction if hasattr(metadata, 'parsed') else 0
+                effective_cost = max(0, base_cost - deploy_reduction)
+                if effective_cost > max_cost:
+                    unaffordable_ships.append((metadata.title, effective_cost))
+
+        if unaffordable_ships:
+            expensive_str = ', '.join(f"{name}({cost})" for name, cost in unaffordable_ships)
+            logger.info(f"🔄 ALTERNATIVE: Can't afford [{expensive_str}], "
+                       f"using {best['name']} ({best['cost']}) instead")
+        else:
+            logger.info(f"🔄 ALTERNATIVE: Found {best['name']} ({best['cost']}) as {card_type}")
+
+        return best
 
     def _get_all_deployable_cards(self, board_state) -> List[Dict]:
         """Get all cards we can deploy with their metadata.
@@ -5516,7 +7190,11 @@ class DeployPhasePlanner:
                 logger.info(f"   ⏭️ Skip {metadata.title}: duplicate unique in hand")
                 continue
 
-            deploy_cost = metadata.deploy_value or 0
+            # Calculate effective deploy cost (factoring in gametext reductions)
+            base_deploy_cost = metadata.deploy_value or 0
+            deploy_reduction = metadata.parsed.deploy_reduction if hasattr(metadata, 'parsed') else 0
+            deploy_cost = max(0, base_deploy_cost - deploy_reduction)
+
             if deploy_cost > available_force:
                 logger.info(f"   ⏭️ Skip {metadata.title}: too expensive ({deploy_cost} > {available_force})")
                 continue
@@ -5547,7 +7225,9 @@ class DeployPhasePlanner:
                 'name': metadata.title,
                 'power': effective_power,  # Use effective power (0 for unpiloted)
                 'base_power': base_power,  # Store base power for reference
-                'cost': deploy_cost,
+                'cost': deploy_cost,  # Effective cost after reductions
+                'base_cost': base_deploy_cost,  # Original cost for reference
+                'deploy_reduction': deploy_reduction,  # Amount reduced by gametext
                 'is_unique': metadata.is_unique,
                 'is_location': metadata.is_location,
                 'is_character': metadata.is_character,
@@ -5569,6 +7249,11 @@ class DeployPhasePlanner:
                 'matching_weapon': getattr(metadata, 'matching_weapon', []),  # List of character names weapon can deploy on
                 # Deploy restriction systems (empty list = can deploy anywhere)
                 'deploy_restriction_systems': deploy_restrictions,
+                # Parsed gametext abilities for better evaluation
+                'has_attrition_immunity': metadata.has_attrition_immunity,
+                'immune_attrition_threshold': metadata.immune_attrition_threshold,
+                'draws_extra_destiny': metadata.draws_extra_destiny,
+                'force_drain_bonus': metadata.parsed.force_drain_bonus if hasattr(metadata, 'parsed') else 0,
             })
 
             cards_added += 1
@@ -5707,6 +7392,7 @@ class DeployPhasePlanner:
                 name=loc_name,
                 is_ground=loc_is_ground,
                 is_space=loc_is_space,
+                is_site=loc_is_ground,  # Sites are ground locations (have interior/exterior)
                 location_index=idx,
             )
 
@@ -5761,7 +7447,7 @@ class DeployPhasePlanner:
                     can_win_with_reinforcements = True
                     logger.info(f"   💪 {analysis.name}: CAN WIN with reinforcements ({analysis.my_power}+{deployable_power}={potential_power} vs {analysis.their_power}, diff=+{potential_diff})")
 
-                if potential_diff >= BATTLE_FAVORABLE_THRESHOLD:
+                if potential_diff >= get_battle_favorable_threshold():
                     analysis.can_flip_to_favorable = True
                     # This is a battle opportunity if we can also afford to battle
                     if board_state.force_pile >= 3:  # Need force for deploy + battle
@@ -5770,7 +7456,7 @@ class DeployPhasePlanner:
 
             # RETREAT situation: We're at severe disadvantage AND can't win with reinforcements
             # Don't reinforce - we'll flee in move phase
-            if analysis.contested and power_diff <= RETREAT_THRESHOLD and not can_win_with_reinforcements:
+            if analysis.contested and power_diff <= get_retreat_threshold() and not can_win_with_reinforcements:
                 analysis.should_flee = True
                 # Check if we can actually flee
                 if hasattr(board_state, 'analyze_flee_options'):
@@ -5781,7 +7467,7 @@ class DeployPhasePlanner:
                         # Can't flee - might need to reinforce anyway
                         analysis.should_flee = False
                         logger.info(f"   ⚠️ {analysis.name}: severe deficit ({power_diff}) but CAN'T FLEE")
-            elif analysis.contested and power_diff <= RETREAT_THRESHOLD and can_win_with_reinforcements:
+            elif analysis.contested and power_diff <= get_retreat_threshold() and can_win_with_reinforcements:
                 # We're behind but CAN win - DON'T flee, reinforce!
                 analysis.should_flee = False
                 logger.info(f"   🔄 {analysis.name}: behind ({power_diff}) but WILL REINFORCE TO WIN (+{potential_diff} after deploy)")
@@ -5882,52 +7568,50 @@ class DeployPhasePlanner:
             # Plan complete + have force above reserve = allow extra actions
             # OR: Plan is stale (planned cards not available) - force_allow_extras flag
             #
-            # CRITICAL: Extra actions are NOT allowed for major deployments:
-            # - Characters, Vehicles, Starships (these should be planned, not extras)
-            # All other card types (effects, interrupts, devices, weapons, etc.) are allowed
+            # UPDATED: Allow characters/vehicles/starships as extras when:
+            # 1. Plan is complete
+            # 2. Sufficient force available (can afford card)
+            # 3. Give them a moderate score (less than planned cards, but positive)
+            # This prevents wasting force when the planner was too conservative.
             from .card_loader import get_card
             card_meta = get_card(blueprint_id)
-            is_extra_blocked = False
+            is_major_card = False
+            deploy_cost = 0
+            card_power = 0
             if card_meta:
-                is_extra_blocked = (
+                is_major_card = (
                     card_meta.is_character or
                     card_meta.is_vehicle or
                     card_meta.is_starship
                 )
-            is_extra_allowed = not is_extra_blocked
+                deploy_cost = card_meta.deploy_value or 0
+                card_power = card_meta.power_value or 0
 
             if self.current_plan.allows_extra_actions(current_force):
                 extra_budget = self.current_plan.get_extra_force_budget(current_force)
-                if is_extra_allowed:
+                if not is_major_card:
+                    # Non-major cards (effects, interrupts, etc.) - allow freely
                     logger.info(f"🎁 Plan complete, allowing extra action (budget: {extra_budget} force)")
                     return (25.0, f"EXTRA ACTION (plan done, {extra_budget} force available)")
+                elif extra_budget >= deploy_cost:
+                    # Major card but we can afford it - allow with moderate score
+                    # Score based on power to encourage deploying strong cards
+                    power_score = min(50.0, card_power * 8.0)  # Up to 50 for 6+ power
+                    card_type = card_meta.card_type if card_meta else "card"
+                    logger.info(f"🎁 Plan complete, allowing extra {card_type} (budget: {extra_budget}, cost: {deploy_cost})")
+                    return (power_score, f"EXTRA {card_type.upper()} (plan done, {extra_budget} force, {card_power} power)")
                 else:
+                    # Can't afford this major card
                     card_type = card_meta.card_type if card_meta else "unknown"
-                    logger.info(f"🚫 Extra action rejected - {card_type} not allowed as extra")
-                    return (-100.0, f"Not in plan ({card_type} not allowed as extra action)")
+                    logger.info(f"🚫 Extra action rejected - {card_type} too expensive ({deploy_cost} > {extra_budget})")
+                    return (-100.0, f"Not in plan ({card_type} too expensive for extra budget)")
             elif getattr(self.current_plan, 'force_allow_extras', False):
                 # Plan is stale - planned cards aren't available anymore
-                # CRITICAL: When the stale plan had characters/vehicles/starships that aren't
-                # available, we MUST allow deploying other characters/vehicles/starships!
-                # Otherwise the bot will pass when it could be deploying useful cards.
-                #
-                # Check if the stale plan had any "major" cards (chars/vehicles/ships)
-                stale_plan_had_major_cards = False
-                for inst in self.current_plan.instructions:
-                    inst_meta = get_card(inst.card_blueprint_id)
-                    if inst_meta and (inst_meta.is_character or inst_meta.is_vehicle or inst_meta.is_starship):
-                        stale_plan_had_major_cards = True
-                        break
-
-                # If stale plan had major cards, allow this major card as substitute
-                if stale_plan_had_major_cards or is_extra_allowed:
-                    card_type = card_meta.card_type if card_meta else "card"
-                    logger.info(f"🎁 Stale plan, allowing {card_type} as substitute")
-                    return (25.0, f"SUBSTITUTE ({card_type} replacing unavailable planned card)")
-                else:
-                    card_type = card_meta.card_type if card_meta else "unknown"
-                    logger.info(f"🚫 Extra action rejected - {card_type} not allowed as extra")
-                    return (-100.0, f"Not in plan ({card_type} not allowed as extra action)")
+                # Allow any card as substitute since the original plan can't be executed
+                card_type = card_meta.card_type if card_meta else "card"
+                power_score = min(40.0, card_power * 6.0) if is_major_card else 25.0
+                logger.info(f"🎁 Stale plan, allowing {card_type} as substitute (power: {card_power})")
+                return (power_score, f"SUBSTITUTE ({card_type} replacing unavailable planned card)")
             else:
                 return (-100.0, "Not in deployment plan")
 
@@ -5950,7 +7634,7 @@ class DeployPhasePlanner:
             return False
 
         # Get thresholds from config
-        favorable_threshold = 4  # Default BATTLE_FAVORABLE_THRESHOLD
+        favorable_threshold = 4  # Default get_battle_favorable_threshold()
 
         for loc_idx, loc in enumerate(board_state.locations):
             if loc is None or not loc.card_id:

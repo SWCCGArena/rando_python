@@ -323,17 +323,81 @@ class CardSelectionEvaluator(ActionEvaluator):
                         else:
                             their_icons = location_metadata.dark_side_icons or 0
 
+                        # Check if location is contestable before giving "deny icons" bonus
+                        # If opponent has overwhelming power, deploying here is a waste
+                        their_power = sum(c.power for c in location.their_cards if c.power)
+                        our_power = sum(c.power for c in location.my_cards if c.power)
+                        deploying_power = deploying_card.power_value if deploying_card else 3  # Assume 3 if unknown
+                        potential_our_power = our_power + deploying_power
+
                         if their_icons > 0:
-                            action.add_reasoning(f"Deny {their_icons} opponent icons", their_icons * GOOD_DELTA * 2)
+                            if their_power == 0:
+                                # No opponent presence - full bonus for denying icons
+                                action.add_reasoning(f"Deny {their_icons} opponent icons", their_icons * GOOD_DELTA * 2)
+
+                                # CRITICAL: Check for nearby opponent power that could easily overwhelm us
+                                # If we deploy a weak character to an empty location near opponent's stronghold,
+                                # they can easily move/deploy to crush us
+                                if location.location_index is not None and deploying_power < 6:
+                                    nearby_threat = self._get_nearby_opponent_power(bs, location.location_index)
+                                    if nearby_threat >= 8:
+                                        # Significant threat nearby - penalize weak deploys
+                                        power_gap = nearby_threat - deploying_power
+                                        if power_gap >= 10:
+                                            # Overwhelming threat - don't establish weak presence
+                                            penalty = -80.0
+                                            action.add_reasoning(f"NEARBY THREAT: {nearby_threat} power can easily crush {deploying_power} power!", penalty)
+                                            logger.warning(f"⚠️ Weak deploy ({deploying_power}) near threat ({nearby_threat}) at {loc_name}")
+                                        elif power_gap >= 5:
+                                            # Significant threat - moderate penalty
+                                            penalty = -40.0
+                                            action.add_reasoning(f"Nearby threat: {nearby_threat} power could overwhelm {deploying_power}", penalty)
+                                        # else: small gap is acceptable risk
+                            elif potential_our_power >= their_power:
+                                # We can contest or win - full bonus
+                                action.add_reasoning(f"Deny {their_icons} opponent icons (can contest)", their_icons * GOOD_DELTA * 2)
+                            elif potential_our_power >= their_power * 0.5:
+                                # We're outpowered but not hopelessly - reduced bonus
+                                action.add_reasoning(f"Deny {their_icons} icons (outpowered {potential_our_power} vs {their_power})", their_icons * GOOD_DELTA)
+                            else:
+                                # Significantly outpowered - penalize instead of bonus
+                                # Deploying here will likely result in losing the character
+                                action.add_reasoning(f"UNWINNABLE: {potential_our_power} vs {their_power} - don't waste cards!", -their_icons * GOOD_DELTA * 2)
+                                logger.warning(f"⚠️  Deploying to unwinnable location {loc_name}: {potential_our_power} vs {their_power}")
                 else:
-                    # Location not found - might be deploying to a vehicle/starship!
-                    # Check if card_id is a vehicle/starship in play
+                    # Location not found - might be deploying to a vehicle/starship/character!
+                    # Check if card_id is a card in play
                     target_card = bs.cards_in_play.get(card_id)
                     if target_card:
                         target_meta = get_card(target_card.blueprint_id) if target_card.blueprint_id else None
+                        target_name = target_card.card_title or card_id
+
+                        # =====================================================
+                        # WEAPON DEPLOYMENT CHECK
+                        # Don't deploy a weapon to a card that already has one!
+                        # Spreading weapons is almost always better.
+                        # =====================================================
+                        is_weapon = deploying_card and deploying_card.is_weapon if deploying_card else False
+                        if is_weapon:
+                            action.display_text = f"Deploy to {target_name}"
+
+                            # Check if target already has a weapon attached
+                            has_existing_weapon = any(
+                                get_card(ac.blueprint_id) and get_card(ac.blueprint_id).is_weapon
+                                for ac in target_card.attached_cards
+                            )
+
+                            if has_existing_weapon:
+                                # Target already has a weapon - heavily penalize
+                                action.add_reasoning("TARGET ALREADY HAS WEAPON - spread weapons instead!", VERY_BAD_DELTA * 2)
+                                logger.warning(f"⚠️  {target_name} already has a weapon attached - penalizing")
+                            else:
+                                # Good target - no weapon yet
+                                action.add_reasoning(f"Target {target_name} has no weapon - good", GOOD_DELTA * 2)
+
                         is_target_vehicle = target_meta and (target_meta.is_vehicle or target_meta.is_starship) if target_meta else False
 
-                        if is_target_vehicle:
+                        if is_target_vehicle and not is_weapon:
                             target_name = target_card.card_title or card_id
                             action.display_text = f"Deploy aboard {target_name}"
 
@@ -379,8 +443,10 @@ class CardSelectionEvaluator(ActionEvaluator):
                                 # Characters as passengers waste their power and are vulnerable
                                 action.add_reasoning(f"NON-PILOT AS PASSENGER - wastes character!", VERY_BAD_DELTA * 2)
                                 logger.warning(f"⚠️ Penalizing {deploying_card.title if deploying_card else 'character'} as passenger on {target_name}")
-                        else:
+                        elif not is_weapon:
+                            # Not a weapon, not a vehicle - unknown target type
                             action.add_reasoning("Location not found in board state", -5.0)
+                        # else: weapon was already handled above
                     else:
                         action.add_reasoning("Location not found in board state", -5.0)
 
@@ -518,6 +584,11 @@ class CardSelectionEvaluator(ActionEvaluator):
                             if their_icons > 0:
                                 drain_bonus = their_icons * GOOD_DELTA  # +10 per icon
                                 action.add_reasoning(f"{their_icons} opponent icon(s) = drain potential", drain_bonus)
+                            else:
+                                # NO opponent icons = NO drain potential = low strategic value!
+                                # Deploying here doesn't threaten opponent's life force
+                                action.add_reasoning("0 opponent icons = no drain potential!", BAD_DELTA)
+                                logger.info(f"⚠️  {loc_name} has 0 opponent icons - penalizing deployment")
 
                         # Also check runtime icon data from board state
                         elif loc.my_icons or loc.their_icons:
@@ -531,6 +602,10 @@ class CardSelectionEvaluator(ActionEvaluator):
                                 if their_icon_count > 0:
                                     drain_bonus = their_icon_count * GOOD_DELTA
                                     action.add_reasoning(f"{their_icon_count} opponent icon(s) = drain", drain_bonus)
+                                else:
+                                    # NO opponent icons = NO drain potential
+                                    action.add_reasoning("0 opponent icons = no drain potential!", BAD_DELTA)
+                                    logger.info(f"⚠️  {loc_name} has 0 opponent icons - penalizing deployment")
                             except ValueError:
                                 pass
 
@@ -915,6 +990,20 @@ class CardSelectionEvaluator(ActionEvaluator):
                 if ability >= 5 or power >= 5:
                     action.add_reasoning("Valuable unique character", -25.0)
 
+            # PENALTY: Characters with attrition immunity are valuable - keep them!
+            # They survive future battles better, so forfeiting them is a waste
+            if card_meta and card_meta.has_attrition_immunity:
+                threshold = card_meta.immune_attrition_threshold
+                # Higher immunity threshold = more valuable
+                immunity_penalty = -10.0 - (threshold * 5)  # immunity<5 = -35, immunity<3 = -25
+                action.add_reasoning(f"Attrition immune (<{threshold}) - keep!", immunity_penalty)
+                logger.debug(f"🛡️ {card_title} immune to attrition < {threshold} - penalizing forfeit")
+
+            # PENALTY: Characters with extra destiny draws are valuable in battles
+            if card_meta and card_meta.draws_extra_destiny > 0:
+                destiny_penalty = -15.0 * card_meta.draws_extra_destiny
+                action.add_reasoning(f"Draws {card_meta.draws_extra_destiny} extra destiny - keep!", destiny_penalty)
+
             actions.append(action)
 
         return actions
@@ -945,7 +1034,7 @@ class CardSelectionEvaluator(ActionEvaluator):
         my_attrition_remaining = 0
         my_damage_remaining = 0
         if bs:
-            my_side = getattr(bs, 'my_side', 'dark').lower()
+            my_side = (bs.my_side or 'dark').lower()
             if my_side == 'dark':
                 my_attrition_remaining = getattr(bs, 'dark_attrition_remaining', 0)
                 my_damage_remaining = getattr(bs, 'dark_damage_remaining', 0)
@@ -1119,6 +1208,17 @@ class CardSelectionEvaluator(ActionEvaluator):
                             action.add_reasoning("Ship/vehicle - prefer force loss", -15.0)
                     if card_meta.is_unique:
                         action.add_reasoning("Unique card - valuable", -10.0)
+
+                    # Penalize forfeiting attrition-immune characters
+                    if card_meta.has_attrition_immunity:
+                        threshold = card_meta.immune_attrition_threshold
+                        immunity_penalty = -10.0 - (threshold * 5)
+                        action.add_reasoning(f"Attrition immune (<{threshold}) - keep!", immunity_penalty)
+
+                    # Penalize forfeiting characters with extra destiny
+                    if card_meta.draws_extra_destiny > 0:
+                        destiny_penalty = -15.0 * card_meta.draws_extra_destiny
+                        action.add_reasoning(f"Draws {card_meta.draws_extra_destiny} extra destiny", destiny_penalty)
 
             actions.append(action)
 
@@ -1417,9 +1517,42 @@ class CardSelectionEvaluator(ActionEvaluator):
                                         f"⚡ Blaster Deflection risk: {card.card_title} "
                                         f"has ability {target_ability}"
                                     )
+
+                            # =================================================
+                            # TARGETING IMMUNITY CHECK
+                            # Some cards "may not be targeted" by weapons/effects.
+                            # Don't waste actions trying to target them!
+                            # =================================================
+                            if card_meta.has_targeting_immunity:
+                                targeting_text = card_meta.parsed.target_immunity_text or "weapons/effects"
+                                action.add_reasoning(
+                                    f"TARGETING IMMUNITY: may not be targeted {targeting_text}",
+                                    -100.0
+                                )
+                                logger.debug(
+                                    f"🛡️ {card.card_title} has targeting immunity: {targeting_text}"
+                                )
                     else:
-                        # Our own card - DON'T target if we have enemy options
-                        action.add_reasoning("OUR card - avoid targeting!", -200.0)
+                        # Our own card - check if this is a BUFF selection
+                        # "A Few Maneuvers" asks "Choose starfighter" to boost hyperspeed
+                        # In that case, we WANT to target our own ships!
+                        decision_text_lower = (context.decision_text or "").lower()
+                        is_buff_selection = (
+                            "choose starfighter" in decision_text_lower or
+                            "choose starship" in decision_text_lower or
+                            "add" in decision_text_lower and "to" in decision_text_lower
+                        )
+
+                        if is_buff_selection:
+                            # This is a buff - WANT to target our own card!
+                            card_meta = get_card(card.blueprint_id) if card.blueprint_id else None
+                            if card_meta and (card_meta.is_starship or card_meta.is_vehicle):
+                                action.add_reasoning("OUR ship for buff - select it!", +50.0)
+                            else:
+                                action.add_reasoning("OUR card for buff", +20.0)
+                        else:
+                            # Weapon/attack - DON'T target our own cards
+                            action.add_reasoning("OUR card - avoid targeting!", -200.0)
                 else:
                     # Card not in our tracking - check if we have a blueprint
                     # This handles shields from Starting Effect that weren't detected above
@@ -1765,6 +1898,11 @@ class CardSelectionEvaluator(ActionEvaluator):
                     elif "effect" in card_type or "interrupt" in card_type:
                         # Non-priority effects/interrupts - OK to lose
                         action.add_reasoning(f"{card_meta.card_type} - OK to lose", 40.0)
+                        # But prefer to keep Sense/Alter immune ones
+                        if card_meta.is_immune_to_sense and "interrupt" in card_type:
+                            action.add_reasoning("Sense-immune interrupt - prefer to keep", -20.0)
+                        if card_meta.is_immune_to_alter and "effect" in card_type:
+                            action.add_reasoning("Alter-immune effect - prefer to keep", -20.0)
                     # AVOID losing deployable cards
                     elif card_meta.is_character:
                         forfeit = card_meta.forfeit_value or 0
@@ -1824,6 +1962,10 @@ class CardSelectionEvaluator(ActionEvaluator):
                     # Small bonus just for having metadata
                     action.add_reasoning("Known card", 5.0)
 
+                    # Prefer interrupts immune to Sense - they can't be countered!
+                    if card_meta.is_immune_to_sense:
+                        action.add_reasoning("IMMUNE TO SENSE - can't be countered!", 25.0)
+
             actions.append(action)
 
         return actions
@@ -1867,6 +2009,11 @@ class CardSelectionEvaluator(ActionEvaluator):
                     elif "effect" in card_type or "interrupt" in card_type:
                         # Non-priority effects/interrupts - OK to place
                         action.add_reasoning(f"{card_meta.card_type} - OK to place", 30.0)
+                        # But prefer to keep Sense/Alter immune ones
+                        if card_meta.is_immune_to_sense and "interrupt" in card_type:
+                            action.add_reasoning("Sense-immune interrupt - prefer to keep", -15.0)
+                        if card_meta.is_immune_to_alter and "effect" in card_type:
+                            action.add_reasoning("Alter-immune effect - prefer to keep", -15.0)
                     # AVOID placing deployable cards
                     elif card_meta.is_character:
                         action.add_reasoning("Character - avoid placing", -20.0)
@@ -1924,3 +2071,36 @@ class CardSelectionEvaluator(ActionEvaluator):
             if card_meta and card_meta.provides_presence:
                 return True
         return False
+
+    def _get_nearby_opponent_power(self, board_state, location_index: int) -> int:
+        """
+        Get the total opponent power at nearby locations (same system).
+
+        This helps detect "trap" scenarios where deploying a weak character
+        to an empty location near opponent's stronghold invites punishment.
+
+        Args:
+            board_state: Current board state
+            location_index: Index of the location we're considering deploying to
+
+        Returns:
+            Total opponent power at same-system locations
+        """
+        if not board_state or location_index is None:
+            return 0
+
+        # Find locations in the same system
+        same_system_indices = board_state.find_same_system_locations(location_index)
+        if not same_system_indices:
+            return 0
+
+        # Sum up opponent power at those locations
+        total_nearby_power = 0
+        for idx in same_system_indices:
+            if idx < len(board_state.locations) and board_state.locations[idx]:
+                loc = board_state.locations[idx]
+                for card in loc.their_cards:
+                    if card.power:
+                        total_nearby_power += card.power
+
+        return total_nearby_power

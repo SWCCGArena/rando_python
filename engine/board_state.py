@@ -218,6 +218,28 @@ class BoardState:
         # Set when we decide to skip deploying this turn to save for a crushing attack next turn
         self.next_turn_crush_plan = None  # NextTurnCrushPlan or None
 
+        # Expensive card budget (System 1) - tracks force we're saving for high-value cards
+        # Set when we have an expensive card we can afford in 1-2 turns with saving
+        self.expensive_card_budget = None  # ExpensiveCardBudget or None
+
+        # GamePlan - meta-thinking system for strategic planning
+        # Set at game start based on deck archetype; provides goals and scoring adjustments
+        self.game_plan = None  # GamePlan or None
+
+        # StrategicState - real-time tracking of game trajectory and adaptive decision modes
+        # Tracks: inventory (card types in hand), drain trajectory, opponent strategy
+        # Outputs: force_draw_mode, force_attack_mode, urgency level
+        self.strategic_state = None  # StrategicState or None
+
+        # Consecutive hold counter - prevents infinite hold-back loops
+        # Incremented when we hold for crush/bleed, reset when we actually deploy
+        self.consecutive_hold_turns: int = 0
+
+        # Failed hold tracking - when a hold didn't work out (enemy countered, didn't draw needed cards)
+        # If True, be more aggressive and don't hold again
+        self.hold_failed_last_turn: bool = False
+        self.last_hold_reason: str = ""  # Why we held last turn (for logging)
+
     def clear(self):
         """Reset all state (for new game)"""
         self.cards_in_play.clear()
@@ -239,7 +261,13 @@ class BoardState:
         self.hit_cards.clear()
         self.game_winner = None
         self.game_win_reason = None
+        self.strategic_state = None
         self.next_turn_crush_plan = None
+        self.expensive_card_budget = None
+        self.game_plan = None
+        self.consecutive_hold_turns = 0
+        self.hold_failed_last_turn = False
+        self.last_hold_reason = ""
         # Reset shield tracker for new game
         from .shield_strategy import reset_shield_tracker
         reset_shield_tracker()
@@ -745,6 +773,128 @@ class BoardState:
             if card.power and card.power > 0:
                 total += card.power
         return total
+
+    # ========== Presence Detection (Droid-Aware) ==========
+    #
+    # In SWCCG, "presence" requires a character with ability > 0.
+    # Droids (ability = 0) contribute power but do NOT provide presence.
+    # Without presence at a location, you cannot:
+    #   - Control for most purposes
+    #   - Prevent opponent's Force drains
+    #   - Initiate battles
+    #
+    # Droids CAN still:
+    #   - Occupy for Force drain purposes (can Force drain if only droids there)
+    #   - Contribute to battles if presence exists
+    #   - Add power to location totals
+
+    def has_presence_at_location(self, location_index: int, is_mine: bool = True) -> bool:
+        """
+        Check if a player has 'presence' at a location (character with ability > 0).
+
+        Droids (ability = 0) do NOT provide presence.
+
+        Args:
+            location_index: Location to check
+            is_mine: True for my presence, False for opponent's presence
+
+        Returns:
+            True if there's at least one character with ability > 0
+        """
+        if location_index < 0 or location_index >= len(self.locations) or not self.locations[location_index]:
+            return False
+
+        cards = self.locations[location_index].my_cards if is_mine else self.locations[location_index].their_cards
+
+        for card in cards:
+            # Check if card has ability > 0 (non-droid character)
+            if card.ability and card.ability > 0:
+                return True
+
+            # Also check card metadata for more accurate ability
+            metadata = _get_card_metadata(card.blueprint_id)
+            if metadata and metadata.ability_value > 0:
+                return True
+
+        return False
+
+    def my_presence_at_location(self, location_index: int) -> bool:
+        """Check if I have presence (ability > 0 character) at location."""
+        return self.has_presence_at_location(location_index, is_mine=True)
+
+    def their_presence_at_location(self, location_index: int) -> bool:
+        """Check if opponent has presence (ability > 0 character) at location."""
+        return self.has_presence_at_location(location_index, is_mine=False)
+
+    def my_ability_sum_at_location(self, location_index: int) -> int:
+        """
+        Sum my total ability at a location (from all cards).
+
+        This is the actual ability sum, not just card count.
+        Droids contribute 0 to this total.
+        """
+        if location_index < 0 or location_index >= len(self.locations) or not self.locations[location_index]:
+            return 0
+
+        total = 0
+        for card in self.locations[location_index].my_cards:
+            # Use card's tracked ability first
+            if card.ability and card.ability > 0:
+                total += card.ability
+            else:
+                # Fall back to metadata
+                metadata = _get_card_metadata(card.blueprint_id)
+                if metadata:
+                    total += metadata.ability_value
+        return total
+
+    def their_ability_sum_at_location(self, location_index: int) -> int:
+        """
+        Sum opponent's total ability at a location (from all cards).
+
+        Droids contribute 0 to this total.
+        """
+        if location_index < 0 or location_index >= len(self.locations) or not self.locations[location_index]:
+            return 0
+
+        total = 0
+        for card in self.locations[location_index].their_cards:
+            if card.ability and card.ability > 0:
+                total += card.ability
+            else:
+                metadata = _get_card_metadata(card.blueprint_id)
+                if metadata:
+                    total += metadata.ability_value
+        return total
+
+    def is_droid_only_at_location(self, location_index: int, is_mine: bool = True) -> bool:
+        """
+        Check if a location has ONLY droids (no characters with presence).
+
+        This is important because droid-only locations:
+        - Can still Force drain
+        - Cannot prevent opponent drains (no presence to "control")
+        - Cannot initiate battles
+        """
+        if location_index < 0 or location_index >= len(self.locations) or not self.locations[location_index]:
+            return False
+
+        cards = self.locations[location_index].my_cards if is_mine else self.locations[location_index].their_cards
+
+        if not cards:
+            return False  # No cards = not droid-only
+
+        has_any_droid = False
+        for card in cards:
+            metadata = _get_card_metadata(card.blueprint_id)
+            if metadata:
+                if metadata.is_character:
+                    if metadata.ability_value > 0:
+                        return False  # Found a non-droid character
+                    if metadata.is_droid:
+                        has_any_droid = True
+
+        return has_any_droid  # True only if we have droids and no non-droids
 
     # ========== Resource Queries ==========
 

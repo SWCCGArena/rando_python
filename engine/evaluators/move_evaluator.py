@@ -17,26 +17,70 @@ import logging
 from typing import List, Optional, Tuple
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 from ..game_strategy import GameStrategy, ThreatLevel
+from ..strategy_config import get_config
 
 logger = logging.getLogger(__name__)
 
-# Rank deltas (from C# BotAIHelper) - normalized for better decision nuance
-VERY_GOOD_DELTA = 150.0  # Reduced from 999 - still strongly prefer but allows comparison
-GOOD_DELTA = 10.0
-BAD_DELTA = -10.0
-VERY_BAD_DELTA = -150.0  # Reduced from -999 - still strongly avoid but allows override
+# =============================================================================
+# CONFIG-DRIVEN PARAMETERS
+# =============================================================================
 
-# Move thresholds (from C# AICACHandler)
-POWER_DIFF_FOR_FLEE = 2  # Their power advantage to trigger flee
-POWER_DIFF_FOR_BUILDUP = 12  # Our power advantage before spreading
-OVERKILL_THRESHOLD = 4  # Our power advantage considered "overkill" for movement purposes
-CONTEST_POWER_MARGIN = 2  # How much extra power we want when contesting
+def _get_move_config(key: str, default):
+    """Get move strategy config value."""
+    return get_config().get('move_strategy', key, default)
 
-# Offensive attack thresholds (NEW)
-ATTACK_POWER_ADVANTAGE = 4  # Minimum power advantage to consider attack
-ATTACK_MIN_POWER = 6  # Minimum power we need at source to consider attacking
-ATTACK_SCORE_BASE = 50.0  # Base score for attack moves (must beat pass bias ~38)
-ATTACK_CRUSH_BONUS = 25.0  # Bonus for overwhelming attacks (2x enemy power)
+def _get_weight(key: str, default: float) -> float:
+    """Get evaluator weight."""
+    return get_config().get_weight('move', key, default)
+
+# Rank deltas
+def get_very_good_delta() -> float:
+    return _get_weight('very_good_delta', 150.0)
+
+def get_good_delta() -> float:
+    return _get_weight('good_delta', 10.0)
+
+def get_bad_delta() -> float:
+    return _get_weight('bad_delta', -10.0)
+
+def get_very_bad_delta() -> float:
+    return _get_weight('very_bad_delta', -150.0)
+
+# Move thresholds
+def get_power_diff_for_flee() -> int:
+    return _get_move_config('power_diff_for_flee', 2)
+
+def get_power_diff_for_buildup() -> int:
+    return _get_move_config('power_diff_for_buildup', 12)
+
+def get_overkill_threshold() -> int:
+    return _get_move_config('overkill_threshold', 4)
+
+def get_contest_power_margin() -> int:
+    return _get_move_config('contest_power_margin', 2)
+
+# Offensive attack thresholds
+def get_attack_power_advantage() -> int:
+    return _get_move_config('attack_power_advantage', 4)
+
+def get_attack_min_power() -> int:
+    return _get_move_config('attack_min_power', 6)
+
+def get_attack_score_base() -> float:
+    return _get_move_config('attack_score_base', 50.0)
+
+def get_attack_crush_bonus() -> float:
+    return _get_move_config('attack_crush_bonus', 25.0)
+
+# Inline constants (for establish/contest logic)
+def get_establish_threshold() -> int:
+    return _get_move_config('establish_threshold', 6)
+
+def get_contest_margin() -> int:
+    return _get_move_config('contest_margin', 4)
+
+def get_icon_bonus() -> float:
+    return _get_move_config('icon_bonus', 15.0)
 
 
 class MoveEvaluator(ActionEvaluator):
@@ -117,7 +161,7 @@ class MoveEvaluator(ActionEvaluator):
 
             # Check if we already tried moving this card
             if card_id and card_id in self.pending_move_card_ids:
-                action.add_reasoning("Already tried moving this card", VERY_BAD_DELTA)
+                action.add_reasoning("Already tried moving this card", get_very_bad_delta())
                 actions.append(action)
                 continue
 
@@ -127,7 +171,7 @@ class MoveEvaluator(ActionEvaluator):
                     loc_idx = card.location_index
                     self._rank_move_from_location(action, bs, loc_idx, card_id, game_strategy)
                 else:
-                    action.add_reasoning("Card not found in play", BAD_DELTA)
+                    action.add_reasoning("Card not found in play", get_bad_delta())
             else:
                 action.add_reasoning("No board state or card ID", 0.0)
 
@@ -145,7 +189,7 @@ class MoveEvaluator(ActionEvaluator):
         Enhanced with offensive attack logic for moving from strongholds.
         """
         if loc_idx < 0 or loc_idx >= len(board_state.locations):
-            action.add_reasoning("Invalid location index", BAD_DELTA)
+            action.add_reasoning("Invalid location index", get_bad_delta())
             return
 
         my_power = board_state.my_power_at_location(loc_idx)
@@ -182,21 +226,21 @@ class MoveEvaluator(ActionEvaluator):
 
             if threat_level == ThreatLevel.RETREAT:
                 # Definitely should retreat - we're badly outmatched
-                action.add_reasoning(f"Strategic retreat - badly outmatched ({power_diff})", VERY_GOOD_DELTA)
+                action.add_reasoning(f"Strategic retreat - badly outmatched ({power_diff})", get_very_good_delta())
                 return
             elif threat_level == ThreatLevel.DANGEROUS:
                 # Should consider retreating
-                action.add_reasoning(f"Dangerous location - retreat recommended ({power_diff})", GOOD_DELTA * 2)
+                action.add_reasoning(f"Dangerous location - retreat recommended ({power_diff})", get_good_delta() * 2)
                 return
             elif threat_level in [ThreatLevel.CRUSH, ThreatLevel.FAVORABLE]:
                 # We have the advantage - don't retreat!
-                action.add_reasoning(f"Power advantage ({power_diff}) - stay and fight!", BAD_DELTA * 2)
+                action.add_reasoning(f"Power advantage ({power_diff}) - stay and fight!", get_bad_delta() * 2)
                 return
 
         # Flee logic: their power > our power + 2
         # The worse the disadvantage, the more we want to flee!
         # BUT: Check if fleeing is actually beneficial (destination analysis)
-        if their_power - my_power > POWER_DIFF_FOR_FLEE and their_power > 0:
+        if their_power - my_power > get_power_diff_for_flee() and their_power > 0:
             disadvantage = their_power - my_power
 
             # Analyze flee options to see if it's worth it
@@ -207,7 +251,7 @@ class MoveEvaluator(ActionEvaluator):
             # Check movement cost - can we afford to move everyone?
             if not flee_analysis['can_afford']:
                 movement_cost = flee_analysis['movement_cost']
-                action.add_reasoning(f"Want to flee but can't afford ({movement_cost} Force needed, have {board_state.force_pile})", BAD_DELTA)
+                action.add_reasoning(f"Want to flee but can't afford ({movement_cost} Force needed, have {board_state.force_pile})", get_bad_delta())
                 logger.info(f"🚫 Can't afford to flee: need {movement_cost} Force, have {board_state.force_pile}")
                 return
 
@@ -219,31 +263,31 @@ class MoveEvaluator(ActionEvaluator):
 
                     if dest_their_power >= their_power:
                         # Destination is WORSE or same - don't flee into more trouble!
-                        action.add_reasoning(f"Destination has {dest_their_power} enemies (same or worse) - don't flee!", BAD_DELTA * 2)
+                        action.add_reasoning(f"Destination has {dest_their_power} enemies (same or worse) - don't flee!", get_bad_delta() * 2)
                         logger.info(f"🚫 Not fleeing: destination has {dest_their_power} enemies vs {their_power} here")
                         return
                     elif dest_their_power > 0:
                         # Destination has some enemies but fewer
                         if disadvantage >= 6:
-                            action.add_reasoning(f"FLEEING to location with fewer enemies ({dest_their_power} vs {their_power})", VERY_GOOD_DELTA)
+                            action.add_reasoning(f"FLEEING to location with fewer enemies ({dest_their_power} vs {their_power})", get_very_good_delta())
                             logger.info(f"🏃 Fleeing from {their_power} enemies to {dest_their_power}")
                         else:
-                            action.add_reasoning(f"Fleeing to location with fewer enemies ({dest_their_power} vs {their_power})", GOOD_DELTA * 2)
+                            action.add_reasoning(f"Fleeing to location with fewer enemies ({dest_their_power} vs {their_power})", get_good_delta() * 2)
                         return
                     else:
                         # Destination is empty - great!
                         if disadvantage >= 6:
-                            action.add_reasoning(f"FLEEING to EMPTY location (escaping {their_power} enemies!)", VERY_GOOD_DELTA)
+                            action.add_reasoning(f"FLEEING to EMPTY location (escaping {their_power} enemies!)", get_very_good_delta())
                             logger.info(f"🏃 Fleeing from {their_power} enemies to empty location!")
                         elif disadvantage >= 4:
-                            action.add_reasoning(f"Fleeing to empty location (escaping {their_power})", GOOD_DELTA * 3)
+                            action.add_reasoning(f"Fleeing to empty location (escaping {their_power})", get_good_delta() * 3)
                         else:
-                            action.add_reasoning(f"Moving to empty location (enemy has {their_power})", GOOD_DELTA)
+                            action.add_reasoning(f"Moving to empty location (enemy has {their_power})", get_good_delta())
                         return
 
             # Can't find valid flee destination
             reason = flee_analysis['reason']
-            action.add_reasoning(f"Want to flee but no good destination: {reason}", BAD_DELTA)
+            action.add_reasoning(f"Want to flee but no good destination: {reason}", get_bad_delta())
             return
 
         # =================================================================
@@ -257,7 +301,7 @@ class MoveEvaluator(ActionEvaluator):
         # at adjacent Location B. We should ATTACK by moving to crush them.
         # =================================================================
 
-        if not their_has_cards and my_power >= ATTACK_MIN_POWER and my_card_count >= 2:
+        if not their_has_cards and my_power >= get_attack_min_power() and my_card_count >= 2:
             # We're at an uncontested location with a stronghold - look for attack targets
             attack_analysis = self._analyze_attack_opportunity(
                 board_state, loc_idx, my_power, my_card_count
@@ -275,10 +319,10 @@ class MoveEvaluator(ActionEvaluator):
         # - How much force do we have to move cards?
         # - Can we move ENOUGH power to establish (6) or contest (beat enemy + margin)?
         # - We must RETAIN control after moving - don't spread if it would leave us below establish threshold
-        ESTABLISH_THRESHOLD = 6  # Power needed to control uncontested location
+        establish_threshold = get_establish_threshold()
 
         # Only spread if we have EXCESS power beyond what's needed for control
-        power_needed_to_stay = max(their_power + OVERKILL_THRESHOLD, ESTABLISH_THRESHOLD)
+        power_needed_to_stay = max(their_power + get_overkill_threshold(), establish_threshold)
         excess_power = my_power - power_needed_to_stay
 
         if excess_power >= 2 and my_card_count >= 2:  # Need some excess to spread
@@ -295,11 +339,11 @@ class MoveEvaluator(ActionEvaluator):
             else:
                 # Can't meaningfully spread - explain why
                 reason = spread_analysis['reason']
-                action.add_reasoning(f"Can't spread: {reason}", BAD_DELTA)
+                action.add_reasoning(f"Can't spread: {reason}", get_bad_delta())
                 return
 
         # Default: not a good time to move
-        action.add_reasoning("No good reason to move", BAD_DELTA)
+        action.add_reasoning("No good reason to move", get_bad_delta())
 
     def _analyze_spread_viability(self, board_state, loc_idx: int,
                                      our_power_here: int, our_card_count: int) -> dict:
@@ -319,9 +363,9 @@ class MoveEvaluator(ActionEvaluator):
             reason: str
             score: float (if viable)
         """
-        ESTABLISH_THRESHOLD = 6  # Power needed to establish presence
-        CONTEST_MARGIN = 4  # Extra power needed to safely contest
-        ICON_BONUS = 15.0  # Score bonus per opponent icon (force drain value)
+        establish_threshold = get_establish_threshold()
+        contest_margin = get_contest_margin()
+        icon_bonus = get_icon_bonus()
 
         force_available = board_state.force_pile
         if force_available < 1:
@@ -333,7 +377,7 @@ class MoveEvaluator(ActionEvaluator):
             their_power_here = 0
 
         # Calculate how much power we must retain at source
-        power_to_retain = max(their_power_here + CONTEST_MARGIN, ESTABLISH_THRESHOLD)
+        power_to_retain = max(their_power_here + contest_margin, establish_threshold)
 
         # Estimate power per card (rough average)
         avg_power_per_card = our_power_here / max(our_card_count, 1)
@@ -385,19 +429,19 @@ class MoveEvaluator(ActionEvaluator):
             logger.debug(f"   Adj loc {adj_idx}: their_power={their_power_raw} (has_cards={their_has_cards}), our_power={our_power_there}, their_icons={their_icons}")
 
             # Skip if we already have good presence
-            if our_power_there >= ESTABLISH_THRESHOLD and their_power == 0:
+            if our_power_there >= establish_threshold and their_power == 0:
                 continue
 
             # Empty location (no cards OR 0-power cards)
             if their_power == 0:
                 # Empty location - can we establish?
-                if potential_power >= ESTABLISH_THRESHOLD:
+                if potential_power >= establish_threshold:
                     # Base score for establishing
-                    score = GOOD_DELTA * 2
+                    score = get_good_delta() * 2
                     # Add bonus for opponent icons (force drain potential!)
-                    icon_score = their_icons * ICON_BONUS
+                    icon_score = their_icons * icon_bonus
                     score += icon_score
-                    cards_needed = max(1, int((ESTABLISH_THRESHOLD - our_power_there) / avg_power_per_card + 0.5))
+                    cards_needed = max(1, int((establish_threshold - our_power_there) / avg_power_per_card + 0.5))
 
                     reason = f"Can establish at empty location (move {cards_needed} cards, {int(cards_needed * avg_power_per_card)} power)"
                     if their_icons > 0:
@@ -417,12 +461,12 @@ class MoveEvaluator(ActionEvaluator):
                         best_opportunity = opportunity
             else:
                 # Contested - can we beat them with margin?
-                power_needed = their_power + CONTEST_MARGIN
+                power_needed = their_power + contest_margin
                 if potential_power >= power_needed:
                     # Base score for contesting (+ bonus for contesting stronger enemies)
-                    score = GOOD_DELTA * 3 + their_power / 2
+                    score = get_good_delta() * 3 + their_power / 2
                     # Add bonus for opponent icons (force drain potential!)
-                    icon_score = their_icons * ICON_BONUS
+                    icon_score = their_icons * icon_bonus
                     score += icon_score
                     cards_needed = max(1, int((power_needed - our_power_there) / avg_power_per_card + 0.5))
                     cards_needed = min(cards_needed, max_cards_to_move)
@@ -461,20 +505,20 @@ class MoveEvaluator(ActionEvaluator):
             their_power = max(0, board_state.their_power_at_location(adj_idx))  # Treat negative as 0
             our_power = board_state.my_power_at_location(adj_idx)
             if their_power > 0:
-                power_needed = their_power + CONTEST_MARGIN
+                power_needed = their_power + contest_margin
                 if max_moveable_power < power_needed - our_power:
                     return {
                         'viable': False,
                         'reason': f"need {power_needed - our_power} power to contest {their_power} enemies, can only move {max_moveable_power}"
                     }
-            elif our_power >= ESTABLISH_THRESHOLD:
+            elif our_power >= establish_threshold:
                 # Already established there
                 continue
             else:
-                if max_moveable_power < ESTABLISH_THRESHOLD - our_power:
+                if max_moveable_power < establish_threshold - our_power:
                     return {
                         'viable': False,
-                        'reason': f"need {ESTABLISH_THRESHOLD - our_power} power to establish, can only move {max_moveable_power}"
+                        'reason': f"need {establish_threshold - our_power} power to establish, can only move {max_moveable_power}"
                     }
 
         return {'viable': False, 'reason': 'no good adjacent locations'}
@@ -499,8 +543,8 @@ class MoveEvaluator(ActionEvaluator):
             score: float (if viable)
             target_idx: int (if viable)
         """
-        ESTABLISH_THRESHOLD = 6
-        ICON_BONUS = 15.0  # Per opponent icon
+        establish_threshold = get_establish_threshold()
+        icon_bonus = get_icon_bonus()
 
         force_available = board_state.force_pile
         if force_available < 1:
@@ -565,22 +609,22 @@ class MoveEvaluator(ActionEvaluator):
             conservative_advantage = conservative_total - their_power
 
             # Determine if attack is viable
-            # Need at least ATTACK_POWER_ADVANTAGE to make it worth it
-            if conservative_advantage >= ATTACK_POWER_ADVANTAGE:
+            # Need at least get_attack_power_advantage() to make it worth it
+            if conservative_advantage >= get_attack_power_advantage():
                 # Good attack with conservative approach
-                cards_needed = max(1, int((their_power + ATTACK_POWER_ADVANTAGE - our_power_there) / avg_power_per_card + 0.5))
+                cards_needed = max(1, int((their_power + get_attack_power_advantage() - our_power_there) / avg_power_per_card + 0.5))
                 cards_needed = min(cards_needed, conservative_cards)
 
                 # Calculate score
-                score = ATTACK_SCORE_BASE
+                score = get_attack_score_base()
                 # Bonus for crushing attacks (2x their power)
                 if conservative_total >= their_power * 2:
-                    score += ATTACK_CRUSH_BONUS
+                    score += get_attack_crush_bonus()
                     crush_text = "CRUSH "
                 else:
                     crush_text = ""
                 # Bonus for opponent icons (force drain denial + potential flip)
-                score += their_icons * ICON_BONUS
+                score += their_icons * icon_bonus
                 # Bonus for bigger enemy forces (more impactful win)
                 score += their_power / 2
 
@@ -605,17 +649,17 @@ class MoveEvaluator(ActionEvaluator):
                     best_score = score
                     best_attack = attack
 
-            elif all_in_advantage >= ATTACK_POWER_ADVANTAGE:
+            elif all_in_advantage >= get_attack_power_advantage():
                 # Only viable with all-in attack - riskier but consider it
                 cards_needed = max_cards_to_move
 
-                score = ATTACK_SCORE_BASE - 10  # Slight penalty for all-in
+                score = get_attack_score_base() - 10  # Slight penalty for all-in
                 if all_in_power >= their_power * 2:
-                    score += ATTACK_CRUSH_BONUS
+                    score += get_attack_crush_bonus()
                     crush_text = "CRUSH "
                 else:
                     crush_text = ""
-                score += their_icons * ICON_BONUS
+                score += their_icons * icon_bonus
                 score += their_power / 2
 
                 reason = (f"{crush_text}ALL-IN ATTACK {their_power} enemies with {all_in_power} power "

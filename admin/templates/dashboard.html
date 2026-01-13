@@ -82,64 +82,46 @@
             <span id="table-name-display" class="config-value">{{ state.config.table_name }}</span>
         </div>
 
-        <h3 style="margin-top: 15px; margin-bottom: 5px; color: #888;">Hand Management</h3>
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color: #888;">Strategy Config</h3>
         <div class="config-item">
-            <label for="hand-soft-cap" class="config-label">Hand Soft Cap:</label>
-            <input type="range" id="hand-soft-cap" min="8" max="16"
-                   value="{{ state.config.hand_soft_cap }}"
-                   onchange="sendConfigUpdate('hand_soft_cap', this.value)">
-            <span id="hand-soft-cap-value" class="config-value">{{ state.config.hand_soft_cap }}</span>
+            <label class="config-label">Config File:</label>
+            <span id="strategy-config-name" class="config-value" style="color: #27ae60;">{{ state.config.strategy_config_name }}</span>
+        </div>
+        <div class="config-item">
+            <label class="config-label">Version:</label>
+            <span id="strategy-config-version" class="config-value">{{ state.config.strategy_config_version }}</span>
         </div>
 
-        <div class="config-item">
-            <label for="max-hand-size" class="config-label">Max Hand Size:</label>
-            <input type="range" id="max-hand-size" min="10" max="20"
-                   value="{{ state.config.max_hand_size }}"
-                   onchange="sendConfigUpdate('max_hand_size', this.value)">
-            <span id="max-hand-value" class="config-value">{{ state.config.max_hand_size }}</span>
-        </div>
-
-        <h3 style="margin-top: 15px; margin-bottom: 5px; color: #888;">Force Economy</h3>
-        <div class="config-item">
-            <label for="force-gen-target" class="config-label">Force Gen Target:</label>
-            <input type="range" id="force-gen-target" min="3" max="10"
-                   value="{{ state.config.force_gen_target }}"
-                   onchange="sendConfigUpdate('force_gen_target', this.value)">
-            <span id="force-gen-target-value" class="config-value">{{ state.config.force_gen_target }}</span>
-        </div>
-
-        <div class="config-item">
-            <label for="max-reserve-checks" class="config-label">Max Reserve Checks/Turn:</label>
-            <input type="range" id="max-reserve-checks" min="0" max="5"
-                   value="{{ state.config.max_reserve_checks }}"
-                   onchange="sendConfigUpdate('max_reserve_checks', this.value)">
-            <span id="max-reserve-checks-value" class="config-value">{{ state.config.max_reserve_checks }}</span>
-        </div>
-
-        <h3 style="margin-top: 15px; margin-bottom: 5px; color: #888;">Battle Strategy</h3>
-        <div class="config-item">
-            <label for="deploy-threshold" class="config-label">Deploy Threshold:</label>
-            <input type="range" id="deploy-threshold" min="0" max="30"
-                   value="{{ state.config.deploy_threshold }}"
-                   onchange="sendConfigUpdate('deploy_threshold', this.value)">
-            <span id="deploy-threshold-value" class="config-value">{{ state.config.deploy_threshold }}</span>
-        </div>
-
-        <div class="config-item">
-            <label for="battle-favorable" class="config-label">Battle Favorable (+power):</label>
-            <input type="range" id="battle-favorable" min="1" max="8"
-                   value="{{ state.config.battle_favorable_threshold }}"
-                   onchange="sendConfigUpdate('battle_favorable_threshold', this.value)">
-            <span id="battle-favorable-value" class="config-value">{{ state.config.battle_favorable_threshold }}</span>
-        </div>
-
-        <div class="config-item">
-            <label for="battle-danger" class="config-label">Battle Danger (-power):</label>
-            <input type="range" id="battle-danger" min="-12" max="-2"
-                   value="{{ state.config.battle_danger_threshold }}"
-                   onchange="sendConfigUpdate('battle_danger_threshold', this.value)">
-            <span id="battle-danger-value" class="config-value">{{ state.config.battle_danger_threshold }}</span>
-        </div>
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color: #888;">Key Parameters (Read-Only)</h3>
+        <table class="config-table" style="width: 100%; font-size: 0.9em;">
+            <tr>
+                <td style="color: #888;">GamePlan:</td>
+                <td id="cfg-gameplan">{{ state.config.gameplan_enabled }}</td>
+                <td style="color: #888;">Chaos %:</td>
+                <td id="cfg-chaos">{{ state.config.chaos_percent }}</td>
+            </tr>
+            <tr>
+                <td style="color: #888;">Deploy Threshold:</td>
+                <td id="cfg-deploy-threshold">{{ state.config.deploy_threshold }}</td>
+                <td style="color: #888;">Battle Favorable:</td>
+                <td id="cfg-battle-favorable">{{ state.config.battle_favorable_threshold }}</td>
+            </tr>
+            <tr>
+                <td style="color: #888;">Hand Soft Cap:</td>
+                <td id="cfg-hand-soft-cap">{{ state.config.hand_soft_cap }}</td>
+                <td style="color: #888;">Max Hand Size:</td>
+                <td id="cfg-max-hand">{{ state.config.max_hand_size }}</td>
+            </tr>
+            <tr>
+                <td style="color: #888;">Force Gen Target:</td>
+                <td id="cfg-force-gen">{{ state.config.force_gen_target }}</td>
+                <td style="color: #888;">Early Game Turns:</td>
+                <td id="cfg-early-turns">{{ state.config.early_game_turns }}</td>
+            </tr>
+        </table>
+        <p style="color: #666; font-size: 0.8em; margin-top: 10px;">
+            ℹ️ Strategy parameters are loaded from config file. Edit configs/production.json to change.
+        </p>
     </div>
 
     <!-- Tables Panel (Phase 2) -->

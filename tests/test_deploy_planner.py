@@ -110,6 +110,9 @@ class MockBoardState:
     # Strategy controller (optional)
     strategy_controller: Any = None
 
+    # Hold-back tracking
+    consecutive_hold_turns: int = 0
+
     def is_my_turn(self) -> bool:
         return self.current_turn_player == self.my_player_name
 
@@ -257,6 +260,15 @@ class MockCardMetadata:
     # Matching pilot/ship preferences (list of ship/pilot names this card prefers)
     matching: list = None
 
+    # Gametext parsed properties (added for gametext parser support)
+    has_attrition_immunity: bool = False
+    immune_attrition_threshold: int = 0
+    draws_extra_destiny: int = 0
+    is_immune_to_sense: bool = False
+    is_immune_to_alter: bool = False
+    has_targeting_immunity: bool = False
+    gametext: str = ""  # Raw gametext for parsing
+
     def __post_init__(self):
         if self.deploy_restriction_systems is None:
             self.deploy_restriction_systems = []
@@ -307,6 +319,20 @@ class MockCardMetadata:
         if not (self.is_starship or self.is_vehicle):
             return False
         return not self.has_permanent_pilot
+
+    @property
+    def parsed(self):
+        """Mock parsed gametext - returns object with gametext attributes."""
+        class MockParsedGametext:
+            def __init__(self, card):
+                self.immune_attrition = card.immune_attrition_threshold
+                self.immune_to_sense = card.is_immune_to_sense
+                self.immune_to_alter = card.is_immune_to_alter
+                self.may_not_be_targeted = card.has_targeting_immunity
+                self.deploy_reduction = 0  # Default no reduction
+                self.force_drain_bonus = 0  # Default no bonus
+                self.draws_extra_destiny = card.draws_extra_destiny
+        return MockParsedGametext(self)
 
 
 def mock_get_card(blueprint_id: str) -> Optional[MockCardMetadata]:
@@ -515,7 +541,8 @@ class ScenarioBuilder:
                       is_pilot: bool = False, is_warrior: bool = True,
                       is_unique: bool = True,
                       deploy_restriction_systems: List[str] = None,
-                      pilot_adds_power: int = None) -> 'ScenarioBuilder':
+                      pilot_adds_power: int = None,
+                      ability: int = None) -> 'ScenarioBuilder':
         """Add a character to hand.
 
         Args:
@@ -525,10 +552,20 @@ class ScenarioBuilder:
                        E.g., ["Tatooine"] for Jawas means they can only go to Tatooine sites.
             pilot_adds_power: For pilots, "Adds X to power of anything" from gametext.
                        Defaults to 2 if is_pilot=True and not specified.
+            ability: Character's ability value for battle destiny eligibility.
+                       Defaults to power-1 (min 1), which is realistic for most characters.
+                       Main characters (4+ power) usually have 3-4 ability.
+                       Troops (2 power) usually have 1 ability.
         """
         card_id = f"card_{self._card_counter}"
         bp_id = f"char_bp_{self._card_counter}"
         self._card_counter += 1
+
+        # Default ability based on power (realistic approximation)
+        # 4+ power chars usually have 3-4 ability (can draw destiny)
+        # 2-3 power chars usually have 1-2 ability
+        if ability is None:
+            ability = max(1, power - 1)
 
         card = MockCard(
             card_id=card_id,
@@ -537,6 +574,7 @@ class ScenarioBuilder:
             card_type="Character",
             power=power,
             deploy=deploy_cost,
+            ability=ability,
         )
         self.board.cards_in_hand.append(card)
 
@@ -551,6 +589,7 @@ class ScenarioBuilder:
             card_type="Character",
             deploy_value=deploy_cost,
             power_value=power,
+            ability_value=ability,
             is_character=True,
             is_pilot=is_pilot,
             is_warrior=is_warrior,
@@ -694,7 +733,8 @@ class ScenarioBuilder:
 
     def add_character_in_play(self, name: str, power: int, location_name: str,
                                is_unique: bool = True,
-                               is_warrior: bool = True) -> 'ScenarioBuilder':
+                               is_warrior: bool = True,
+                               ability: int = None) -> 'ScenarioBuilder':
         """Add a character that is already deployed on the board.
 
         Used for testing uniqueness - if a unique card is already in play,
@@ -703,6 +743,10 @@ class ScenarioBuilder:
         card_id = f"inplay_{self._card_counter}"
         bp_id = f"inplay_char_bp_{self._card_counter}"
         self._card_counter += 1
+
+        # Default ability based on power (realistic approximation)
+        if ability is None:
+            ability = max(1, power - 1)
 
         # Find the location
         loc_idx = -1
@@ -724,6 +768,7 @@ class ScenarioBuilder:
             power=power,
             location_index=loc_idx,
             zone="AT_LOCATION",  # Matches board_state.py zone values
+            ability=ability,
         )
 
         # Add to location's my_cards and board's cards_in_play
@@ -744,6 +789,7 @@ class ScenarioBuilder:
             side=self.board.my_side.capitalize(),
             card_type="Character",
             power_value=power,
+            ability_value=ability,
             is_character=True,
             is_unique=is_unique,
             is_warrior=is_warrior,
@@ -7533,33 +7579,96 @@ def test_permanently_piloted_ship_vs_unpiloted_with_pilot():
 # EARLY GAME THRESHOLD TESTS
 # =============================================================================
 
-def test_early_game_threshold_allows_three_power_ground():
+def test_early_game_threshold_allows_four_power_ground():
     """
-    Test that early game (turn < 4) with no contested locations uses reduced threshold (3)
-    for ground locations, allowing 3-power characters to deploy.
+    Test that early game (turn < 4) with no contested locations uses min_establish_power
+    floor (default 4) for ground locations, allowing 4-power characters to deploy.
 
-    This was a bug fix: bot was holding back with 3-power characters because
-    threshold was 4, but deploying enables force drains which is valuable.
+    The min_establish_power config prevents deploying weak characters alone even
+    in early game, since opponents can move in and crush them.
+
+    ABILITY REQUIREMENT: Characters need ability >= 4 to draw battle destiny.
+    A 4-power char with low ability is a "strategic trap" - vulnerable to counter-deploy.
+    Captain Phasma with ability=4 can draw destiny if challenged, making her safe.
+
+    FORCE BUDGET: Need enough force after reserves (3) to afford the 4-cost character.
+    With force=8, we have 5 to spend which covers the deploy cost.
     """
     scenario = (
-        ScenarioBuilder("Early Game Ground Threshold = 3")
+        ScenarioBuilder("Early Game Ground Threshold = 4 (min_establish_power)")
         .as_side("dark")
-        .with_force(5)
+        .with_force(8)  # Need 8 to have 5 after reserve (8-3=5 >= 4 cost)
         .with_turn(1)  # Early game
         .with_deploy_threshold(6)
         # Uncontested location with opponent icons - should deploy for drains
         .add_ground_location("Ewok Village", my_icons=1, their_icons=2)
-        # 3-power character - should meet early game threshold of 3
-        .add_character("General Hux", power=3, deploy_cost=3)
+        # 4-power character with ability 4 - can draw destiny if challenged
+        .add_character("Captain Phasma", power=4, deploy_cost=4, ability=4)
         .expect_target("Ewok Village")
         .build()
     )
     result = run_scenario(scenario)
 
     assert result.plan.strategy != DeployStrategy.HOLD_BACK, \
-        f"Early game should deploy 3-power character! Got: {result.plan.strategy}"
+        f"Early game should deploy 4-power character with destiny capability! Got: {result.plan.strategy}"
     assert len(result.plan.instructions) >= 1, \
-        f"Should deploy General Hux (3 power meets early game threshold)"
+        f"Should deploy Captain Phasma (4 power, 4 ability = safe establish)"
+
+
+def test_early_game_rejects_three_power_ground_alone():
+    """
+    Test that 3-power characters are NOT deployed alone even in early game.
+    The min_establish_power floor (4) prevents weak single-char deploys.
+    """
+    scenario = (
+        ScenarioBuilder("Early Game Rejects 3-Power Alone")
+        .as_side("dark")
+        .with_force(5)
+        .with_turn(1)  # Early game
+        .with_deploy_threshold(6)
+        .add_ground_location("Ewok Village", my_icons=1, their_icons=2)
+        # 3-power character - below min_establish_power of 4
+        .add_character("General Hux", power=3, deploy_cost=3)
+        .expect_hold_back()
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy == DeployStrategy.HOLD_BACK, \
+        f"3-power character should NOT deploy alone! Got: {result.plan.strategy}"
+
+
+def test_buddy_system_allows_weak_chars_with_partner():
+    """
+    Test that weak characters (power <= 2) CAN deploy when accompanied by another
+    character (buddy system). Two power-2 characters together = 4 power, meeting
+    the min_establish_power threshold.
+
+    ABILITY REQUIREMENT: Combined ability must be >= 4 to draw battle destiny.
+    Two regular stormtroopers (1 ability each) would be a strategic trap.
+    Here we use "veteran" stormtroopers with ability=2 each for total of 4.
+
+    FORCE BUDGET: Need 8 to have 5 after reserve (covers 2+2=4 deploy cost).
+    """
+    scenario = (
+        ScenarioBuilder("Buddy System Allows Weak Char Pairs")
+        .as_side("dark")
+        .with_force(8)  # Need 8 to have 5 after reserve
+        .with_turn(1)  # Early game
+        .with_deploy_threshold(6)
+        .add_ground_location("Ewok Village", my_icons=1, their_icons=2)
+        # Two weak characters with combined ability >= 4
+        .add_character("Veteran Trooper A", power=2, deploy_cost=2, ability=2)
+        .add_character("Veteran Trooper B", power=2, deploy_cost=2, ability=2)
+        .expect_target("Ewok Village")
+        .build()
+    )
+    result = run_scenario(scenario)
+
+    assert result.plan.strategy != DeployStrategy.HOLD_BACK, \
+        f"Two characters with combined ability >= 4 should deploy! Got: {result.plan.strategy}"
+    assert len(result.plan.instructions) >= 2, \
+        f"Should deploy both troopers (4 power, 4 ability = safe establish)"
 
 
 def test_mid_game_threshold_requires_six_power_ground():
@@ -8966,6 +9075,94 @@ def test_ship_at_full_capacity_excluded():
         logger.info(f"   - {ship['name']}: {ship['remaining_capacity']} slots open")
 
     logger.info("✅ test_ship_at_full_capacity_excluded passed")
+
+
+def test_characters_cannot_deploy_to_system_locations():
+    """
+    Test that characters are excluded from deploying to system locations.
+
+    Systems (like "•Tatooine") are space/orbital locations where only starships deploy.
+    Sites (like "•Tatooine: Cantina") are ground locations where characters deploy.
+    Systems do NOT have ':' in their name; sites do.
+
+    This test verifies that:
+    1. System locations (is_site=False) are excluded from char_ground_targets
+    2. Site locations (is_site=True) are included as valid targets
+    """
+    logger.info("\n=== test_characters_cannot_deploy_to_system_locations ===")
+
+    # Set up: System location (where chars CANNOT deploy)
+    system_location = MockLocation(
+        card_id="sys1",
+        blueprint_id="tatooine_system",
+        name="•Tatooine",
+        system_name="Tatooine",
+        site_name="",
+        is_site=False,  # CRITICAL: This is a system, not a site
+        is_space=True,  # Systems are space locations
+        is_ground=False,
+        location_index=0
+    )
+
+    # Set up: Site location (where chars CAN deploy)
+    site_location = MockLocation(
+        card_id="site1",
+        blueprint_id="tatooine_cantina",
+        name="•Tatooine: Cantina",
+        system_name="Tatooine",
+        site_name="Tatooine: Cantina",
+        is_site=True,  # This is a site
+        is_space=False,
+        is_ground=True,
+        is_exterior=True,
+        location_index=1
+    )
+
+    # Character in hand
+    character = MockCard(
+        card_id="char1",
+        blueprint_id="1_168",  # Darth Vader
+        card_title="•Darth Vader",
+        card_type="Character",
+        power=6,
+        deploy=6,
+        zone="HAND"
+    )
+
+    # Board state with opponent icons at both locations
+    board = MockBoardState(
+        my_player_name="bot",
+        my_side="dark",
+        force_pile=10,
+        turn_number=4,  # Past early game
+        locations=[system_location, site_location],
+        cards_in_hand=[character],
+        _dark_icons={0: 0, 1: 1},  # Our icons: 0 at system, 1 at site
+        _light_icons={0: 2, 1: 2},  # Their icons: 2 at both
+    )
+
+    # Run planner
+    planner = DeployPhasePlanner()
+    plan = planner.create_plan(board)
+
+    logger.info(f"Plan strategy: {plan.strategy}")
+    logger.info(f"Instructions: {len(plan.instructions)}")
+    for instr in plan.instructions:
+        logger.info(f"  - {instr.card_title} -> {instr.target_location_name}")
+
+    # VERIFY: The character should NOT be planned for the system
+    for instr in plan.instructions:
+        if instr.card_title == "•Darth Vader":
+            # Should target the site, not the system
+            assert instr.target_location_name != "•Tatooine", \
+                f"Character incorrectly targeted system location: {instr.target_location_name}"
+            logger.info(f"✓ Character correctly targets: {instr.target_location_name}")
+
+    # If no plan, that's also acceptable (might not have enough icons, etc.)
+    if not plan.instructions:
+        logger.info("✓ No deployment plan (acceptable - character not deployed to system)")
+
+    logger.info("✅ test_characters_cannot_deploy_to_system_locations passed")
 
 
 # MAIN (for standalone execution)

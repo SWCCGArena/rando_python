@@ -13,6 +13,9 @@ import logging
 from .board_state import BoardState, LocationInPlay
 from .card_loader import get_card
 from .objective_handler import get_objective_handler
+from .strategic_state import StrategicState
+from . import game_state_logger
+from .deck_tracker import get_deck_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +143,9 @@ class EventProcessor:
         """
         event_type = event.get('type', '')
 
+        # Log ALL events to game state logger for replay/training data (except D which goes to decision_logger)
+        game_state_logger.log_game_event(event, event_type)
+
         # Log events at DEBUG level (app.py already logs important ones at INFO)
         if event_type not in ['GS', 'M', 'IP', 'CAC']:  # Skip very verbose events
             logger.debug(f"📬 Event type={event_type}: {dict(event.attrib)}")
@@ -239,6 +245,19 @@ class EventProcessor:
         card = self.board_state.cards_in_play.get(card_id)
         card_title = card.card_title if card else blueprint_id
         logger.debug(f"🃏 Card added: {card_title} ({blueprint_id}) to {zone}")
+
+        # === DECK TRACKING ===
+        # Track card zone transitions for probability calculations
+        is_my_card = owner == self.board_state.my_player_name
+        if is_my_card and not blueprint_id.startswith('-1_'):
+            tracker = get_deck_tracker()
+            if tracker.deck_loaded:
+                if zone == "HAND":
+                    # Card drawn to hand (from reserve or force pile)
+                    tracker.card_drawn(blueprint_id)
+                elif zone == "AT_LOCATION":
+                    # Card deployed to table
+                    tracker.card_deployed(blueprint_id)
 
         # === OPPONENT CARD TRACKING ===
         # Log opponent deployments at INFO level for strategy analysis
@@ -455,8 +474,22 @@ class EventProcessor:
 
         for cid in ids_to_remove:
             if cid.strip():
+                # Get card info before removal for deck tracking
+                card = self.board_state.cards_in_play.get(cid.strip())
+                blueprint_id = card.blueprint_id if card else None
+                owner = card.owner if card else None
+                zone = card.zone if card else None
+
                 self.board_state.remove_card(cid.strip())
                 logger.debug(f"➖ Removed card: {cid.strip()}")
+
+                # Track card loss/use for deck probability calculations
+                if blueprint_id and owner == self.board_state.my_player_name:
+                    tracker = get_deck_tracker()
+                    if tracker.deck_loaded:
+                        # Note: We don't know if going to lost or used pile here
+                        # The zone in the event tells us the destination
+                        tracker.card_lost(blueprint_id, from_zone="in_play")
 
     def _handle_mcip(self, event: ET.Element):
         """
@@ -488,20 +521,25 @@ class EventProcessor:
 
         Updates force piles, hand sizes, power at locations, generation.
         """
-        # Force generation
-        dark_gen = event.get('darkForceGeneration', '0')
-        light_gen = event.get('lightForceGeneration', '0')
-        self.board_state.dark_generation = int(dark_gen)
-        self.board_state.light_generation = int(light_gen)
+        # Force generation - only update if attribute is present in XML
+        # (GEMP only sends these in initial state, not in subsequent updates)
+        dark_gen_str = event.get('darkForceGeneration')
+        light_gen_str = event.get('lightForceGeneration')
 
-        # Set activation based on our side
-        if self.board_state.my_side == "dark":
-            self.board_state.activation = int(dark_gen)
-        elif self.board_state.my_side == "light":
-            self.board_state.activation = int(light_gen)
-        else:
-            # If side not yet known, use the larger value
-            self.board_state.activation = max(int(dark_gen), int(light_gen))
+        if dark_gen_str is not None:
+            self.board_state.dark_generation = int(dark_gen_str)
+        if light_gen_str is not None:
+            self.board_state.light_generation = int(light_gen_str)
+
+        # Set activation based on our side (only if we got new values)
+        if dark_gen_str is not None or light_gen_str is not None:
+            if self.board_state.my_side == "dark" and dark_gen_str is not None:
+                self.board_state.activation = int(dark_gen_str)
+            elif self.board_state.my_side == "light" and light_gen_str is not None:
+                self.board_state.activation = int(light_gen_str)
+            elif dark_gen_str is not None and light_gen_str is not None:
+                # If side not yet known, use the larger value
+                self.board_state.activation = max(int(dark_gen_str), int(light_gen_str))
 
         # Parse player zones
         player_zones = event.findall('.//playerZones')
@@ -513,11 +551,35 @@ class EventProcessor:
                 # My zones
                 matched_my_zones = True
                 new_force = int(zone_element.get('FORCE_PILE', '0'))
+                new_used = int(zone_element.get('USED_PILE', '0'))
+
+                # === DECK TRACKING: Force activation and recirculation ===
+                old_force = self.board_state.force_pile
+                old_used = self.board_state.used_pile
+
                 # Log if force changes significantly (for debugging)
-                if new_force != self.board_state.force_pile and new_force > 0:
-                    logger.debug(f"💰 Force pile updated: {self.board_state.force_pile} -> {new_force}")
+                if new_force != old_force and new_force > 0:
+                    logger.debug(f"💰 Force pile updated: {old_force} -> {new_force}")
+
+                # Track force activation (force pile increased)
+                if new_force > old_force:
+                    force_activated = new_force - old_force
+                    tracker = get_deck_tracker()
+                    if tracker.deck_loaded:
+                        tracker.force_activated(force_activated)
+                        logger.debug(f"📚 DeckTracker: {force_activated} force activated")
+
+                # Track recirculation (used pile decreased significantly without our turn ending)
+                # Recirculation happens when used pile goes under reserve deck
+                if new_used < old_used and old_used > 0:
+                    # Could be recirculation - used pile went down
+                    tracker = get_deck_tracker()
+                    if tracker.deck_loaded:
+                        tracker.force_recirculated()
+                        logger.debug(f"📚 DeckTracker: Recirculation detected (used: {old_used} -> {new_used})")
+
                 self.board_state.force_pile = new_force
-                self.board_state.used_pile = int(zone_element.get('USED_PILE', '0'))
+                self.board_state.used_pile = new_used
                 self.board_state.reserve_deck = int(zone_element.get('RESERVE_DECK', '0'))
                 self.board_state.lost_pile = int(zone_element.get('LOST_PILE', '0'))
                 self.board_state.out_of_play = int(zone_element.get('OUT_OF_PLAY', '0'))
@@ -623,6 +685,15 @@ class EventProcessor:
         # Reset force activated this turn when turn changes to us
         if participant_id == self.board_state.my_player_name:
             self.board_state.force_activated_this_turn = 0
+            # Note: GamePlan.on_turn_started() is called from _handle_phase_change()
+            # when turn_number actually changes (after GPC event updates it)
+
+            # Initialize strategic state if enabled and not yet created
+            if self.board_state.strategic_state is None:
+                from .strategy_config import get_config
+                if get_config().get('adaptive_strategy', 'enabled', True):
+                    self.board_state.strategic_state = StrategicState()
+                    logger.info("📈 Strategic State Engine initialized")
 
         logger.info(f"🔄 Turn: {participant_id}")
 
@@ -659,6 +730,20 @@ class EventProcessor:
                     self.board_state.strategy_controller.update_strategy(self.board_state)
                     logger.info(f"📊 Strategy updated for turn {new_turn}")
 
+                # Notify GamePlan of new turn (for goal setting and projection)
+                # This must happen AFTER turn_number is updated
+                if hasattr(self.board_state, 'game_plan') and self.board_state.game_plan:
+                    self.board_state.game_plan.on_turn_started(self.board_state)
+
+                # Notify strategic state of new turn (for trajectory tracking)
+                if self.board_state.strategic_state:
+                    self.board_state.strategic_state.on_turn_start(self.board_state)
+
+                # Notify deck tracker of new turn (for knowledge freshness tracking)
+                tracker = get_deck_tracker()
+                if tracker.deck_loaded:
+                    tracker.on_turn_start(new_turn)
+
         # Notify strategy controller of phase change (for location check optimization)
         if self.board_state.strategy_controller:
             self.board_state.strategy_controller.on_phase_change(phase)
@@ -668,6 +753,16 @@ class EventProcessor:
             if self.board_state.my_side and self.board_state.strategy_controller.my_side != self.board_state.my_side:
                 self.board_state.strategy_controller.my_side = self.board_state.my_side
                 logger.info(f"📊 Strategy controller: side set to {self.board_state.my_side}")
+
+        # Control phase - update strategic state drain trajectory
+        # This is after drains are calculated, so it's the right time to track drain economy
+        if 'Control' in phase and self.board_state.strategic_state:
+            self.board_state.strategic_state.update_drain_trajectory(self.board_state)
+            logger.info(f"📈 Strategic state: drain trajectory updated")
+
+        # Deploy phase - notify GamePlan for multi-turn planning
+        if 'Deploy' in phase and hasattr(self.board_state, 'game_plan') and self.board_state.game_plan:
+            self.board_state.game_plan.on_deploy_phase_starting(self.board_state)
 
         logger.info(f"⏭️  Phase: {phase} (turn {self.board_state.turn_number})")
 

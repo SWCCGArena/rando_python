@@ -6,6 +6,7 @@ Saves user preferences to a JSON file so they persist across restarts.
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -14,10 +15,13 @@ logger = logging.getLogger(__name__)
 # Settings file location (in logs directory, not committed to git)
 SETTINGS_FILE = Path(__file__).parent / "logs" / "user_settings.json"
 
+# In local fast mode, auto-start by default for bot-vs-bot testing
+_local_fast = os.environ.get('LOCAL_FAST_MODE', 'false').lower() == 'true'
+
 # Default settings
 DEFAULTS = {
-    "gemp_server_url": "http://localhost:8082/gemp-swccg-server/",
-    "auto_start": False,
+    "gemp_server_url": "http://localhost/gemp-swccg-server/",
+    "auto_start": _local_fast,  # Auto-start in local fast mode
 }
 
 # In-memory cache to avoid reading file on every call

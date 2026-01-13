@@ -11,7 +11,7 @@ This document captures cases where the bot made a deployment plan but couldn't e
 | Pilot-ship card_id tracking | - | - | **FIXED** (PCIP event update) |
 | Location card_id tracking | - | - | **FIXED** (pending location update) |
 | Deploy restriction enforcement | ~14 | 4 games | **FIXED** (restriction check in STEP 4) |
-| System location failures | ~16 | 5 games | Needs fix |
+| System location failures | ~16 | 5 games | **FIXED** (is_site check) |
 | Total plan failures | ~97 | 15 games | |
 | Backup targets used successfully | 32 | - | Working |
 
@@ -212,13 +212,13 @@ Now Kalit can only be planned for Tatooine locations, not Coruscant or other sys
 
 ---
 
-## Issue 2: System Location Deployment (16 occurrences)
+## Issue 2: System Location Deployment (16 occurrences) - **FIXED**
 
 ### The Problem
 
 Characters **cannot deploy directly to system locations** (like •Tatooine, •Yavin 4). They must deploy to **sites** (like •Tatooine: Cantina) or **docking bays**.
 
-But the planner sometimes targets system locations:
+But the planner was targeting system locations:
 
 ```
 Plan: •Tey How -> •Tatooine (id=186)
@@ -247,13 +247,23 @@ Result: Neither primary nor backup available
 
 ### Root Cause
 
-The deploy planner includes system locations in its target list for characters, but GEMP correctly only offers sites/docking bays for character deployment.
+The deploy planner was including system locations in its target list for characters, but GEMP correctly only offers sites/docking bays for character deployment.
 
-### Fix Required
+### The Fix
 
-When planning character deployment:
-- Filter out system locations (locations without ":" in the name)
-- Only include sites and docking bays as valid character targets
+Added `loc.is_site` check to all character ground target filtering in `deploy_planner.py`:
+- Main `char_ground_targets` list (line ~3730)
+- Newly deployed locations loop (line ~3762)
+- `crushable_ground` list (line ~3784)
+- `reinforceable_ground` list (line ~3807)
+- Vehicle `ground_targets` list (line ~4760)
+
+Also added logging to show when systems are excluded:
+```python
+excluded_systems = [loc.name for loc in locations if loc.is_ground and not loc.is_site]
+if excluded_systems:
+    logger.info(f"   ⏭️ System locations (chars need sites): {excluded_systems}")
+```
 
 ---
 

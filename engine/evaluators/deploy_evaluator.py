@@ -317,6 +317,21 @@ class DeployEvaluator(ActionEvaluator):
             logger.debug(f"🚀 DeployEvaluator skipping - not our turn")
             return False
 
+        # For CARD_ACTION_CHOICE, require at least one deploy action
+        # This prevents claiming "Optional responses" decisions with 0 actions
+        # which caused 28+ unnecessary passes per game
+        if context.decision_type == "CARD_ACTION_CHOICE":
+            if not context.action_ids:
+                logger.debug(f"🚀 DeployEvaluator skipping - no actions available")
+                return False
+            has_deploy_action = any(
+                "Deploy" in (context.action_texts[i] if i < len(context.action_texts) else "")
+                for i in range(len(context.action_ids))
+            )
+            if not has_deploy_action:
+                logger.debug(f"🚀 DeployEvaluator skipping - no deploy actions in decision")
+                return False
+
         # For CARD_SELECTION, only evaluate if decision text mentions deploying
         # (avoids incorrectly handling sabacc, forfeit, etc. as deploy decisions)
         if context.decision_type == "CARD_SELECTION":
@@ -358,6 +373,12 @@ class DeployEvaluator(ActionEvaluator):
         - If plan is HOLD_BACK, all deploy actions get strong penalty
         - Target locations get bonuses based on the plan
         """
+        # Belt-and-suspenders: early exit if no actions to evaluate
+        # This complements the can_evaluate() guard
+        if not context.action_ids:
+            logger.debug(f"📋 No deploy actions to evaluate")
+            return []
+
         actions = []
         bs = context.board_state
 
@@ -863,6 +884,24 @@ class DeployEvaluator(ActionEvaluator):
                             elif their_power > 0 and card_power > 0 and their_power >= card_power * 3 and my_power == 0:
                                 action.add_reasoning(f"Outmatched! {card_power} power vs {their_power} opponent", -200.0)
                                 logger.warning(f"⚠️ BACKUP OUTMATCHED: {deploying_card.title} ({card_power}p) alone vs {their_power}")
+
+                            # Check for 0 opponent icons = no strategic value!
+                            # If backup has no drain potential, strongly penalize
+                            backup_their_icons = 0
+                            if backup_loc.blueprint_id:
+                                backup_meta = get_card(backup_loc.blueprint_id)
+                                if backup_meta:
+                                    my_side = bs.my_side or "dark"
+                                    if my_side.lower() == "dark":
+                                        backup_their_icons = backup_meta.light_side_icons or 0
+                                    else:
+                                        backup_their_icons = backup_meta.dark_side_icons or 0
+
+                            if backup_their_icons == 0 and their_power == 0:
+                                # No opponent icons AND no opponent presence = pointless location!
+                                action.add_reasoning(f"BACKUP has 0 opponent icons - no drain value!", -150.0)
+                                logger.warning(f"⚠️ BACKUP NO VALUE: {backup_name} has 0 opponent icons - skipping")
+
                     elif backup_id and backup_id in context.card_ids:
                         # Backup is available but this isn't it - penalize
                         action.add_reasoning(f"Not backup target (want {backup_name})", -100.0)
@@ -926,6 +965,23 @@ class DeployEvaluator(ActionEvaluator):
                                                   "starship" if target_meta.is_starship else "unknown"
                                     action.add_reasoning(f"WRONG TARGET TYPE! {weapon_target_type} weapon on {target_type}", -500.0)
                                     logger.warning(f"⚠️  {deploying_card.title} ({weapon_target_type}) cannot attach to {target_name} ({target_type})")
+
+                        # =====================================================
+                        # RULE 3: Don't deploy character weapons to pilots aboard ships
+                        # Pilots aboard ships can't use character weapons effectively
+                        # The character is "in" the ship, not on ground where they could fight
+                        # =====================================================
+                        if is_weapon and deploying_card and target_card.target_card_id:
+                            weapon_target_type = deploying_card.weapon_target_type
+                            if weapon_target_type == "character":
+                                # Character is attached to something - check if it's a ship/vehicle
+                                parent_card = bs.cards_in_play.get(target_card.target_card_id)
+                                if parent_card:
+                                    parent_meta = get_card(parent_card.blueprint_id)
+                                    if parent_meta and (parent_meta.is_starship or parent_meta.is_vehicle):
+                                        parent_name = parent_card.card_title or parent_card.blueprint_id
+                                        action.add_reasoning(f"DON'T DEPLOY WEAPON TO PILOT! {target_name} is piloting {parent_name}", -500.0)
+                                        logger.warning(f"⚠️  {deploying_card.title} cannot be used by {target_name} who is piloting {parent_name}")
 
                         # Prefer our own cards over opponent's (if weapon can go on either)
                         if target_card.owner == bs.my_player_name:

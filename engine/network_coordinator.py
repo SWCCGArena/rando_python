@@ -69,12 +69,17 @@ class NetworkCoordinator:
         self.start_time = time.time()  # When coordinator was initialized
         self.request_history = deque(maxlen=100)  # Last 100 requests
 
-        # Rate limit failsafe
+        # Rate limit failsafe (disabled in local fast mode)
+        import os
+        self.local_fast_mode = os.environ.get('LOCAL_FAST_MODE', 'false').lower() == 'true'
         self.MAX_REQUESTS_PER_MINUTE = 40
         self.rate_limit_exceeded = False
         self.current_game_id: Optional[str] = None
 
-        logger.info(f"NetworkCoordinator initialized (delays: quick={self.DELAY_QUICK}s, normal={self.DELAY_NORMAL}s, bg={self.DELAY_BACKGROUND}s)")
+        if self.local_fast_mode:
+            logger.info(f"NetworkCoordinator initialized in LOCAL FAST MODE (no delays, no rate limits)")
+        else:
+            logger.info(f"NetworkCoordinator initialized (delays: quick={self.DELAY_QUICK}s, normal={self.DELAY_NORMAL}s, bg={self.DELAY_BACKGROUND}s)")
 
     def _apply_delay(self, delay_type: str, no_long_delay: bool = None):
         """
@@ -84,6 +89,10 @@ class NetworkCoordinator:
             delay_type: Type of delay ('decision', 'background', 'minimal')
             no_long_delay: For decisions, whether quick response is expected
         """
+        # Skip all delays in local fast mode
+        if self.local_fast_mode:
+            return
+
         if delay_type == 'decision':
             # Use noLongDelay to determine response speed
             delay = self.DELAY_QUICK if no_long_delay else self.DELAY_NORMAL
@@ -138,7 +147,8 @@ class NetworkCoordinator:
                        f"{calls_per_min:.1f} calls/min")
 
             # Rate limit failsafe - check after 60+ requests to avoid false positives at startup
-            if self.total_requests >= 60 and calls_per_min > self.MAX_REQUESTS_PER_MINUTE:
+            # Skip in local fast mode
+            if not self.local_fast_mode and self.total_requests >= 60 and calls_per_min > self.MAX_REQUESTS_PER_MINUTE:
                 self._trigger_rate_limit_failsafe(calls_per_min)
 
     def _trigger_rate_limit_failsafe(self, calls_per_min: float):

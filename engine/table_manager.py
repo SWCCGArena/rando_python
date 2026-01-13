@@ -136,6 +136,18 @@ class TableManagerConfig:
     prefer_user_decks: bool = True             # Use user's personal decks by default
     deck_rotation: bool = False                # False = random selection, True = rotate in order
 
+    # Joiner mode: instead of creating tables, join existing open tables
+    # Used for bot-vs-bot testing where one bot creates and one bot joins
+    joiner_mode: bool = False
+
+    # Joiner target prefix: only join tables whose name starts with this prefix
+    # Used for bot-vs-bot testing with multiple bot pairs running in parallel
+    # e.g., "BotA" joiner will only join "BotA: Astrogation Chart XXXX" tables
+    joiner_target_prefix: str = ""
+
+    # Max games to play before stopping (0 = unlimited)
+    max_games: int = 0
+
 
 @dataclass
 class TableManagerState:
@@ -156,6 +168,9 @@ class TableManagerState:
 
     # Deck rotation
     deck_index: int = 0
+
+    # Joiner mode: table pending join
+    pending_join_table: Optional[object] = None
 
 
 class TableManager:
@@ -219,8 +234,13 @@ class TableManager:
             my_username: Bot's username
 
         Returns:
-            Action string: 'create_table', 'wait', 'join_game', 'none'
+            Action string: 'create_table', 'wait', 'join_game', 'stop', 'none'
         """
+        # Check if we've reached max games limit
+        if self.config.max_games > 0 and self.state.games_played >= self.config.max_games:
+            logger.info(f"🛑 Reached max games limit ({self.config.max_games}), stopping")
+            return 'stop'
+
         # Find our table in the list
         my_table = self._find_my_table(tables, my_username)
 
@@ -270,11 +290,49 @@ class TableManager:
 
             self.state.state = TableState.NO_TABLE
 
+            # Joiner mode: look for open tables to join instead of creating
+            if self.config.joiner_mode:
+                open_table = self._find_open_table(tables, my_username)
+                if open_table:
+                    self.state.pending_join_table = open_table
+                    return 'join_table'
+                else:
+                    logger.debug("Joiner mode: no open tables found, waiting...")
+                    return 'wait'
+
             # Check if we should create a table
             if self._should_create_table():
                 return 'create_table'
             else:
                 return 'wait'  # Backoff active
+
+    def _find_open_table(self, tables: List, my_username: str):
+        """Find an open table we can join (has 1 player waiting for opponent)"""
+        target_prefix = self.config.joiner_target_prefix
+        for table in tables:
+            players = table.players if hasattr(table, 'players') else []
+            # Skip if we're already in this table
+            if any((p.name if hasattr(p, 'name') else str(p)) == my_username for p in players):
+                continue
+
+            # Filter by table name prefix if configured (for multi-bot-pair testing)
+            if target_prefix:
+                table_name = getattr(table, 'table_name', '')
+                if not table_name.startswith(target_prefix):
+                    continue
+
+            # Look for tables with exactly 1 player (waiting for opponent)
+            if len(players) == 1:
+                status = getattr(table, 'status', '')
+                # Skip if game already started or finished
+                if status not in ('finished', 'playing'):
+                    host = players[0]
+                    host_name = host.name if hasattr(host, 'name') else str(host)
+                    host_side = getattr(host, 'side', None)
+                    table_name = getattr(table, 'table_name', table.table_id)
+                    logger.info(f"Found open table to join: {table.table_id} '{table_name}' (host: {host_name}, side: {host_side})")
+                    return table
+        return None
 
     def _find_my_table(self, tables: List, my_username: str):
         """Find our table in the list"""
@@ -325,8 +383,8 @@ class TableManager:
         """
         self.state.state = TableState.CREATING
 
-        # Select deck
-        deck = self._select_deck()
+        # Select deck - creator is always Dark side
+        deck = self._select_deck(required_side='dark')
         if not deck:
             logger.error("No decks available for table creation!")
             self._record_failure("No decks available")
@@ -342,6 +400,9 @@ class TableManager:
         logger.info(f"Creating table '{table_name}' with deck: {deck_name} (library={is_library})")
 
         try:
+            # Store deck name before calling create_table so it's available even if ID extraction fails
+            self.state.current_deck_name = deck_name
+
             table_id = self.client.create_table(
                 deck_name,
                 table_name,
@@ -351,7 +412,6 @@ class TableManager:
             if table_id:
                 logger.info(f"✅ Table created: {table_id}")
                 self.state.current_table_id = table_id
-                self.state.current_deck_name = deck_name
                 self.state.table_created_time = time.time()
                 self.state.state = TableState.WAITING
                 self.state.consecutive_failures = 0
@@ -364,7 +424,10 @@ class TableManager:
 
                 return table_id
             else:
-                self._record_failure("create_table returned None")
+                # Table ID extraction failed, but table may have been created
+                # Keep deck_name set (already done above) so deck analysis can still work
+                logger.warning(f"Table ID not retrieved, but deck '{deck_name}' stored for analysis")
+                self._record_failure("create_table returned None (ID extraction failed)")
                 return None
 
         except Exception as e:
@@ -372,14 +435,108 @@ class TableManager:
             logger.error(f"Table creation failed: {e}")
             return None
 
-    def _select_deck(self):
+    def join_table(self) -> Optional[str]:
         """
-        Select a deck for table creation.
+        Join an existing open table (joiner mode).
 
-        Priority (matching C# behavior):
-        1. User's personal decks (prefer_user_decks=True) - these are bot-optimized
-        2. Library decks as fallback
+        Uses the pending_join_table from state that was set by get_required_action.
+        Automatically selects a deck of the opposite side from the host.
+
+        Returns:
+            Table ID if successful, None if failed
         """
+        table = self.state.pending_join_table
+        if not table:
+            logger.error("No pending table to join!")
+            return None
+
+        table_id = table.table_id if hasattr(table, 'table_id') else str(table)
+
+        # Determine required side (opposite of host)
+        required_side = None
+        players = table.players if hasattr(table, 'players') else []
+        if players:
+            host = players[0]
+            host_side = getattr(host, 'side', None)
+            if host_side == 'light':
+                required_side = 'dark'
+            elif host_side == 'dark':
+                required_side = 'light'
+            logger.info(f"Host is playing {host_side}, we need {required_side} deck")
+
+        # Select deck for joining (with required side)
+        deck = self._select_deck(required_side=required_side)
+        if not deck:
+            logger.error(f"No {required_side or 'any'} decks available for joining table!")
+            self._record_failure(f"No {required_side} decks available")
+            return None
+
+        deck_name = deck.name if hasattr(deck, 'name') else str(deck)
+        deck_side = getattr(deck, 'side', 'unknown')
+        is_library = deck in self.library_decks
+
+        logger.info(f"Joining table '{table_id}' with deck: {deck_name} (side={deck_side}, library={is_library})")
+
+        try:
+            success = self.client.join_table(table_id, deck_name, is_library=is_library)
+
+            if success:
+                logger.info(f"✅ Joined table: {table_id}")
+                self.state.current_table_id = table_id
+                self.state.current_deck_name = deck_name
+                self.state.table_created_time = time.time()
+                self.state.state = TableState.WAITING
+                self.state.consecutive_failures = 0
+                self.state.pending_join_table = None
+
+                # Persist state
+                _save_table_state(table_id, deck_name)
+
+                if self._on_table_created:
+                    self._on_table_created(table_id, deck_name)
+
+                return table_id
+            else:
+                self._record_failure("join_table returned False")
+                self.state.pending_join_table = None
+                return None
+
+        except Exception as e:
+            self._record_failure(str(e))
+            self.state.pending_join_table = None
+            logger.error(f"Table join failed: {e}")
+            return None
+
+    def _select_deck(self, required_side: Optional[str] = None):
+        """
+        Select a deck for table creation or joining.
+
+        Args:
+            required_side: If specified, only select decks of this side ('light' or 'dark')
+
+        Priority:
+        1. FIXED_DECK_NAME environment variable (for testing)
+        2. User's personal decks (prefer_user_decks=True) - these are bot-optimized
+        3. Library decks as fallback
+        """
+        # Check for fixed deck from environment (for reproducible testing)
+        fixed_deck_name = os.environ.get('FIXED_DECK_NAME')
+        if fixed_deck_name:
+            # Search all decks for the fixed deck
+            all_decks = self.user_decks + self.library_decks
+            for deck in all_decks:
+                deck_name = deck.name if hasattr(deck, 'name') else str(deck)
+                if deck_name == fixed_deck_name:
+                    deck_side = getattr(deck, 'side', 'unknown')
+                    # Verify side matches if required
+                    if required_side and deck_side != required_side:
+                        logger.warning(f"Fixed deck '{fixed_deck_name}' is {deck_side}, but need {required_side}!")
+                        # Still use it - user explicitly requested this deck
+                    logger.info(f"🔒 Using FIXED deck: '{deck_name}' (side={deck_side})")
+                    return deck
+            logger.error(f"Fixed deck '{fixed_deck_name}' not found in available decks!")
+            # Fall through to normal selection
+
         decks = []
 
         if self.config.prefer_user_decks and self.user_decks:
@@ -393,6 +550,20 @@ class TableManager:
         elif self.user_decks:
             # If prefer_user_decks is False but no library decks, use user decks
             decks = self.user_decks
+
+        if not decks:
+            return None
+
+        # Filter by required side if specified
+        if required_side:
+            filtered_decks = [d for d in decks if getattr(d, 'side', None) == required_side]
+            logger.debug(f"Filtered to {len(filtered_decks)} {required_side} decks (from {len(decks)} total)")
+            if not filtered_decks:
+                # Try library decks as fallback
+                if decks != self.library_decks and self.library_decks:
+                    filtered_decks = [d for d in self.library_decks if getattr(d, 'side', None) == required_side]
+                    logger.debug(f"Fallback: {len(filtered_decks)} {required_side} library decks")
+            decks = filtered_decks
 
         if not decks:
             return None

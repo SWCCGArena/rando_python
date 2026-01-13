@@ -393,6 +393,10 @@ class TestMetadataFallback:
         mock_card_meta.power_value = 6
         mock_card_meta.is_unique = True
         mock_card_meta.ability_value = 6
+        # Gametext properties
+        mock_card_meta.has_attrition_immunity = False
+        mock_card_meta.immune_attrition_threshold = 0
+        mock_card_meta.draws_extra_destiny = 0
         mock_get_card.return_value = mock_card_meta
 
         context = create_forfeit_context(bs, ["1"])

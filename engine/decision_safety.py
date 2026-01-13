@@ -463,6 +463,13 @@ class DecisionTracker:
         self.last_action_choice_key: str = ""
         self.last_action_choice_response: str = ""
 
+        # Track current turn for clearing blocked responses
+        self.last_turn: int = 0
+
+        # Persistent blocked responses that last across phases within a turn
+        # Key: card_id or action_key, Value: set of blocked action texts
+        self.turn_blocked_actions: dict = {}
+
     def _decision_key(self, decision_type: str, decision_text: str) -> str:
         """Create a unique key for a decision"""
         # Use first 60 chars of text to identify the decision
@@ -489,6 +496,13 @@ class DecisionTracker:
         cards_in_play = len(board_state.cards_in_play) if hasattr(board_state, 'cards_in_play') else 0
 
         new_hash = f"{hand_size}:{force_pile}:{reserve_deck}:{turn}:{cards_in_play}"
+
+        # Check for turn change - clear turn-specific blocked actions
+        if turn != self.last_turn:
+            if self.turn_blocked_actions:
+                logger.info(f"🔄 Turn changed ({self.last_turn} → {turn}) - clearing {len(self.turn_blocked_actions)} blocked action entries")
+            self.turn_blocked_actions.clear()
+            self.last_turn = turn
 
         if new_hash != self.last_state_hash:
             if self.last_state_hash and self.sequence_repeat_count > 0:
@@ -627,7 +641,8 @@ class DecisionTracker:
         Note: Empty string (pass) is never blocked since passing can't cause loops.
         """
         key = self._decision_key(decision_type, decision_text)
-        blocked = self.blocked_responses.get(key, set())
+        # Combine both immediate blocked_responses and turn-persistent blocks
+        blocked = self.blocked_responses.get(key, set()) | self.turn_blocked_actions.get(key, set())
         # Never block empty response (pass) - passing can't cause loops
         return blocked - {"", None}
 
@@ -745,6 +760,12 @@ class DecisionTracker:
             if self.last_action_choice_key not in self.blocked_responses:
                 self.blocked_responses[self.last_action_choice_key] = set()
             self.blocked_responses[self.last_action_choice_key].add(self.last_action_choice_response)
+
+            # Also add to turn_blocked_actions for persistence across phases
+            if self.last_action_choice_key not in self.turn_blocked_actions:
+                self.turn_blocked_actions[self.last_action_choice_key] = set()
+            self.turn_blocked_actions[self.last_action_choice_key].add(self.last_action_choice_response)
+
             logger.warning(
                 f"🚫 Blocking action '{self.last_action_choice_response}' for "
                 f"'{self.last_action_choice_key[:50]}' - target selection was cancelled"
@@ -763,6 +784,8 @@ class DecisionTracker:
         self.sequence_repeat_count = 0
         self.detected_loop_length = 0
         self.blocked_responses.clear()
+        self.turn_blocked_actions.clear()
         self.last_phase = ""
+        self.last_turn = 0
         self.last_action_choice_key = ""
         self.last_action_choice_response = ""

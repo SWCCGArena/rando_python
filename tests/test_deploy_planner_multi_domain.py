@@ -77,6 +77,9 @@ class MockBoardState:
     # Life force components
     reserve_deck: int = 30
     used_pile: int = 10
+    # Hold-back tracking
+    consecutive_hold_turns: int = 0
+    strategic_state: object = None
 
     def is_my_turn(self) -> bool:
         return True
@@ -111,6 +114,30 @@ class MockCardMetadata:
     # Force icons for locations
     light_side_icons: int = 1
     dark_side_icons: int = 1
+    # Pilot adds power
+    pilot_adds_power: int = 0
+
+    # Gametext parsed properties (for gametext parser support)
+    has_attrition_immunity: bool = False
+    immune_attrition_threshold: int = 0
+    draws_extra_destiny: int = 0
+    is_immune_to_sense: bool = False
+    is_immune_to_alter: bool = False
+    has_targeting_immunity: bool = False
+
+    @property
+    def parsed(self):
+        """Mock parsed gametext - returns object with gametext attributes."""
+        class MockParsedGametext:
+            def __init__(self, card):
+                self.immune_attrition = card.immune_attrition_threshold
+                self.immune_to_sense = card.is_immune_to_sense
+                self.immune_to_alter = card.is_immune_to_alter
+                self.may_not_be_targeted = card.has_targeting_immunity
+                self.deploy_reduction = 0
+                self.force_drain_bonus = 0
+                self.draws_extra_destiny = card.draws_extra_destiny
+        return MockParsedGametext(self)
 
 
 # Card database for tests

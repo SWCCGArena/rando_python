@@ -41,6 +41,9 @@ class ActionTextEvaluator(ActionEvaluator):
 
     def __init__(self):
         super().__init__("ActionText")
+        # Track barriered targets to avoid playing multiple barriers on same card
+        self._barriered_targets: set = set()
+        self._barrier_turn: int = 0
 
     def _extract_blueprint_from_text(self, action_text: str) -> Optional[str]:
         """
@@ -142,8 +145,15 @@ class ActionTextEvaluator(ActionEvaluator):
         return None
 
     def can_evaluate(self, context: DecisionContext) -> bool:
-        """This evaluator can handle any CARD_ACTION_CHOICE or ACTION_CHOICE"""
-        return context.decision_type in ['CARD_ACTION_CHOICE', 'ACTION_CHOICE']
+        """This evaluator can handle CARD_ACTION_CHOICE, ACTION_CHOICE, and certain MULTIPLE_CHOICE"""
+        if context.decision_type in ['CARD_ACTION_CHOICE', 'ACTION_CHOICE']:
+            return True
+        # Also handle MULTIPLE_CHOICE for capacity slot decisions
+        if context.decision_type == 'MULTIPLE_CHOICE':
+            decision_text = context.decision_text.lower() if context.decision_text else ""
+            if "capacity slot" in decision_text:
+                return True
+        return False
 
     def evaluate(self, context: DecisionContext) -> List[EvaluatedAction]:
         """Evaluate actions based on text patterns"""
@@ -162,6 +172,38 @@ class ActionTextEvaluator(ActionEvaluator):
                 display_text=action_text
             )
 
+            # ========== Skip ALL Deploy Actions ==========
+            # Deploy actions should be handled EXCLUSIVELY by deploy_evaluator.
+            # If we score them here (even at 0.0), CombinedEvaluator might pick
+            # our 0.0 over deploy_evaluator's negative score (e.g., -100 for
+            # "not in plan" or -150 for HOLD_BACK).
+            # Skip ALL deploy actions, not just HOLD_BACK ones.
+            if action_text == "Deploy" or (action_text.startswith("Deploy ") and "from" not in action_text.lower()):
+                # Skip this action entirely - let deploy_evaluator handle it
+                continue
+
+            # ========== Capacity Slot Selection (Pilot vs Passenger) ==========
+            # When shuttling a character aboard a ship, ALWAYS prefer pilot slot!
+            # - Pilots add their power to the ship (HUGE benefit)
+            # - Passengers contribute NOTHING (no power, just along for the ride)
+            # This is one of the most clear-cut decisions in the game.
+            if "capacity slot" in text_lower:
+                if "pilot capacity slot" in text_lower:
+                    # Pilot slot - STRONGLY prefer this for anyone with pilot ability
+                    action.score = 100.0
+                    action.add_reasoning("Pilot slot adds power to ship!", 100.0)
+                    action.action_type = ActionType.MOVE
+                    logger.info(f"✅ PILOT SLOT: Strongly preferring pilot capacity (+100)")
+                elif "passenger capacity slot" in text_lower:
+                    # Passenger slot - BAD choice for pilots (no power contribution)
+                    # Only use if pilot slots are full
+                    action.score = VERY_BAD_DELTA
+                    action.add_reasoning("Passenger gives NO power bonus!", VERY_BAD_DELTA)
+                    action.action_type = ActionType.MOVE
+                    logger.warning(f"⚠️ PASSENGER SLOT: Penalizing - no power contribution ({VERY_BAD_DELTA})")
+                actions.append(action)
+                continue
+
             # ========== Reserve Deck Check Limiting ==========
             # Penalize reserve deck checks if we've already checked this turn
             if game_strategy and ("reserve" in text_lower or "peek" in text_lower):
@@ -171,6 +213,32 @@ class ActionTextEvaluator(ActionEvaluator):
                         f"Already checked reserve {game_strategy.reserve_checks_this_turn}x this turn",
                         BAD_DELTA
                     )
+
+            # ========== Target-Requiring Abilities (Often Fail) ==========
+            # "A Few Maneuvers" card ability - requires starship target
+            # Often gets cancelled because no valid target exists
+            # Deprioritize to avoid wasting time with blocked responses
+            if "add 2 to hyperspeed and maneuver" in text_lower:
+                # Check if we have any starships in play
+                has_starship = False
+                if bs:
+                    for card in bs.cards_in_play.values():
+                        if card.owner == bs.my_player_name:
+                            card_meta = get_card(card.blueprint_id)
+                            if card_meta and card_meta.is_starship:
+                                has_starship = True
+                                break
+
+                if has_starship:
+                    # We have a starship, might work - small bonus
+                    action.score = 5.0
+                    action.add_reasoning("A Few Maneuvers - have starship target", 5.0)
+                else:
+                    # No starship in play - will definitely fail
+                    action.score = BAD_DELTA
+                    action.add_reasoning("A Few Maneuvers - no starship target", BAD_DELTA)
+                actions.append(action)
+                continue  # Skip further evaluation
 
             # ========== Force Activation ==========
             if action_text == "Activate Force":
@@ -270,14 +338,15 @@ class ActionTextEvaluator(ActionEvaluator):
                 if drain_amount == -1 and location:
                     card_meta = get_card(location.blueprint_id)
                     if card_meta:
-                        # Get my force icons from static card data
+                        # Get OPPONENT force icons from static card data
+                        # Force drain value = OPPONENT's icons at the location
                         my_side = bs.my_side if bs else "dark"
                         if my_side.lower() == "dark":
-                            static_icons = card_meta.dark_side_icons
+                            static_icons = card_meta.light_side_icons  # Dark drains for light icons
                         else:
-                            static_icons = card_meta.light_side_icons
+                            static_icons = card_meta.dark_side_icons   # Light drains for dark icons
 
-                        # If static card shows 0 icons for my side, drain will be 0
+                        # If opponent has 0 icons at this location, drain will be 0
                         if static_icons == 0:
                             drain_amount = 0
                             logger.info(f"⚠️  Force drain at {location_name}: 0 icons (from card database)")
@@ -299,26 +368,68 @@ class ActionTextEvaluator(ActionEvaluator):
                 if bs and hasattr(bs, 'strategy_controller') and bs.strategy_controller:
                     under_battle_order = bs.strategy_controller.under_battle_order_rules
 
-                if under_battle_order:
-                    # Check if we have expensive cards in hand that we should save for
-                    has_expensive_card = False
-                    if bs and hasattr(bs, 'cards_in_hand'):
-                        for card in bs.cards_in_hand:
-                            if card.blueprint_id:
-                                card_data = get_card(card.blueprint_id)
-                                if card_data and card_data.deploy_value and card_data.deploy_value > 6:
-                                    has_expensive_card = True
-                                    logger.debug(f"Have expensive card in hand: {card_data.title} (deploy {card_data.deploy_value})")
-                                    break
+                # Check if we have deployable cards - if not, drains are our only pressure!
+                has_deployable_card = False
+                has_affordable_expensive_card = False
+                force_available = bs.force_pile if bs else 0
 
-                    if has_expensive_card:
-                        # Don't pay 3 extra force when we have expensive cards to deploy
+                if bs and hasattr(bs, 'cards_in_hand'):
+                    for card in bs.cards_in_hand:
+                        if card.blueprint_id:
+                            card_data = get_card(card.blueprint_id)
+                            if card_data and card_data.deploy_value:
+                                deploy_cost = card_data.deploy_value
+                                # Check if it's a character/starship we could deploy
+                                is_unit = card_data.card_type in ['Character', 'Starship', 'Vehicle']
+
+                                # Check if it's unique and already on board
+                                is_unique_on_board = False
+                                if card_data.is_unique and hasattr(bs, 'cards_in_play'):
+                                    for cip in bs.cards_in_play.values():
+                                        if cip.blueprint_id == card.blueprint_id:
+                                            is_unique_on_board = True
+                                            break
+
+                                if is_unit and not is_unique_on_board:
+                                    if deploy_cost <= force_available:
+                                        has_deployable_card = True
+                                    if deploy_cost > 6 and deploy_cost <= force_available:
+                                        has_affordable_expensive_card = True
+
+                if under_battle_order:
+                    if has_affordable_expensive_card:
+                        # Don't pay 3 extra force when we have expensive cards we CAN deploy
                         action.score = VERY_BAD_DELTA
-                        action.add_reasoning("Under Battle Order - saving force for expensive card", VERY_BAD_DELTA)
+                        action.add_reasoning("Under Battle Order - saving force for affordable expensive card", VERY_BAD_DELTA)
+                    elif not has_deployable_card:
+                        # NO deployable cards - drains are our only pressure! BOOST them!
+                        action.score = VERY_GOOD_DELTA + 20.0
+                        action.add_reasoning(f"Under Battle Order but NO deployable cards - drain {drain_amount} is our only pressure!", VERY_GOOD_DELTA + 20.0)
+                        logger.info(f"🔥 FORCE DRAIN BOOST: No deployable cards, boosting drain at {location_name}")
                     elif drain_amount >= 0 and drain_amount < 2:
-                        # Under Battle Order - avoid low force drains (< 2)
-                        action.score = VERY_BAD_DELTA
-                        action.add_reasoning(f"Under Battle Order - drain {drain_amount} too low", VERY_BAD_DELTA)
+                        # Under Battle Order - low force drains (< 2) are inefficient
+                        # But if we have plenty of force, still better than passing
+                        battle_order_cost = 3
+                        force_after_drain = force_available - battle_order_cost
+
+                        # Check if we'd still have enough force to deploy after draining
+                        # Estimate: need at least 4 force to deploy anything meaningful
+                        min_deploy_force = 4
+
+                        if force_after_drain >= min_deploy_force + 2:
+                            # Plenty of force left - drain is acceptable even if inefficient
+                            # Score between Pass (5) and good drain (30) - let it beat Pass
+                            action.score = 15.0
+                            action.add_reasoning(f"Under Battle Order - drain {drain_amount} low but have force to spare ({force_available})", 15.0)
+                            logger.info(f"💧 Low drain acceptable: {drain_amount} icon at {location_name}, force={force_available}")
+                        elif force_after_drain >= min_deploy_force:
+                            # Marginal - small penalty but not terrible
+                            action.score = BAD_DELTA / 2  # -15
+                            action.add_reasoning(f"Under Battle Order - drain {drain_amount} marginal (force={force_available})", BAD_DELTA / 2)
+                        else:
+                            # Force is tight - skip low drains to save for deploys
+                            action.score = VERY_BAD_DELTA
+                            action.add_reasoning(f"Under Battle Order - drain {drain_amount} too low, saving force for deploys", VERY_BAD_DELTA)
                     elif drain_amount >= 2:
                         action.score = GOOD_DELTA
                         action.add_reasoning(f"Under Battle Order - drain {drain_amount} worth it", GOOD_DELTA)
@@ -331,6 +442,12 @@ class ActionTextEvaluator(ActionEvaluator):
                     if drain_amount > 0:
                         action.score = VERY_GOOD_DELTA
                         action.add_reasoning(f"Force drain {drain_amount} is good", VERY_GOOD_DELTA)
+                        # Extra boost if we have no deployable cards - drains are our only pressure!
+                        if not has_deployable_card:
+                            extra_boost = 20.0
+                            action.score += extra_boost
+                            action.add_reasoning(f"NO deployable cards - drain is our only pressure!", extra_boost)
+                            logger.info(f"🔥 FORCE DRAIN BOOST: No deployable cards, boosting drain at {location_name}")
                     elif drain_amount == -1:
                         # Unknown amount - be cautious, might be 0
                         action.score = BAD_DELTA
@@ -364,12 +481,11 @@ class ActionTextEvaluator(ActionEvaluator):
                     action.add_reasoning(f"Generic play card - randomized ({random_delta:+.1f})", random_delta)
 
             # ========== Battle ==========
-            elif action_text == "Initiate battle":
-                action.action_type = ActionType.BATTLE
-                # BattleEvaluator handles detailed logic - give minimal score here
-                # so BattleEvaluator's analysis (power diff, flee option) takes precedence
-                action.score = 0.0
-                action.add_reasoning("Battle - see BattleEvaluator for detailed analysis", 0.0)
+            # NOTE: Do NOT handle "Initiate battle" here!
+            # BattleEvaluator provides detailed analysis (power diff, destiny probability,
+            # threat assessment). If we score it here with 0.0, CombinedEvaluator picks
+            # the higher score and ignores BattleEvaluator's negative scores for bad battles.
+            # Let BattleEvaluator be the sole evaluator for battle initiation.
 
             # ========== Fire Weapons ==========
             elif "Fire" in action_text:
@@ -446,6 +562,63 @@ class ActionTextEvaluator(ActionEvaluator):
                 # Always good when firing weapons
                 action.score = VERY_GOOD_DELTA
                 action.add_reasoning("Boost weapon destiny - increases hit chance!", VERY_GOOD_DELTA)
+
+            # ========== Protect Our Battle Destiny Draws ==========
+            # Cards like "A Dark Time For The Rebellion & Tarkin's Orders"
+            # "prevents from canceling battle destiny draws until end of turn"
+            # ONLY useful when we plan to initiate battle this turn!
+            # Don't waste it on Turn 1 before Battle phase or when not planning to battle.
+            elif ("prevent" in text_lower and "cancel" in text_lower and
+                  "battle destiny" in text_lower and "draw" in text_lower):
+                action.action_type = ActionType.BATTLE_DESTINY
+
+                # Check if we're currently in battle
+                in_battle = bs and getattr(bs, 'in_battle', False)
+
+                # Check game phase - is Battle phase still ahead this turn?
+                current_phase = getattr(bs, 'current_phase', '') if bs else ''
+                battle_phase_ahead = current_phase.lower() in ['activate', 'control', 'deploy', '']
+
+                # Check turn number - Turn 1 unlikely to battle
+                current_turn = getattr(bs, 'turn_number', 1) if bs else 1
+
+                # Check if we have battle opportunities (cards at contested locations)
+                has_battle_opportunity = False
+                if bs and hasattr(bs, 'locations'):
+                    for loc in bs.locations:
+                        # We need presence and they need presence for battle
+                        if loc.my_cards and loc.their_cards:
+                            my_power = loc.my_power if hasattr(loc, 'my_power') else len(loc.my_cards) * 3
+                            their_power = loc.their_power if hasattr(loc, 'their_power') else len(loc.their_cards) * 3
+                            # Only count as opportunity if we have reasonable power
+                            if my_power >= 4:
+                                has_battle_opportunity = True
+                                break
+
+                if in_battle:
+                    # Already in battle - definitely use it!
+                    action.score = VERY_GOOD_DELTA
+                    action.add_reasoning("Protect destiny draws - IN BATTLE NOW!", VERY_GOOD_DELTA)
+                elif has_battle_opportunity and battle_phase_ahead:
+                    # We have battle opportunity and battle phase is coming
+                    action.score = GOOD_DELTA
+                    action.add_reasoning("Protect destiny draws - battle opportunity exists", GOOD_DELTA)
+                elif current_turn <= 1:
+                    # Turn 1 - almost never battle, save this card!
+                    action.score = VERY_BAD_DELTA
+                    action.add_reasoning("SAVE for battle turn! Turn 1 rarely battles", VERY_BAD_DELTA)
+                elif not has_battle_opportunity:
+                    # No contested locations with meaningful power
+                    action.score = VERY_BAD_DELTA
+                    action.add_reasoning("SAVE for battle turn! No battle opportunity", VERY_BAD_DELTA)
+                elif not battle_phase_ahead:
+                    # Battle phase already passed this turn
+                    action.score = VERY_BAD_DELTA
+                    action.add_reasoning("SAVE! Battle phase already passed", VERY_BAD_DELTA)
+                else:
+                    # Default: save it unless there's a good reason
+                    action.score = BAD_DELTA
+                    action.add_reasoning("Save destiny protection for clear battle turn", BAD_DELTA)
 
             # ========== Prevent Opponent Adding Battle Destiny ==========
             # Cards like "Imperial Command" and "Rebel Leadership"
@@ -617,6 +790,35 @@ class ActionTextEvaluator(ActionEvaluator):
                 action.score = VERY_GOOD_DELTA
                 action.add_reasoning("Re-target weapon at enemy - turn their weapon against them!", VERY_GOOD_DELTA)
 
+            # ========== Cancel Alien's Game Text (Requires Alien Target) ==========
+            # Cards like "Coarse And Rough And Irritating" - cancel alien's game text
+            # Only useful if there's an opponent alien in play
+            elif "cancel alien's game text" in text_lower:
+                action.action_type = ActionType.CANCEL
+                has_opponent_alien = False
+                if bs:
+                    for card in bs.cards_in_play.values():
+                        if card.owner != bs.my_player_name:
+                            card_meta = get_card(card.blueprint_id)
+                            if card_meta:
+                                # Check if card is an alien (usually in characteristics or subtype)
+                                is_alien = (
+                                    'alien' in (card_meta.sub_type or '').lower() or
+                                    any('alien' in c.lower() for c in (card_meta.characteristics or []))
+                                )
+                                if is_alien:
+                                    has_opponent_alien = True
+                                    break
+
+                if has_opponent_alien:
+                    action.score = GOOD_DELTA
+                    action.add_reasoning("Cancel alien game text - opponent has alien", GOOD_DELTA)
+                else:
+                    action.score = BAD_DELTA
+                    action.add_reasoning("Cancel alien game text - no opponent alien in play", BAD_DELTA)
+                actions.append(action)
+                continue
+
             # ========== Cancel Actions (Neutral) ==========
             elif text_lower.startswith("cancel") or "to cancel" in text_lower:
                 action.action_type = ActionType.CANCEL
@@ -740,6 +942,7 @@ class ActionTextEvaluator(ActionEvaluator):
             # Save when:
             #   - Location not contested (no point)
             #   - We're already dominating the location
+            #   - Target already has a barrier on it this turn!
             elif "Prevent" in action_text and "from battling or moving" in action_text:
                 target_card_name = self._extract_card_name_from_prevent_text(action_text)
                 location_contested = False
@@ -747,6 +950,19 @@ class ActionTextEvaluator(ActionEvaluator):
                 my_power = 0
                 their_power = 0
                 location_name = "unknown"
+
+                # Reset barrier tracking on new turn
+                current_turn = context.turn_number if context.turn_number else 0
+                if current_turn != self._barrier_turn:
+                    self._barriered_targets.clear()
+                    self._barrier_turn = current_turn
+
+                # Check if we already barriered this target
+                if target_card_name and target_card_name.lower() in self._barriered_targets:
+                    action.score = VERY_BAD_DELTA
+                    action.add_reasoning(f"Already barriered {target_card_name} this turn - wasteful!", VERY_BAD_DELTA)
+                    actions.append(action)
+                    continue
 
                 if bs and target_card_name:
                     # Find the card being prevented and analyze the situation
@@ -785,14 +1001,21 @@ class ActionTextEvaluator(ActionEvaluator):
                     # High-power target at contested location - VERY valuable!
                     action.score = VERY_GOOD_DELTA
                     action.add_reasoning(f"Barrier on HIGH POWER target ({target_power}) at contested {location_name}!", VERY_GOOD_DELTA)
+                    # Track that we're barriering this target
+                    if target_card_name:
+                        self._barriered_targets.add(target_card_name.lower())
                 elif their_power >= my_power:
                     # They're winning or tied - barrier is valuable
                     action.score = GOOD_DELTA + 10.0
                     action.add_reasoning(f"Barrier to protect at {location_name} (losing {my_power} vs {their_power})", GOOD_DELTA + 10.0)
+                    if target_card_name:
+                        self._barriered_targets.add(target_card_name.lower())
                 else:
                     # We're ahead but not dominating - still useful
                     action.score = GOOD_DELTA
                     action.add_reasoning(f"Barrier at contested {location_name}", GOOD_DELTA)
+                    if target_card_name:
+                        self._barriered_targets.add(target_card_name.lower())
 
             # ========== Monnok-type (Reveal Hand) ==========
             elif "LOST: Reveal opponent's hand" in action_text:

@@ -108,6 +108,14 @@ class ChatManager:
         if self.brain:
             self.brain.on_game_start(opponent_name, deck_name, my_side)
 
+        # Initialize deck tracker for card probability calculations
+        from engine.deck_tracker import initialize_deck_tracker
+        if deck_name and my_side:
+            if initialize_deck_tracker(deck_name, my_side):
+                logger.info(f"📚 DeckTracker initialized for {deck_name}")
+            else:
+                logger.warning(f"📚 DeckTracker: Could not load deck '{deck_name}'")
+
         logger.info(f"ChatManager reset for game {game_id} vs {opponent_name}")
 
     # =========================================================================

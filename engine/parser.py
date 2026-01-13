@@ -52,10 +52,16 @@ class XMLParser:
                 if players_str:
                     # Split by comma: "rando_cal (LIGHT),opponent (DARK)"
                     for player_entry in players_str.split(','):
-                        # Extract just the name part before " (SIDE)"
+                        player_entry = player_entry.strip()
+                        # Extract name and side from "name (SIDE)" format
                         player_name = player_entry.split(' (')[0].strip()
+                        player_side = None
+                        if ' (' in player_entry and player_entry.endswith(')'):
+                            side_part = player_entry.split(' (')[1].rstrip(')')
+                            if side_part.upper() in ('LIGHT', 'DARK'):
+                                player_side = side_part.lower()
                         if player_name:
-                            players.append(Player(name=player_name))
+                            players.append(Player(name=player_name, side=player_side))
 
                 if table_id:  # Only add if we have a valid table ID
                     tables.append(GameTable(

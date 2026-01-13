@@ -18,6 +18,7 @@ from typing import Optional, Tuple, List, Set
 import xml.etree.ElementTree as ET
 
 from .decision_safety import DecisionSafety, DecisionTracker
+from .decision_logger import log_decision as _log_decision_xml
 
 logger = logging.getLogger(__name__)
 
@@ -315,6 +316,40 @@ class DecisionHandler:
 
         # Track this decision
         _decision_tracker.record_decision(decision_type, decision_text, decision_id, result[1])
+
+        # === LOG FULL DECISION XML FOR ANALYSIS ===
+        try:
+            # Extract chosen text by matching result value to action_texts
+            chosen_text = ""
+            for i, aid in enumerate(action_ids):
+                if aid == result[1]:
+                    # Get corresponding action text
+                    action_texts = [p.get('value', '') for p in decision_element.findall('.//parameter')
+                                    if p.get('name') == 'actionText']
+                    if i < len(action_texts):
+                        # Strip HTML tags for readability
+                        import re
+                        chosen_text = re.sub(r'<[^>]+>', '', action_texts[i])
+                    break
+
+            # Get turn/phase info
+            turn = board_state.turn_count if board_state else 0
+            phase = board_state.current_phase if board_state else ""
+            is_my_turn = board_state.is_my_turn() if board_state else True
+
+            _log_decision_xml(
+                decision_element=decision_element,
+                decision_id=decision_id,
+                decision_type=decision_type,
+                decision_text=decision_text,
+                chosen_value=result[1],
+                chosen_text=chosen_text,
+                turn=turn,
+                phase=phase,
+                is_my_turn=is_my_turn,
+            )
+        except Exception as e:
+            logger.debug(f"Decision logging failed (non-critical): {e}")
 
         # Return DecisionResult with noLongDelay info for NetworkCoordinator
         return DecisionResult(

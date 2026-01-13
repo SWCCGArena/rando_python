@@ -14,6 +14,7 @@ class Player:
     """A player in the hall or game"""
     name: str
     participant_id: Optional[str] = None
+    side: Optional[str] = None  # "light" or "dark" (from hall table info)
 
 
 @dataclass

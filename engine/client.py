@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 class GEMPClient:
     """HTTP client for GEMP server communication"""
 
+    # SAFETY: Block connections to live server in dev/test environments
+    BLOCKED_HOSTS = ['gemp.starwarsccg.org', 'www.starwarsccg.org']
+
     def __init__(self, server_url: str):
         """
         Initialize GEMP client.
@@ -24,6 +27,15 @@ class GEMPClient:
         Args:
             server_url: Base URL of GEMP server (e.g., http://localhost:8082/gemp-swccg-server/)
         """
+        # SAFETY CHECK: Block any connection to live production server
+        for blocked in self.BLOCKED_HOSTS:
+            if blocked in server_url.lower():
+                raise RuntimeError(
+                    f"BLOCKED: Cannot connect to production server '{blocked}'. "
+                    f"This build is for local testing only. "
+                    f"Set GEMP_SERVER_URL to localhost or remove this safety check."
+                )
+
         self.server_url = server_url.rstrip('/')
         self.session = requests.Session()
         self.participant_id = None
@@ -292,13 +304,14 @@ class GEMPClient:
                     if tables:
                         break
 
-                # Find table we just created
-                logger.debug(f"Looking for table '{table_name}' among {len(tables)} tables")
+                # Find table we just created - match by table name AND our username
+                my_username = self.session.cookies.get('loggedUser', '')
+                logger.debug(f"Looking for table '{table_name}' among {len(tables)} tables (my_username={my_username})")
                 for table in tables:
                     logger.debug(f"  Checking table: {table.table_id} - '{table.table_name}' - players: {[p.name for p in table.players]}")
 
-                    # Check if it's our table
-                    if any(p.name == self.session.cookies.get('loggedUser', 'rando_cal') or p.name == 'rando_cal' for p in table.players):
+                    # Must match table name we requested AND have us as a player
+                    if table.table_name == table_name and any(p.name == my_username for p in table.players):
                         logger.info(f"Found created table: {table.table_id} - '{table.table_name}'")
                         return table.table_id
 
@@ -316,6 +329,58 @@ class GEMPClient:
         except Exception as e:
             logger.error(f"Unexpected error creating table: {e}", exc_info=True)
             return None
+
+    def join_table(self, table_id: str, deck_name: str, is_library: bool = True) -> bool:
+        """
+        Join an existing table as a player.
+
+        Args:
+            table_id: ID of the table to join
+            deck_name: Name of the deck to use
+            is_library: True for library deck, False for user deck
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.logged_in:
+            logger.warning("Not logged in, cannot join table")
+            return False
+
+        try:
+            logger.info(f"Joining table '{table_id}' with deck '{deck_name}' (library: {is_library})")
+
+            # GEMP join table endpoint: POST /hall/{tableId}
+            response = self.session.post(
+                f"{self.server_url}/hall/{table_id}",
+                data={
+                    'deckName': deck_name,
+                    'sampleDeck': 'true' if is_library else 'false',
+                },
+                timeout=self.timeout
+            )
+
+            logger.debug(f"Join table response status: {response.status_code}")
+            logger.debug(f"Join table response body: {response.text[:500]}")
+
+            # Check for error in response body
+            error_msg = self.parser.parse_error_response(response.text)
+            if error_msg:
+                logger.error(f"❌ Join table failed: {error_msg}")
+                return False
+
+            if response.status_code == 200:
+                logger.info(f"✅ Successfully joined table {table_id}")
+                return True
+            else:
+                logger.error(f"Failed to join table: HTTP {response.status_code}")
+                return False
+
+        except requests.RequestException as e:
+            logger.error(f"Join table request failed: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error joining table: {e}", exc_info=True)
+            return False
 
     def get_library_decks(self) -> List[DeckInfo]:
         """
@@ -505,11 +570,18 @@ class GEMPClient:
 
         try:
             # GEMP uses POST to /game/{gameId} with form data, NOT GET to /update
+            # longPollingInterval controls how long server waits before responding
+            # Use 100ms for local fast mode, 3000ms (3s) for production
+            import os
+            local_fast = os.environ.get('LOCAL_FAST_MODE', 'false').lower() == 'true'
+            long_poll_interval = 100 if local_fast else 3000
+
             response = self.session.post(
                 f"{self.server_url}/game/{game_id}",
                 data={
                     'participantId': 'null',
-                    'channelNumber': str(channel_number)
+                    'channelNumber': str(channel_number),
+                    'longPollingInterval': str(long_poll_interval)
                 },
                 timeout=self.timeout
             )

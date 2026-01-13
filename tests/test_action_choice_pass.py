@@ -17,13 +17,38 @@ from engine.decision_safety import DecisionSafety
 class MockBoardState:
     """Minimal mock board state for testing"""
     def __init__(self):
+        # My resources
         self.force_pile = 5
         self.reserve_deck = 30
+        self.used_pile = 10
         self.hand_size = 6
+        # Opponent resources
+        self.their_force_pile = 5
+        self.their_reserve_deck = 30
+        self.their_used_pile = 10
+        # Lost pile tracking
+        self.lost_pile = 5
+        self.their_lost_pile = 5
+        # Board state
         self.cards_in_hand = []
+        self.cards_in_play = {}
+        self.turn_number = 3
+        self.current_phase = "Deploy"
+        self.my_side = "dark"
+        self.locations = []
+        # Power tracking
+        self.dark_power_at_locations = {}
+        self.light_power_at_locations = {}
+        self.in_battle = False
 
     def reserve_deck_low(self):
         return self.reserve_deck < 14
+
+    def my_power_at_location(self, idx):
+        return 0
+
+    def their_power_at_location(self, idx):
+        return 0
 
 
 class TestPassEvaluatorActionChoice:

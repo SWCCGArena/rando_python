@@ -240,6 +240,19 @@ PRIORITY_INTERRUPTS = {
         usage_notes="Combo version of Ghhhk - save for critical moments"
     ),
 
+    # ----- BATTLE DESTINY PROTECTION (SAVE FOR BATTLE TURN) -----
+    # A Dark Time For The Rebellion & Tarkin's Orders
+    # USED: "For remainder of turn, opponent may not cancel your battle destiny draws"
+    # ONLY use on a turn when you plan to initiate battle - useless otherwise!
+    "218_7": PriorityCard(
+        blueprint_id="218_7",
+        title="A Dark Time For The Rebellion & Tarkin's Orders",
+        category=CardCategory.DESTINY,
+        side="dark",
+        protection_score=75.0,
+        usage_notes="ONLY use when planning to initiate battle this turn - protects battle destiny draws"
+    ),
+
     # ----- SENSE/CONTROL/ALTER -----
     "1_267": PriorityCard(
         blueprint_id="1_267",

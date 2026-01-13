@@ -19,21 +19,24 @@ class Config:
 
     # Flask settings
     SECRET_KEY: str = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-prod')
-    HOST: str = '127.0.0.1'  # localhost only, nginx will proxy
-    PORT: int = 5001  # Custom port to avoid conflicts
+    HOST: str = os.environ.get('BOT_HOST', '0.0.0.0')  # 0.0.0.0 = all interfaces, 127.0.0.1 = localhost only
+    PORT: int = int(os.environ.get('BOT_PORT', '5001'))  # Configurable for running multiple instances
     DEBUG: bool = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
 
     # GEMP server settings
-    # Default to 200monkeys test server - NOT production GEMP
-    GEMP_SERVER_URL: str = os.environ.get('GEMP_SERVER_URL', 'https://www.200monkeys.com/gemp-swccg-server/')
-    GEMP_USERNAME: str = os.environ.get('GEMP_USERNAME', _SECRETS_USERNAME or 'rando_cal')
+    GEMP_SERVER_URL: str = os.environ.get('GEMP_SERVER_URL', 'http://localhost/gemp-swccg-server/')
+    GEMP_USERNAME: str = os.environ.get('GEMP_USERNAME', 'rando_cal')
     # Password priority: env var > credentials.py > empty (will fail login)
     GEMP_PASSWORD: str = os.environ.get('GEMP_PASSWORD', _SECRETS_PASSWORD or '')
 
+    # Local fast mode for bot-vs-bot testing (set LOCAL_FAST_MODE=true)
+    _local_fast = os.environ.get('LOCAL_FAST_MODE', 'false').lower() == 'true'
+
     # Bot settings
     BOT_MODE: str = 'astrogator'  # 'standard', 'astrogator', 'scrap_trader'
-    GAME_POLL_INTERVAL: int = 1   # seconds between game update polls (fast)
-    HALL_POLL_INTERVAL: int = 10  # seconds between hall/lobby polls (slow)
+    # Poll intervals - minimal for local fast mode, production uses 3s to stay under rate limits
+    GAME_POLL_INTERVAL: float = 0.05 if _local_fast else 3.0   # seconds between game update polls
+    HALL_POLL_INTERVAL: float = 1.0 if _local_fast else 10.0   # seconds between hall/lobby polls
     TABLE_NAME: str = 'Bot Table'
     GAME_FORMAT: str = 'open'  # 'open', 'legacy', etc.
 
@@ -66,16 +69,14 @@ class Config:
 
     # Network rate limiting (matching web client behavior)
     # These delays make the bot behave more like a human player
-    # Optimized 2024-12-01: Reduced delays by ~20% to improve play speed
-    # Analysis showed 60% of server responses are <0.5s, so delays were bottleneck
-    # Request rate ~26/min stays well under 40/min safety limit
-    NETWORK_DELAY_QUICK: float = 0.75      # Delay when noLongDelay=true (quick response expected)
-    NETWORK_DELAY_NORMAL: float = 1.5      # Delay when noLongDelay=false (bot should "think")
-    NETWORK_DELAY_BACKGROUND: float = 30.0 # Delay for background requests (hall, cardInfo)
-    NETWORK_DELAY_MIN: float = 0.2         # Absolute minimum between any requests
+    # Request rate ~26/min stays well under 40/min safety limit on prod
+    NETWORK_DELAY_QUICK: float = 0.05 if _local_fast else 0.75      # Delay when noLongDelay=true
+    NETWORK_DELAY_NORMAL: float = 0.1 if _local_fast else 1.5       # Delay when noLongDelay=false
+    NETWORK_DELAY_BACKGROUND: float = 5.0 if _local_fast else 30.0  # Delay for background requests
+    NETWORK_DELAY_MIN: float = 0.02 if _local_fast else 0.2         # Absolute minimum between requests
 
     # Hall polling optimization
-    HALL_CHECK_INTERVAL_DURING_GAME: int = 60  # Only check hall every N seconds during game
+    HALL_CHECK_INTERVAL_DURING_GAME: int = 5 if _local_fast else 60  # Only check hall every N seconds during game
 
     # Paths
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
