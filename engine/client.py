@@ -17,9 +17,6 @@ logger = logging.getLogger(__name__)
 class GEMPClient:
     """HTTP client for GEMP server communication"""
 
-    # SAFETY: Block connections to live server in dev/test environments
-    BLOCKED_HOSTS = ['gemp.starwarsccg.org', 'www.starwarsccg.org']
-
     def __init__(self, server_url: str):
         """
         Initialize GEMP client.
@@ -27,15 +24,6 @@ class GEMPClient:
         Args:
             server_url: Base URL of GEMP server (e.g., http://localhost:8082/gemp-swccg-server/)
         """
-        # SAFETY CHECK: Block any connection to live production server
-        for blocked in self.BLOCKED_HOSTS:
-            if blocked in server_url.lower():
-                raise RuntimeError(
-                    f"BLOCKED: Cannot connect to production server '{blocked}'. "
-                    f"This build is for local testing only. "
-                    f"Set GEMP_SERVER_URL to localhost or remove this safety check."
-                )
-
         self.server_url = server_url.rstrip('/')
         self.session = requests.Session()
         self.participant_id = None
