@@ -1,4 +1,1 @@
-{
-  "gemp_server_url": "https://gemp.starwarsccg.org/gemp-swccg-server/",
-  "auto_start": true
-}
+{"gemp_server_url": "http://localhost/gemp-swccg-server/", "auto_start": true}

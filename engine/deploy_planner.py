@@ -2365,32 +2365,31 @@ class DeployPhasePlanner:
                     # Harder to counter than 4 power, but still risky:
                     # - Opponent needs 6+ power to beat us outright
                     # - But if they do counter with ability 4, they draw destiny and we don't
-                    # Small penalty - not ideal but more defensible than 4 power
-                    ability_penalty = -20.0
+                    # HARD BLOCK: No solo establishes without ability >= 4
+                    # This is a trap - looks strong but loses to any ability 4 counter
+                    ability_penalty = -500.0
                     score += ability_penalty
-                    logger.info(f"   ⚡ MODERATE ESTABLISH at {target_loc.name}: {ability_penalty} "
-                               f"({our_power} power but ability {our_ability} < 4 - risky if countered)")
+                    logger.warning(f"   🚫 BLOCKED ESTABLISH at {target_loc.name}: {ability_penalty} "
+                               f"({our_power} power but ability {our_ability} < 4 - WILL LOSE to destiny!)")
                 elif has_moderate_power:
-                    # RISKY: 4 power without ability >= 4 = NO ATTRITION DESTINY
+                    # HARD BLOCK: 4 power without ability >= 4 = guaranteed loss
                     # Even with 4 power, opponent can easily counter:
                     # - They deploy 5-7 power with ability 4
                     # - They win battle and DRAW attrition destiny (we can't!)
                     # - We lose character + extra damage from their destiny draw
                     #
-                    # This is NOT "borderline safe" - it's a trap that looks ok
-                    # Significant penalty to discourage weak ability establishes
-                    ability_penalty = -60.0
+                    # This is NOT "borderline safe" - it's a TRAP
+                    ability_penalty = -500.0
                     score += ability_penalty
-                    logger.info(f"   ⚠️ RISKY ESTABLISH at {target_loc.name}: {ability_penalty} "
-                               f"({our_power} power, ability {our_ability} < 4 - opponent will crush with destiny!)")
+                    logger.warning(f"   🚫 BLOCKED ESTABLISH at {target_loc.name}: {ability_penalty} "
+                               f"({our_power} power, ability {our_ability} < 4 - GUARANTEED LOSS!)")
                 else:
-                    # TRAP: weak power (1-3) + no ability = easy crush target
+                    # HARD BLOCK: weak power (1-3) + no ability = easy crush target
                     # Opponent can deploy almost anything and destroy us
-                    # Penalty scales with power invested (more waste when crushed)
-                    ability_penalty = -30.0 - (our_power * 10)
+                    ability_penalty = -500.0
                     score += ability_penalty
-                    logger.info(f"   ⚠️ VULNERABLE ESTABLISH TRAP at {target_loc.name}: {ability_penalty} "
-                               f"({our_power} power, ability {our_ability} - easy counter-deploy target!)")
+                    logger.warning(f"   🚫 BLOCKED ESTABLISH at {target_loc.name}: {ability_penalty} "
+                               f"({our_power} power, ability {our_ability} - EASY CRUSH TARGET!)")
 
                 # =================================================================
                 # MID-LATE GAME REINFORCEMENT BONUS
@@ -4758,15 +4757,23 @@ class DeployPhasePlanner:
                     reserve_deck_cards = getattr(board_state, 'reserve_deck', 0) or 0
                     can_draw_destiny = total_ability >= 4 and reserve_deck_cards > 0
 
-                    if not can_draw_destiny:
-                        # Can't draw destiny - matching power is a losing bet
-                        logger.info(f"   ⏭️ Can only tie {loc.name}: {new_total_power} vs {loc.their_power}, "
-                                   f"can't draw destiny (ability={total_ability}, reserve={reserve_deck_cards}), skipping")
-                        continue
-                    else:
+                    if can_draw_destiny:
                         # Can draw destiny - ~50% chance to win, worth it for high-icon locations
                         logger.info(f"   ⚔️ Will TIE at {loc.name}: {new_total_power} vs {loc.their_power}, "
                                    f"but CAN draw destiny (ability={total_ability}) - worth the gamble!")
+                    elif loc.my_icons >= 1 and drain_gap < 0:
+                        # Can't draw destiny BUT tying STOPS THEIR DRAIN!
+                        # At a TIE, NEITHER side controls → NEITHER side drains
+                        # This is VALUABLE when we're being drained (drain_gap < 0)
+                        icons_to_save = loc.my_icons
+                        logger.info(f"   🩸 TIE TO STOP DRAIN at {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"can't win but TIE stops their {icons_to_save} drain/turn (drain_gap={drain_gap})")
+                        is_presence_deploy = True  # Mark as presence deploy since we're not trying to win
+                    else:
+                        # Not being drained OR no icons to save - skip
+                        logger.info(f"   ⏭️ Can only tie {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"can't draw destiny (ability={total_ability}), drain_gap={drain_gap}, skipping")
+                        continue
 
             # Log the selected combination
             card_names = [c['name'] for c in cards_for_location]
@@ -4926,15 +4933,22 @@ class DeployPhasePlanner:
                     reserve_deck_cards = getattr(board_state, 'reserve_deck', 0) or 0
                     can_draw_destiny = total_ability >= 4 and reserve_deck_cards > 0
 
-                    if not can_draw_destiny:
-                        # Can't draw destiny - matching power is a losing bet
-                        logger.info(f"   ⏭️ Can only tie {loc.name}: {new_total_power} vs {loc.their_power}, "
-                                   f"can't draw destiny (ability={total_ability}, reserve={reserve_deck_cards}), skipping")
-                        continue
-                    else:
+                    if can_draw_destiny:
                         # Can draw destiny - ~50% chance to win, worth it for high-icon locations
                         logger.info(f"   ⚔️ Will TIE at {loc.name}: {new_total_power} vs {loc.their_power}, "
                                    f"but CAN draw destiny (ability={total_ability}) - worth the gamble!")
+                    elif loc.my_icons >= 1 and drain_gap < 0:
+                        # Can't draw destiny BUT tying STOPS THEIR DRAIN!
+                        # At a TIE, NEITHER side controls → NEITHER side drains
+                        icons_to_save = loc.my_icons
+                        logger.info(f"   🩸 TIE TO STOP DRAIN at {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"can't win but TIE stops their {icons_to_save} drain/turn (drain_gap={drain_gap})")
+                        is_presence_deploy = True
+                    else:
+                        # Not being drained OR no icons to save - skip
+                        logger.info(f"   ⏭️ Can only tie {loc.name}: {new_total_power} vs {loc.their_power}, "
+                                   f"can't draw destiny (ability={total_ability}), drain_gap={drain_gap}, skipping")
+                        continue
 
             # Log the selected combination
             ship_names = [s['name'] for s in ships_for_location]
@@ -5747,7 +5761,7 @@ class DeployPhasePlanner:
                 # =================================================================
                 is_risky_low_ability_establish = False
                 if (plan.instructions and
-                    plan.strategy in [DeployStrategy.ESTABLISH, DeployStrategy.OFFENSIVE] and
+                    plan.strategy in [DeployStrategy.ESTABLISH, DeployStrategy.OVERWHELM] and
                     is_early_game):
                     # Check if ALL deployments in this plan have ability < 4
                     all_low_ability = True
@@ -7594,12 +7608,51 @@ class DeployPhasePlanner:
                     logger.info(f"🎁 Plan complete, allowing extra action (budget: {extra_budget} force)")
                     return (25.0, f"EXTRA ACTION (plan done, {extra_budget} force available)")
                 elif extra_budget >= deploy_cost:
-                    # Major card but we can afford it - allow with moderate score
-                    # Score based on power to encourage deploying strong cards
-                    power_score = min(50.0, card_power * 8.0)  # Up to 50 for 6+ power
+                    # Major card (character/ship/vehicle) - MUST meet strategic thresholds!
+                    # The planner already decided not to include this card for a reason.
+                    # Only allow if:
+                    # 1. Card meets establish threshold (power >= 4 AND ability >= 4), OR
+                    # 2. We have existing presence to consolidate with
+                    min_establish = get_min_establish_power()
                     card_type = card_meta.card_type if card_meta else "card"
-                    logger.info(f"🎁 Plan complete, allowing extra {card_type} (budget: {extra_budget}, cost: {deploy_cost})")
-                    return (power_score, f"EXTRA {card_type.upper()} (plan done, {extra_budget} force, {card_power} power)")
+                    card_ability = card_meta.ability_value if card_meta else 0
+
+                    # To establish ALONE safely, need BOTH power and ability >= 4
+                    # Without ability >= 4, opponent draws attrition destiny and crushes us
+                    can_establish_alone = card_power >= min_establish and card_ability >= 4
+
+                    if can_establish_alone:
+                        # Strong enough AND high ability - safe to establish alone
+                        power_score = min(50.0, card_power * 8.0)
+                        logger.info(f"🎁 Plan complete, allowing extra {card_type} (power {card_power}, ability {card_ability} - safe)")
+                        return (power_score, f"EXTRA {card_type.upper()} (plan done, {card_power} power/{card_ability} ability)")
+                    else:
+                        # Weak character - only allow if we have presence to consolidate with
+                        # This prevents the "spread thin" problem
+                        has_presence = False
+                        if self._board_state:
+                            bs = self._board_state
+                            for loc_idx, loc in enumerate(bs.locations or []):
+                                if loc and loc.card_id:
+                                    our_power = bs.my_power_at_location(loc_idx)
+                                    if our_power > 0:
+                                        has_presence = True
+                                        break
+
+                        if has_presence:
+                            # We have presence somewhere - allow consolidation
+                            power_score = min(30.0, card_power * 6.0)
+                            logger.info(f"🎁 Plan complete, allowing weak {card_type} to consolidate (power {card_power}, ability {card_ability})")
+                            return (power_score, f"EXTRA {card_type.upper()} (consolidate with existing presence)")
+                        else:
+                            # No presence and risky card - reject!
+                            # This is what the planner decided, respect it
+                            if card_power < min_establish:
+                                reason = f"{card_power} power < {min_establish} threshold"
+                            else:
+                                reason = f"ability {card_ability} < 4 (vulnerable to attrition)"
+                            logger.info(f"🚫 Extra {card_type} rejected - {reason}, no presence to consolidate")
+                            return (-100.0, f"Not in plan ({card_type} can't establish alone: {reason})")
                 else:
                     # Can't afford this major card
                     card_type = card_meta.card_type if card_meta else "unknown"

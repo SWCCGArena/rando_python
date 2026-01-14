@@ -16,7 +16,7 @@ import re
 from typing import List, Optional
 from .base import ActionEvaluator, DecisionContext, EvaluatedAction, ActionType
 from ..game_strategy import GameStrategy
-from ..card_loader import get_card
+from ..card_loader import get_card, get_card_database
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,43 @@ class ActionTextEvaluator(ActionEvaluator):
             if start_idx > 0 and end_idx > start_idx:
                 return action_text[start_idx:end_idx].strip()
         return None
+
+    def _get_card_by_name_from_grab_text(self, action_text: str):
+        """
+        Extract card name from grab action text and look up the card.
+
+        Action text format: "'Grab' Card Name (V)" or "Grab Card Name"
+        Returns the Card object if found, None otherwise.
+        """
+        # Remove the 'Grab' prefix (with or without quotes)
+        name = action_text
+        if name.startswith("'Grab' "):
+            name = name[7:]  # Remove "'Grab' "
+        elif name.startswith("Grab "):
+            name = name[5:]  # Remove "Grab "
+        else:
+            return None
+
+        # Strip any HTML tags that might be present
+        name = re.sub(r'<[^>]+>', '', name).strip()
+
+        if not name:
+            return None
+
+        # Look up the card by title (exact match preferred)
+        db = get_card_database()
+        matches = db.search_by_title(name)
+
+        # Prefer exact title match
+        for card in matches:
+            # Clean both for comparison (remove unique markers)
+            clean_card_title = card.title.lstrip('•').strip()
+            clean_name = name.lstrip('•').strip()
+            if clean_card_title.lower() == clean_name.lower():
+                return card
+
+        # If no exact match, return first partial match
+        return matches[0] if matches else None
 
     def _get_target_from_action_text(self, action_text: str, context: DecisionContext) -> dict:
         """
@@ -1132,63 +1169,77 @@ class ActionTextEvaluator(ActionEvaluator):
             # ========== Grab opponent's card ==========
             # Ported from C# AICACHandler.cs lines 593-627
             # Only grab opponent's cards (different side), not our own
+            # CRITICAL: Grabbing own interrupts is a big player complaint - hard block it!
             elif "Grab" in action_text:
                 target_info = self._get_target_from_action_text(action_text, context)
+                my_side = bs.my_side if bs else "unknown"
 
                 if target_info['card_id']:
                     if target_info['is_mine']:
-                        # Grabbing our own card - bad!
-                        action.score = VERY_BAD_DELTA
-                        action.add_reasoning("Don't grab own card", VERY_BAD_DELTA)
+                        # Grabbing our own card - HARD BLOCK!
+                        action.score = -500.0
+                        action.add_reasoning("🚫 BLOCKED: Don't grab own card!", -500.0)
+                        logger.warning(f"🚫 BLOCKED GRAB of own card: {action_text}")
                     else:
                         # Grabbing opponent's card - good!
                         action.score = GOOD_DELTA
                         action.add_reasoning("Grab opponent's card", GOOD_DELTA)
                 else:
-                    # Can't determine owner - check by card side in metadata
-                    if target_info['card_metadata']:
-                        my_side = bs.my_side if bs else "unknown"
-                        card_side = target_info['card_metadata'].side
+                    # Can't determine owner from board - try card metadata first
+                    card_metadata = target_info['card_metadata']
+
+                    # If no metadata from blueprint, try looking up by card name
+                    if not card_metadata:
+                        card_metadata = self._get_card_by_name_from_grab_text(action_text)
+
+                    if card_metadata:
+                        card_side = card_metadata.side
                         if card_side and card_side.lower() == my_side.lower():
-                            # Same side as us - probably our card
-                            action.score = BAD_DELTA
-                            action.add_reasoning("Grab appears to be same-side card", BAD_DELTA)
+                            # Same side as us - this is OUR card! HARD BLOCK!
+                            action.score = -500.0
+                            action.add_reasoning(f"🚫 BLOCKED: Grab targets {card_side} card (we are {my_side})!", -500.0)
+                            logger.warning(f"🚫 BLOCKED GRAB of same-side card: {action_text} ({card_side} vs {my_side})")
                         else:
-                            # Different side - opponent's card
+                            # Different side - opponent's card, good to grab
                             action.score = GOOD_DELTA
-                            action.add_reasoning("Grab opponent-side card", GOOD_DELTA)
+                            action.add_reasoning(f"Grab opponent's {card_side} card (we are {my_side})", GOOD_DELTA)
                     else:
-                        # Unknown - be cautious
-                        action.add_reasoning("Grab card (owner unknown)", 0.0)
+                        # Truly unknown - be cautious, don't grab
+                        action.score = BAD_DELTA
+                        action.add_reasoning("Grab card (owner unknown - avoiding)", BAD_DELTA)
+                        logger.info(f"⚠️ Grab owner unknown, skipping: {action_text}")
 
             # ========== Break cover (spies) ==========
             # Ported from C# AICACHandler.cs lines 799-829
             # Breaking opponent's spy is good, breaking our spy is bad
             elif "Break cover" in action_text:
                 target_info = self._get_target_from_action_text(action_text, context)
+                my_side = bs.my_side if bs else "unknown"
 
                 if target_info['card_id']:
                     if target_info['is_mine']:
-                        # Breaking our own spy - very bad!
-                        action.score = VERY_BAD_DELTA
-                        action.add_reasoning("Don't break cover of own spy!", VERY_BAD_DELTA)
+                        # Breaking our own spy - HARD BLOCK!
+                        action.score = -500.0
+                        action.add_reasoning("🚫 BLOCKED: Don't break cover of own spy!", -500.0)
+                        logger.warning(f"🚫 BLOCKED break cover of own spy: {action_text}")
                     else:
                         # Breaking opponent's spy - good!
                         action.score = GOOD_DELTA
                         action.add_reasoning("Break opponent's spy cover", GOOD_DELTA)
                 else:
                     # Can't determine owner from board - check card side
-                    if target_info['card_metadata']:
-                        my_side = bs.my_side if bs else "unknown"
-                        card_side = target_info['card_metadata'].side
+                    card_metadata = target_info['card_metadata']
+                    if card_metadata:
+                        card_side = card_metadata.side
                         if card_side and card_side.lower() == my_side.lower():
-                            # Same side - probably our spy
-                            action.score = VERY_BAD_DELTA
-                            action.add_reasoning("Break cover appears to be own spy", VERY_BAD_DELTA)
+                            # Same side - our spy! HARD BLOCK!
+                            action.score = -500.0
+                            action.add_reasoning(f"🚫 BLOCKED: Break cover targets {card_side} spy (we are {my_side})!", -500.0)
+                            logger.warning(f"🚫 BLOCKED break cover of same-side spy: {action_text}")
                         else:
                             # Different side - opponent's spy
                             action.score = GOOD_DELTA
-                            action.add_reasoning("Break opponent-side spy cover", GOOD_DELTA)
+                            action.add_reasoning(f"Break opponent's {card_side} spy cover", GOOD_DELTA)
                     else:
                         # Unknown spy - be cautious, default to not doing it
                         action.score = BAD_DELTA

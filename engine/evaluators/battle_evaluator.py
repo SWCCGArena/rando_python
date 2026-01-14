@@ -437,6 +437,30 @@ class BattleEvaluator(ActionEvaluator):
                 logger.warning(f"⚔️ 1-on-1 losing battle, can't flee: {reason}")
             return
 
+        # =================================================================
+        # MASSIVELY OUTPOWERED CHECK - NEVER INITIATE SUICIDAL BATTLES
+        # If opponent has 10+ power advantage, this is a guaranteed loss.
+        # No amount of destiny luck will save us. This is the "2 power
+        # character vs 20 power army" scenario players complain about.
+        # =================================================================
+        massive_deficit_threshold = -10  # 10+ power disadvantage
+        if power_diff <= massive_deficit_threshold:
+            action.add_reasoning(
+                f"SUICIDAL BATTLE: {my_power} power vs {their_power} (deficit {power_diff}) - NEVER INITIATE!",
+                get_very_bad_delta() * 3  # -450 penalty
+            )
+            logger.warning(f"🚫 BLOCKED BATTLE at {loc_name}: {my_power} vs {their_power} - massively outpowered!")
+            return
+
+        # Also block if we have less than 4 power total - we're too weak to battle
+        if my_power < 4:
+            action.add_reasoning(
+                f"TOO WEAK TO BATTLE: Only {my_power} power - don't initiate!",
+                get_very_bad_delta() * 2  # -300 penalty
+            )
+            logger.warning(f"🚫 BLOCKED BATTLE at {loc_name}: Only {my_power} power - too weak to initiate!")
+            return
+
         # Calculate threat level FRESH from current power values
         # (Don't use stale cached values from game_strategy - those are outdated after deploy phase)
         # CONSERVATIVE: Account for weapons which can swing battles before they resolve

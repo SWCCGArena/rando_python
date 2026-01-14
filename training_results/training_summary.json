@@ -1,0 +1,13 @@
+{
+  "iterations": 3,
+  "total_games": 15,
+  "wins": 3,
+  "losses": 12,
+  "final_win_rate": 0.2,
+  "win_rate_history": [
+    0.2,
+    0.2,
+    0.2
+  ],
+  "timestamp": "2026-01-13T15:22:33.948344"
+}

@@ -364,6 +364,52 @@ class CardSelectionEvaluator(ActionEvaluator):
                                 # Deploying here will likely result in losing the character
                                 action.add_reasoning(f"UNWINNABLE: {potential_our_power} vs {their_power} - don't waste cards!", -their_icons * GOOD_DELTA * 2)
                                 logger.warning(f"⚠️  Deploying to unwinnable location {loc_name}: {potential_our_power} vs {their_power}")
+
+                    # =====================================================
+                    # CONSOLIDATION BONUS for extra deploys (no planned target)
+                    # When deploying characters without a plan, prefer locations
+                    # where we already have presence to avoid spreading thin
+                    # =====================================================
+                    is_character = deploying_card and deploying_card.is_character if deploying_card else False
+                    if not planned_target_id and is_character:
+                        # This is an "extra" deploy with no plan guidance
+                        # Check if we have existing presence at this location
+                        we_have_presence_here = our_power > 0
+
+                        # Find locations where we already have presence
+                        locations_with_our_presence = []
+                        for loc_idx, loc in enumerate(bs.locations):
+                            if loc and loc.card_id:
+                                loc_our_power = bs.my_power_at_location(loc_idx)
+                                if loc_our_power > 0:
+                                    locations_with_our_presence.append((loc_idx, loc_our_power))
+
+                        if locations_with_our_presence and not we_have_presence_here:
+                            # We have presence elsewhere but NOT here
+                            # Penalize spreading to a new empty location
+                            max_existing_power = max(p for _, p in locations_with_our_presence)
+                            if deploying_power < 5:
+                                # Weak character - strongly discourage spreading
+                                penalty = -60.0 if deploying_power <= 2 else -40.0
+                                action.add_reasoning(
+                                    f"CONSOLIDATE: Have {max_existing_power} power elsewhere, don't spread {deploying_power} here",
+                                    penalty
+                                )
+                                logger.info(f"⚠️ Extra deploy to empty {loc_name}: penalizing spread ({deploying_power} power)")
+                            else:
+                                # Moderate character - mild penalty
+                                action.add_reasoning(
+                                    f"Consider consolidating: have power at {len(locations_with_our_presence)} location(s)",
+                                    -15.0
+                                )
+                        elif we_have_presence_here:
+                            # We already have presence here - bonus for consolidating!
+                            consolidation_bonus = min(30.0, our_power * 5.0)  # Up to +30 for 6+ power
+                            action.add_reasoning(
+                                f"Consolidate with {our_power} existing power",
+                                consolidation_bonus
+                            )
+                            logger.debug(f"✅ Consolidating at {loc_name}: +{consolidation_bonus:.0f}")
                 else:
                     # Location not found - might be deploying to a vehicle/starship/character!
                     # Check if card_id is a card in play

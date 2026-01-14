@@ -5,6 +5,7 @@ Handles all communication with the GEMP server via HTTP.
 Manages session, authentication, and API calls.
 """
 
+import os
 import requests
 from typing import List, Optional, Dict
 import logging
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 class GEMPClient:
     """HTTP client for GEMP server communication"""
 
+    # Production servers that require explicit opt-in
+    PRODUCTION_HOSTS = ['gemp.starwarsccg.org', 'www.starwarsccg.org']
+
     def __init__(self, server_url: str):
         """
         Initialize GEMP client.
@@ -24,6 +28,19 @@ class GEMPClient:
         Args:
             server_url: Base URL of GEMP server (e.g., http://localhost:8082/gemp-swccg-server/)
         """
+        # SAFETY: Block production server unless explicitly allowed
+        # Set ALLOW_PRODUCTION_SERVER=true to connect to production
+        allow_production = os.environ.get('ALLOW_PRODUCTION_SERVER', '').lower() == 'true'
+
+        if not allow_production:
+            for prod_host in self.PRODUCTION_HOSTS:
+                if prod_host in server_url.lower():
+                    raise RuntimeError(
+                        f"BLOCKED: Cannot connect to production server '{prod_host}'. "
+                        f"Set ALLOW_PRODUCTION_SERVER=true environment variable to allow production access. "
+                        f"For local testing, use GEMP_SERVER_URL=http://localhost/gemp-swccg-server/"
+                    )
+
         self.server_url = server_url.rstrip('/')
         self.session = requests.Session()
         self.participant_id = None

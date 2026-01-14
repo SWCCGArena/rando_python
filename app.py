@@ -1482,6 +1482,12 @@ def bot_worker():
                     if bot_state.table_manager:
                         bot_state.table_manager.on_game_ended()
 
+                    # Notify evaluators of game end (for training mode trajectory saving)
+                    if bot_state.brain and hasattr(bot_state.brain, 'evaluators'):
+                        for evaluator in bot_state.brain.evaluators:
+                            if hasattr(evaluator, 'on_game_ended'):
+                                evaluator.on_game_ended(won=bot_won)
+
                     # Leave chat system (must be before clearing game_id) - through coordinator for logging
                     if bot_state.game_id:
                         if bot_state.coordinator:

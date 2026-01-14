@@ -28,6 +28,7 @@ from ..deploy_planner import DeployPhasePlanner, DeployStrategy
 from ..shield_strategy import score_shield_for_deployment, get_shield_tracker, reset_shield_tracker
 from ..combo_scorer import score_combo_potential
 from ..strategy_profile import get_current_profile, StrategyMode
+from ..strategy_config import get_config
 from config import config
 
 logger = logging.getLogger(__name__)
@@ -54,24 +55,103 @@ class DeployEvaluator(ActionEvaluator):
         self.pending_deploy_card_ids: set = set()
         self._last_turn_number = -1
         # Phase-level planner for strategic deployment decisions
-        self.planner = DeployPhasePlanner(
-            deploy_threshold=config.DEPLOY_THRESHOLD,
-            battle_force_reserve=config.BATTLE_FORCE_RESERVE
-        )
+        # Check if neural planner is enabled via config
+        self.planner = self._create_planner()
 
     def reset_pending_deploys(self):
         """Reset pending deploy tracking (call at turn start)"""
         self.pending_deploy_card_ids.clear()
 
-    def reset_for_new_game(self):
+    def reset_for_new_game(self, my_side: str = ''):
         """Reset all state for a new game"""
         self.pending_deploy_card_ids.clear()
         self._last_turn_number = -1
         self.planner.reset()
 
+        # If training mode, start experience collection
+        if hasattr(self.planner, 'start_game'):
+            self.planner.start_game(my_side)
+
+    def on_game_ended(self, won: bool) -> None:
+        """
+        Called when game ends. Saves trajectory if in training mode.
+
+        Args:
+            won: True if we won the game
+        """
+        # If training mode, finalize and save trajectory
+        if hasattr(self.planner, 'finalize_game'):
+            trajectory = self.planner.finalize_game(won)
+            if trajectory and len(trajectory.experiences) > 0:
+                from ..neural_planner.trajectory_io import save_trajectory
+                save_trajectory(trajectory)
+                logger.info(f"Saved training trajectory: {len(trajectory.experiences)} experiences, "
+                           f"won={won}")
+
     def track_deploy(self, card_id: str):
         """Track that we tried deploying this card"""
         self.pending_deploy_card_ids.add(card_id)
+
+    def _create_planner(self):
+        """
+        Create the appropriate deploy planner based on config.
+
+        If neural_deploy.enabled is True in the strategy config, uses
+        the NeuralDeployPlanner with the rules-based planner as fallback.
+        Otherwise, uses the standard DeployPhasePlanner.
+
+        If NEURAL_TRAINING_MODE=1 env var is set, uses TrainingNeuralPlanner
+        which collects experiences for training.
+        """
+        import os
+
+        # Check if neural planner is enabled
+        neural_config = get_config().get_section('neural_deploy')
+        if neural_config and neural_config.get('enabled', False):
+            try:
+                model_path = neural_config.get('model_path', 'models/deploy_planner.pt')
+                confidence_threshold = neural_config.get('confidence_threshold', 0.3)
+
+                # Create rules-based fallback
+                fallback = DeployPhasePlanner(
+                    deploy_threshold=config.DEPLOY_THRESHOLD,
+                    battle_force_reserve=config.BATTLE_FORCE_RESERVE
+                )
+
+                # Check for training mode
+                training_mode = os.environ.get('NEURAL_TRAINING_MODE', '').lower() in ('1', 'true', 'yes')
+
+                if training_mode:
+                    from ..neural_planner.collector import TrainingNeuralPlanner
+                    device = os.environ.get('NEURAL_DEVICE', 'cpu')
+                    logger.info(f"Using TrainingNeuralPlanner (model={model_path}, "
+                               f"device={device}, training_mode=True)")
+                    return TrainingNeuralPlanner(
+                        model_path=model_path,
+                        fallback_planner=fallback,
+                        confidence_threshold=confidence_threshold,
+                        device=device,
+                        collect_experiences=True,
+                    )
+                else:
+                    from ..neural_planner import NeuralDeployPlanner
+                    logger.info(f"Using NeuralDeployPlanner (model={model_path}, "
+                               f"confidence_threshold={confidence_threshold})")
+                    return NeuralDeployPlanner(
+                        model_path=model_path,
+                        fallback_planner=fallback,
+                        confidence_threshold=confidence_threshold,
+                    )
+            except ImportError as e:
+                logger.warning(f"Neural planner not available ({e}), using rules-based")
+            except Exception as e:
+                logger.error(f"Failed to create neural planner ({e}), using rules-based")
+
+        # Default to rules-based planner
+        return DeployPhasePlanner(
+            deploy_threshold=config.DEPLOY_THRESHOLD,
+            battle_force_reserve=config.BATTLE_FORCE_RESERVE
+        )
 
     def _get_game_strategy(self, context: DecisionContext) -> Optional[GameStrategy]:
         """Get GameStrategy from board_state's strategy_controller"""

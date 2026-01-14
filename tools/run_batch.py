@@ -135,6 +135,8 @@ def get_creator_env(pair_id: str, creator_config_path: str, dark_deck: Optional[
         'LOCAL_FAST_MODE': 'true',
         'STRATEGY_CONFIG': creator_config_path,
         'MAX_GAMES': '1',
+        # CRITICAL: Force localhost to prevent accidental production connections
+        'GEMP_SERVER_URL': 'http://localhost/gemp-swccg-server/',
     })
     # Only set FIXED_DECK_NAME if specified (allows bot to pick from my decks)
     if dark_deck:
@@ -155,6 +157,8 @@ def get_joiner_env(pair_id: str, joiner_config_path: str, light_deck: Optional[s
         'LOCAL_FAST_MODE': 'true',
         'STRATEGY_CONFIG': joiner_config_path,
         'MAX_GAMES': '1',
+        # CRITICAL: Force localhost to prevent accidental production connections
+        'GEMP_SERVER_URL': 'http://localhost/gemp-swccg-server/',
     })
     # Only set FIXED_DECK_NAME if specified (allows bot to pick from my decks)
     if light_deck:
